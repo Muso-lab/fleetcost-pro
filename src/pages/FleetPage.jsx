@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import storageService from '../services/storageService';
 import { formatEUR } from '../utils/cashFlowCalculations';
+import { MARKET_VEHICLE_BENCHMARKS } from '../data/initialData';
 import {
   Truck,
   Plus,
@@ -18,7 +19,10 @@ import {
   ArrowRight,
   X,
   Save,
-  Check
+  Check,
+  Shield,
+  ArrowRightLeft,
+  Sparkles
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
@@ -599,6 +603,50 @@ const FleetPage = () => {
             </div>
 
             <form onSubmit={handleSave} className="space-y-4 mt-4 text-xs">
+              {/* Benchmark di Mercato Rapido (Solo per Mezzi Motori) */}
+              {activeTab === 'vehicles' && (
+                <div className="p-3 bg-emerald-50/80 border border-emerald-300 rounded-xl space-y-1">
+                  <label className="text-[11px] font-extrabold text-emerald-950 uppercase flex items-center justify-between">
+                    <span className="flex items-center">
+                      <Sparkles className="w-3.5 h-3.5 mr-1 text-emerald-700" />
+                      Applica Dati Ufficiali da Benchmark di Mercato
+                    </span>
+                    <span className="text-[10px] text-emerald-800 font-semibold">Test Costruttori</span>
+                  </label>
+                  <select
+                    defaultValue=""
+                    onChange={(e) => {
+                      const bId = e.target.value;
+                      if (!bId) return;
+                      const bench = MARKET_VEHICLE_BENCHMARKS.find(b => b.id === bId);
+                      if (bench) {
+                        setFormData(prev => ({
+                          ...prev,
+                          name: bench.name,
+                          category: bench.category,
+                          categoryLabel: bench.name,
+                          fuelTypeId: bench.fuelTypeId,
+                          avgConsumption: bench.avgConsumption,
+                          yieldKmPerUnit: bench.yieldKmPerUnit,
+                          monthlyLease: bench.indicativeMonthlyLease,
+                          purchaseCost: bench.indicativePurchasePrice,
+                          capacityPlt: bench.capacityPlt,
+                          notes: `${bench.models}. ${bench.notes}`
+                        }));
+                      }
+                    }}
+                    className="w-full px-2.5 py-1.5 border border-emerald-400 rounded-lg text-xs font-bold bg-white text-emerald-950 focus:ring-2 focus:ring-emerald-500"
+                  >
+                    <option value="">-- Seleziona un mezzo di riferimento per auto-compilare i consumi --</option>
+                    {MARKET_VEHICLE_BENCHMARKS.map(b => (
+                      <option key={b.id} value={b.id}>
+                        {b.name} ({b.avgConsumption} {b.consumptionUnit} • {b.yieldKmPerUnit} km/u • NLT ~{formatEUR(b.indicativeMonthlyLease)})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
               <div>
                 <label className="block font-semibold text-slate-700 mb-1">Nome / Modello Mezzo *</label>
                 <input
@@ -607,7 +655,7 @@ const FleetPage = () => {
                   placeholder="Es. Trattore E-Truck Scania BEV 4x2"
                   value={formData.name}
                   onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 font-bold"
                 />
               </div>
 

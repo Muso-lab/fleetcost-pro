@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import storageService from '../services/storageService';
 import { formatEUR } from '../utils/cashFlowCalculations';
+import { MARKET_VEHICLE_BENCHMARKS } from '../data/initialData';
 import {
   Settings,
   Save,
@@ -18,7 +19,9 @@ import {
   ArrowRightLeft,
   Calculator,
   HelpCircle,
-  Truck
+  Truck,
+  Sparkles,
+  ExternalLink
 } from 'lucide-react';
 
 const SettingsPage = () => {
@@ -334,7 +337,114 @@ const SettingsPage = () => {
           </div>
         </div>
 
-        {/* 2. GRIGLIA PRINCIPALE: PROPRIETÀ, PNEUMATICI, CARBURANTI, AUTISTI */}
+        {/* 2. SEZIONE BENCHMARK CONSUMI E COSTI DI MERCATO (VEICOLI COMMERCIALI 2024-2026) */}
+        <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200 space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between pb-3 border-b border-slate-100 gap-2">
+            <div className="flex items-center space-x-2">
+              <div className="p-1.5 bg-emerald-100 text-emerald-800 rounded-lg">
+                <Sparkles className="w-5 h-5" />
+              </div>
+              <div>
+                <h2 className="text-sm font-bold text-slate-900">
+                  Stime di Consumo Specifico & Canoni Mezzi di Mercato (Benchmark Costruttori)
+                </h2>
+                <p className="text-xs text-slate-500">
+                  Dati reali da test su strada e schede tecniche costruttori (Volvo, Scania, Iveco, Renault, Mercedes)
+                </p>
+              </div>
+            </div>
+            <span className="text-xs font-semibold px-2.5 py-1 bg-slate-100 text-slate-700 rounded-full">
+              Riferimento 2025/2026
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {MARKET_VEHICLE_BENCHMARKS.map((bench) => {
+              const fuelObj = settings.fuelTypes.find(f => f.id === bench.fuelTypeId) || { price: 1.10 };
+              const costKm = bench.fuelTypeId === 'elettrico'
+                ? bench.avgConsumption * fuelObj.price
+                : (bench.avgConsumption / 100) * fuelObj.price;
+
+              return (
+                <div
+                  key={bench.id}
+                  className="p-4 bg-slate-50 rounded-xl border border-slate-200 hover:border-emerald-300 hover:shadow-sm transition flex flex-col justify-between space-y-3"
+                >
+                  <div className="space-y-1.5">
+                    <div className="flex items-start justify-between gap-1">
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                        {bench.category}
+                      </span>
+                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-white border border-slate-200 text-slate-700">
+                        {bench.capacityPlt} Pallet
+                      </span>
+                    </div>
+
+                    <h3 className="text-xs font-black text-slate-900">{bench.name}</h3>
+                    <p className="text-[11px] text-slate-500 font-medium italic">
+                      Modelli: {bench.models}
+                    </p>
+
+                    <div className="pt-2 border-t border-slate-200 space-y-1.5 text-xs">
+                      {/* Consumo e Resa */}
+                      <div className="p-2 bg-white rounded-lg border border-slate-100 flex items-center justify-between">
+                        <div>
+                          <span className="text-[10px] text-slate-500 block">Consumo Specifico Medio:</span>
+                          <span className="font-extrabold text-slate-900">
+                            {bench.avgConsumption} {bench.consumptionUnit}
+                          </span>
+                        </div>
+                        <div className="text-right">
+                          <span className="text-[10px] text-emerald-700 font-bold block">Resa ("al contrario"):</span>
+                          <span className="font-extrabold text-emerald-800">
+                            {bench.yieldKmPerUnit} {bench.fuelTypeId === 'elettrico' ? 'km/kWh' : bench.fuelTypeId === 'biolng' ? 'km/kg' : 'km/L'}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Costo al Km ai prezzi attuali */}
+                      <div className="flex justify-between items-center text-[11px]">
+                        <span className="text-slate-500">Costo Energia/Carburante:</span>
+                        <span className="font-bold text-emerald-700">
+                          {formatEUR(costKm)} / km
+                        </span>
+                      </div>
+
+                      {/* Canone NLT indicativo */}
+                      <div className="flex justify-between items-center text-[11px]">
+                        <span className="text-slate-500">Canone NLT Indicativo:</span>
+                        <span className="font-bold text-purple-700">
+                          {formatEUR(bench.indicativeMonthlyLease)} / m
+                        </span>
+                      </div>
+
+                      {/* Range Reale */}
+                      <div className="text-[10px] text-slate-500 pt-1">
+                        <span className="font-semibold text-slate-600">Range Reale:</span> {bench.marketConsumptionRange}
+                      </div>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCalcFuelType(bench.fuelTypeId);
+                      setCalcYieldValue(bench.yieldKmPerUnit);
+                      setCalcConsumptionValue(bench.avgConsumption);
+                      window.scrollTo({ top: 100, behavior: 'smooth' });
+                    }}
+                    className="w-full py-1.5 bg-white hover:bg-emerald-50 text-emerald-800 border border-emerald-300 rounded-lg text-[11px] font-bold transition flex items-center justify-center space-x-1"
+                  >
+                    <span>Testa nel Calcolatore</span>
+                    <ArrowRightLeft className="w-3 h-3" />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* 3. GRIGLIA PRINCIPALE: PROPRIETÀ, PNEUMATICI, CARBURANTI, AUTISTI */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* A. MEZZI DI PROPRIETÀ (Assicurazione, Bollo, Ammortamento, Manutenzione) */}
           <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-4">

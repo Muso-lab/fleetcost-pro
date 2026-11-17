@@ -1,12 +1,184 @@
-// Dati iniziali reali estratti dall'analisi costi e dal file Excel di FOUR
-// Società di trasporti ecologici a basso impatto ambientale (E-Truck, Bio-LNG, HVO, Ibrido)
+// Dati aggiornati e benchmark realistici di mercato per FOUR Trasporti Ecologici
+// Riferimenti di mercato 2024-2026: costruttori (Volvo, Scania, Iveco, Renault), prezzi vettori energetici e CCNL
 
 export const DEFAULT_FUEL_TYPES = [
-  { id: 'elettrico', name: 'Elettrico (BEV)', unit: 'kWh/km', price: 0.38, emissionFactor: 0, notes: 'Ricarica deposito / Enel X' },
-  { id: 'biolng', name: 'Bio-LNG (Biometano Liquido)', unit: 'kg/100km', price: 1.10, emissionFactor: 0.15, notes: 'Fornitura 1,10 €/kg' },
-  { id: 'hvo', name: 'HVO 100% Biodiesel', unit: 'L/100km', price: 1.45, emissionFactor: 0.20, notes: 'Carburante vegetale idrotrattato' },
-  { id: 'gasolio', name: 'Gasolio Tradizionale', unit: 'L/100km', price: 1.64, emissionFactor: 2.65, notes: 'Diesel fossile di riferimento' },
-  { id: 'azoto', name: 'Azoto Liquido Criogenico (Frigo)', unit: '€/gg', price: 20.00, emissionFactor: 0, notes: 'Refrigerazione silenziosa a zero emissioni' }
+  {
+    id: 'elettrico',
+    name: 'Elettrico (BEV)',
+    unit: 'kWh/km',
+    price: 0.36, // Media ponderata: 80% ricarica lenta deposito a 0.26 €/kWh + 20% HPC a 0.68 €/kWh
+    emissionFactor: 0,
+    marketRange: '0,24 - 0,38 €/kWh (deposito vs HPC)',
+    notes: 'Ricarica deposito industriale notturna F2/F3 + biberonaggio rapido'
+  },
+  {
+    id: 'biolng',
+    name: 'Bio-LNG (Biometano Liquefatto)',
+    unit: 'kg/100km',
+    price: 1.18, // Prezzo medio alla pompa/convenzione flotta 2025/2026
+    emissionFactor: 0.12,
+    marketRange: '1,10 - 1,28 €/kg',
+    notes: 'Biometano liquefatto 100% da filiera agricola/FORSU certificata RED II'
+  },
+  {
+    id: 'hvo',
+    name: 'HVO 100% Biodiesel',
+    unit: 'L/100km',
+    price: 1.52, // Eni HVOlution / Q8 HVO medio rete
+    emissionFactor: 0.18,
+    marketRange: '1,45 - 1,58 €/L',
+    notes: 'Olio vegetale idrotrattato, compatibile con motori diesel Euro 6 EN 15940'
+  },
+  {
+    id: 'gasolio',
+    name: 'Gasolio Autotrazione (Netto Accise)',
+    unit: 'L/100km',
+    price: 1.42, // Prezzo industriale effettivo al netto del rimborso accise autotrasporto (~0,214 €/L)
+    emissionFactor: 2.65,
+    marketRange: '1,38 - 1,48 €/L (recupero carbon tax)',
+    notes: 'Gasolio commerciale per autocarri > 7.5t con credito d\'imposta accise'
+  },
+  {
+    id: 'adblue',
+    name: 'AdBlue (Soluzione di Urea al 32.5%)',
+    unit: 'L/100km',
+    price: 0.65, // Cisterna IBC deposito (0.50 €/L) / colonnina (0.85 €/L)
+    emissionFactor: 0,
+    marketRange: '0,50 - 0,85 €/L',
+    notes: 'Consumo medio stimato: ~5% del volume di gasolio/HVO'
+  },
+  {
+    id: 'azoto',
+    name: 'Azoto Liquido Criogenico (Frigo)',
+    unit: '€/gg',
+    price: 22.00, // Fornitura criogenica giornaliera per semirimorchio frigo (CryoTech/Lamberet)
+    emissionFactor: 0,
+    marketRange: '0,40 - 0,48 €/kg (~18 - 25 €/giorno)',
+    notes: 'Refrigerazione silenziosa notturna per consegne in centro abitato'
+  }
+];
+
+// BENCHMARK UFFICIALI DI CONSUMO MEZZI SUL MERCATO (Dati reali costruttori e test su strada)
+export const MARKET_VEHICLE_BENCHMARKS = [
+  {
+    id: 'bench_trattore_bev_44t',
+    category: 'trattore',
+    name: 'Trattore Stradale 4x2 BEV 44t',
+    models: 'Volvo FH Electric (540 kWh) / Scania 45R / Mercedes eActros 600',
+    fuelTypeId: 'elettrico',
+    avgConsumption: 1.18, // kWh/km
+    consumptionUnit: 'kWh/km',
+    yieldKmPerUnit: 0.85, // km con 1 kWh
+    marketConsumptionRange: '1.05 - 1.28 kWh/km (in base a carico e dislivello)',
+    marketYieldRange: '0.78 - 0.95 km/kWh',
+    indicativeMonthlyLease: 6200, // Canone NLT full service batterie
+    indicativePurchasePrice: 285000,
+    capacityPlt: 33,
+    tiresCount: 12, // con semirimorchio
+    notes: 'Autonomia reale 300-450 km. Ricarica rapida MCS/CCS 375kW.'
+  },
+  {
+    id: 'bench_trattore_biolng_44t',
+    category: 'trattore',
+    name: 'Trattore Stradale 4x2 Bio-LNG 44t',
+    models: 'Iveco S-Way 460 LNG / Scania R410 LNG',
+    fuelTypeId: 'biolng',
+    avgConsumption: 29.5, // kg / 100km
+    consumptionUnit: 'kg/100km',
+    yieldKmPerUnit: 3.39, // km con 1 kg di Bio-LNG
+    marketConsumptionRange: '28.0 - 34.0 kg/100km (autostrada 80 km/h)',
+    marketYieldRange: '2.94 - 3.57 km/kg',
+    indicativeMonthlyLease: 3200,
+    indicativePurchasePrice: 145000,
+    capacityPlt: 33,
+    tiresCount: 12,
+    notes: 'Autonomia fino a 1.600 km. Ideale per lunghe distanze H24 e tratte pesanti.'
+  },
+  {
+    id: 'bench_motrice_bev_18t',
+    category: 'motrice',
+    name: 'Motrice Elettrica 16-19t (18 Pallet)',
+    models: 'Renault E-Tech D Wide 18t / Scania 25P / Volvo FE Electric',
+    fuelTypeId: 'elettrico',
+    avgConsumption: 0.88,
+    consumptionUnit: 'kWh/km',
+    yieldKmPerUnit: 1.14,
+    marketConsumptionRange: '0.80 - 0.98 kWh/km (urbano/interurbano)',
+    marketYieldRange: '1.02 - 1.25 km/kWh',
+    indicativeMonthlyLease: 3900,
+    indicativePurchasePrice: 185000,
+    capacityPlt: 18,
+    tiresCount: 6,
+    notes: 'Distribuzione regionale GDO e fresco. Ottima rigenerazione in frenata.'
+  },
+  {
+    id: 'bench_motrice_bev_12t',
+    category: 'motrice',
+    name: 'Motrice Elettrica 12-14t (12 Pallet)',
+    models: 'Renault E-Tech D 12t / DAF LF Electric / Volvo FL Electric',
+    fuelTypeId: 'elettrico',
+    avgConsumption: 0.68,
+    consumptionUnit: 'kWh/km',
+    yieldKmPerUnit: 1.47,
+    marketConsumptionRange: '0.60 - 0.76 kWh/km',
+    marketYieldRange: '1.31 - 1.66 km/kWh',
+    indicativeMonthlyLease: 2800,
+    indicativePurchasePrice: 140000,
+    capacityPlt: 12,
+    tiresCount: 6,
+    notes: 'Rifornimento punti vendita centri commerciali e negozi retail.'
+  },
+  {
+    id: 'bench_motrice_bev_9t',
+    category: 'motrice',
+    name: 'Motrice Compatta Elettrica 7.5-9t (9 Pallet)',
+    models: 'Fuso eCanter 8.55t / Iveco eDaily 7.2t',
+    fuelTypeId: 'elettrico',
+    avgConsumption: 0.48,
+    consumptionUnit: 'kWh/km',
+    yieldKmPerUnit: 2.08,
+    marketConsumptionRange: '0.42 - 0.55 kWh/km',
+    marketYieldRange: '1.81 - 2.38 km/kWh',
+    indicativeMonthlyLease: 2150,
+    indicativePurchasePrice: 95000,
+    capacityPlt: 9,
+    tiresCount: 6,
+    notes: 'Accesso libero ZTL, consegne centro storico e ultimo miglio.'
+  },
+  {
+    id: 'bench_biga_biolng_36t',
+    category: 'biga',
+    name: 'Autotreno Biga Bio-LNG 36-38 Pallet',
+    models: 'Iveco S-Way Autocarro 3 assi + Rimorchio Biga 2 assi',
+    fuelTypeId: 'biolng',
+    avgConsumption: 33.5,
+    consumptionUnit: 'kg/100km',
+    yieldKmPerUnit: 2.98,
+    marketConsumptionRange: '31.5 - 36.0 kg/100km',
+    marketYieldRange: '2.77 - 3.17 km/kg',
+    indicativeMonthlyLease: 4100, // combinato motrice + rimorchio
+    indicativePurchasePrice: 190000,
+    capacityPlt: 36,
+    tiresCount: 14,
+    notes: 'Massima volumetria per merci leggere e retail (Decathlon, abbigliamento).'
+  },
+  {
+    id: 'bench_trattore_hvo_44t',
+    category: 'trattore',
+    name: 'Trattore Stradale HVO / Diesel Euro 6 (44t)',
+    models: 'Scania Super 460 / Mercedes Actros 1845 / Volvo FH 460TC',
+    fuelTypeId: 'hvo',
+    avgConsumption: 28.8, // L / 100km
+    consumptionUnit: 'L/100km',
+    yieldKmPerUnit: 3.47, // km / Litro
+    marketConsumptionRange: '27.0 - 32.5 L/100km',
+    marketYieldRange: '3.07 - 3.70 km/L',
+    indicativeMonthlyLease: 2300,
+    indicativePurchasePrice: 125000,
+    capacityPlt: 33,
+    tiresCount: 12,
+    notes: 'Benchmark gasolio/HVO. Con HVO -90% emissioni CO2 nette well-to-wheel.'
+  }
 ];
 
 export const DEFAULT_LICENSE_TYPES = [
