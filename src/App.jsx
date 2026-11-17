@@ -2,8 +2,11 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-d
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import Navbar from './components/Navbar';
 import LoginPage from './pages/LoginPage';
+import DashboardPage from './pages/DashboardPage';
+import FleetPage from './pages/FleetPage';
+import ProjectsPage from './pages/ProjectsPage';
+import CashFlowPage from './pages/CashFlowPage';
 import SimulationPage from './pages/SimulationPage';
-import VehiclesPage from './pages/VehiclesPage';
 import SettingsPage from './pages/SettingsPage';
 
 const PrivateRoute = ({ children }) => {
@@ -25,41 +28,77 @@ function AppContent() {
   const { currentUser } = useAuth();
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-slate-50 flex flex-col font-sans text-slate-800">
       {currentUser && <Navbar />}
 
-      <Routes>
-        <Route path="/login" element={<LoginPage />} />
+      <main className="flex-1">
+        <Routes>
+          <Route path="/login" element={<LoginPage />} />
 
-        <Route
-          path="/"
-          element={
-            <PrivateRoute>
-              <SimulationPage />
-            </PrivateRoute>
-          }
-        />
+          {/* Dashboard Principale */}
+          <Route
+            path="/"
+            element={
+              <PrivateRoute>
+                <DashboardPage />
+              </PrivateRoute>
+            }
+          />
 
-        <Route
-          path="/vehicles"
-          element={
-            <PrivateRoute>
-              <VehiclesPage />
-            </PrivateRoute>
-          }
-        />
+          {/* Flotta Disponibile */}
+          <Route
+            path="/fleet"
+            element={
+              <PrivateRoute>
+                <FleetPage />
+              </PrivateRoute>
+            }
+          />
+          <Route path="/vehicles" element={<Navigate to="/fleet" replace />} />
 
-        <Route
-          path="/settings"
-          element={
-            <PrivateRoute>
-              <SettingsPage />
-            </PrivateRoute>
-          }
-        />
+          {/* Commesse & Budget Progetti */}
+          <Route
+            path="/projects"
+            element={
+              <PrivateRoute>
+                <ProjectsPage />
+              </PrivateRoute>
+            }
+          />
 
-        <Route path="*" element={<Navigate to="/" />} />
-      </Routes>
+          {/* Forecast, Budget & Cash Flow */}
+          <Route
+            path="/cashflow"
+            element={
+              <PrivateRoute>
+                <CashFlowPage />
+              </PrivateRoute>
+            }
+          />
+
+          {/* Simulatore Costi Tratta / Preventivatore */}
+          <Route
+            path="/simulation"
+            element={
+              <PrivateRoute>
+                <SimulationPage />
+              </PrivateRoute>
+            }
+          />
+
+          {/* Impostazioni Globali & Tariffe */}
+          <Route
+            path="/settings"
+            element={
+              <PrivateRoute>
+                <SettingsPage />
+              </PrivateRoute>
+            }
+          />
+
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </main>
     </div>
   );
 }

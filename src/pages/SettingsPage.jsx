@@ -1,317 +1,263 @@
 import { useState, useEffect } from 'react';
-import { db } from '../config/firebase';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
-import { useAuth } from '../contexts/AuthContext';
-import { Settings, Plus, Edit2, Trash2, Save, X } from 'lucide-react';
+import storageService from '../services/storageService';
+import { formatEUR } from '../utils/cashFlowCalculations';
+import {
+  Settings,
+  Plus,
+  Edit2,
+  Trash2,
+  Save,
+  RefreshCw,
+  Download,
+  Upload,
+  CheckCircle2,
+  Zap,
+  Flame,
+  Fuel,
+  DollarSign,
+  Clock,
+  Layers
+} from 'lucide-react';
 
 const SettingsPage = () => {
-  const { currentUser } = useAuth();
-  const [loading, setLoading] = useState(true);
-  const [settings, setSettings] = useState({
-    fuelTypes: [],
-    vehicleTypes: [],
-    chargeTypes: [],
-    trailerTypes: [],
-    licenseTypes: []
-  });
-  const [editingSection, setEditingSection] = useState(null);
-  const [editingItem, setEditingItem] = useState(null);
-  const [formData, setFormData] = useState({});
+  const [settings, setSettings] = useState(null);
+  const [saveMessage, setSaveMessage] = useState('');
 
   useEffect(() => {
     loadSettings();
-  }, [currentUser]);
+  }, []);
 
-  const loadSettings = async () => {
-    try {
-      const settingsDoc = await getDoc(doc(db, `users/${currentUser.uid}/config/settings`));
+  const loadSettings = () => {
+    setSettings(storageService.getSettings());
+  };
 
-      if (settingsDoc.exists()) {
-        setSettings(settingsDoc.data());
+  const handleFuelPriceChange = (id, newPrice) => {
+    const updatedFuel = settings.fuelTypes.map(f => {
+      if (f.id === id) {
+        return { ...f, price: parseFloat(newPrice) || 0 };
+      }
+      return f;
+    });
+    setSettings({ ...settings, fuelTypes: updatedFuel });
+  };
+
+  const handleLicenseCostChange = (id, newDailyCost) => {
+    const updatedLicenses = settings.licenseTypes.map(l => {
+      if (l.id === id) {
+        return { ...l, dailyCost: parseFloat(newDailyCost) || 0 };
+      }
+      return l;
+    });
+    setSettings({ ...settings, licenseTypes: updatedLicenses });
+  };
+
+  const handleSaveAll = () => {
+    storageService.saveSettings(settings);
+    setSaveMessage('Impostazioni e tariffe salvate con successo!');
+    setTimeout(() => setSaveMessage(''), 3000);
+  };
+
+  const handleResetDefaults = () => {
+    if (confirm('Attenzione: Ripristinare i dati e i parametri originali del file Excel di FOUR?')) {
+      storageService.resetToDefaults();
+      window.location.reload();
+    }
+  };
+
+  const handleExportBackup = () => {
+    const json = storageService.exportBackupJson();
+    const blob = new Blob([json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `FOUR_Backup_Dati_${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleImportBackup = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const res = storageService.importBackupJson(event.target.result);
+      if (res.success) {
+        alert('Dati importati con successo!');
+        window.location.reload();
       } else {
-        const defaultSettings = {
-          fuelTypes: [
-            { id: 'elettrico', name: 'Elettrico', unit: 'kWh/km', price: 0.70 },
-            { id: 'gasolio', name: 'Gasolio', unit: 'L/100km', price: 1.64 },
-            { id: 'biolng', name: 'BIO LNG', unit: 'kg/100km', price: 1.35 }
-          ],
-          licenseTypes: [
-            { id: 'b', name: 'Patente B', dailyCost: 100 },
-            { id: 'c', name: 'Patente C', dailyCost: 116 },
-            { id: 'ce', name: 'Patente CE', dailyCost: 134.40 }
-          ],
-          vehicleTypes: [
-            { id: 'furgone', name: 'Furgone', licenseId: 'b' },
-            { id: 'motrice', name: 'Motrice', licenseId: 'c' },
-            { id: 'bilico', name: 'Bilico', licenseId: 'ce' }
-          ],
-          chargeTypes: [
-            { id: 'domestico', name: 'Domestica', unit: '€/kWh', price: 0.25 },
-            { id: 'pubblico', name: 'Pubblica', unit: '€/kWh', price: 0.70 },
-            { id: 'hpc', name: 'HPC Autostrada', unit: '€/kWh', price: 0.85 }
-          ],
-          trailerTypes: [
-            { id: 'nessuno', name: 'Nessuno' },
-            { id: 'tradizionale', name: 'Tradizionale' },
-            { id: 'refrigerato', name: 'Refrigerato' }
-          ]
-        };
-        setSettings(defaultSettings);
-        await setDoc(doc(db, `users/${currentUser.uid}/config/settings`), defaultSettings);
+        alert('Errore nel formato del file di backup: ' + res.error);
       }
-    } catch (error) {
-      console.error('Errore caricamento impostazioni:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const saveSettings = async () => {
-    try {
-      await setDoc(doc(db, `users/${currentUser.uid}/config/settings`), settings);
-      alert('✅ Impostazioni salvate');
-    } catch (error) {
-      console.error('Errore salvataggio:', error);
-      alert('❌ Errore durante il salvataggio');
-    }
-  };
-
-  const generateId = (name) => {
-    if (!name) return 'item_' + Date.now();
-    return name.toLowerCase().replace(/[^a-z0-9]/g, '').substring(0, 20) || 'item_' + Date.now();
-  };
-
-  const handleAdd = (section) => {
-    setEditingSection(section);
-    setEditingItem(null);
-
-    const defaults = {
-      fuelTypes: { name: '', unit: '', price: 0 },
-      licenseTypes: { name: '', dailyCost: 0 },
-      vehicleTypes: {
-        name: '',
-        licenseId: (settings.licenseTypes && settings.licenseTypes.length > 0) ? settings.licenseTypes[0].id : 'b'
-      },
-      chargeTypes: { name: '', unit: '€/kWh', price: 0 },
-      trailerTypes: { name: '' }
     };
-
-    setFormData(defaults[section] || {});
+    reader.readAsText(file);
   };
 
-  const handleEdit = (section, index) => {
-    setEditingSection(section);
-    setEditingItem(index);
-    setFormData({ ...settings[section][index] });
-  };
-
-  const handleDelete = (section, index) => {
-    if (!confirm('Eliminare questa voce?')) return;
-    const newSettings = { ...settings };
-    if (newSettings[section]) {
-      newSettings[section].splice(index, 1);
-      setSettings(newSettings);
-    }
-  };
-
-  const handleSaveItem = () => {
-    const newSettings = { ...settings };
-
-    // Assicurati che l'array esista
-    if (!newSettings[editingSection]) {
-      newSettings[editingSection] = [];
-    }
-
-    if (editingItem !== null) {
-      newSettings[editingSection][editingItem] = formData;
-    } else {
-      const newItem = { ...formData, id: generateId(formData.name) };
-      newSettings[editingSection].push(newItem);
-    }
-
-    setSettings(newSettings);
-    setEditingSection(null);
-    setEditingItem(null);
-    setFormData({});
-  };
-
-  if (loading) {
-    return (
-      <div className="container mx-auto px-4 py-8">
-        <div className="text-center py-12">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600 mx-auto"></div>
-        </div>
-      </div>
-    );
-  }
-
-  const sections = [
-  {
-    key: 'fuelTypes',
-    title: 'Tipi Alimentazione',
-    fields: [
-      { key: 'name', label: 'Nome', type: 'text', placeholder: 'es: Metano CNG' },
-      {
-        key: 'unit',
-        label: 'Unità Misura Consumi',
-        type: 'select',
-        options: () => [
-          { value: 'kWh/km', label: 'kWh/km (Elettrico - consumo per km)' },
-          { value: 'L/100km', label: 'L/100km (Gasolio/Benzina - per 100km)' },
-          { value: 'kg/100km', label: 'kg/100km (Metano/LNG - per 100km)' },
-          { value: 'm³/100km', label: 'm³/100km (Metano - per 100km)' }
-        ]
-      },
-      { key: 'price', label: 'Prezzo Unitario (€)', type: 'number', step: '0.001', placeholder: '1.640' }
-    ],
-    display: (item) => `${item.name} (${item.unit} • €${parseFloat(item.price).toFixed(3)})`
-  },
-  {
-    key: 'licenseTypes',
-    title: 'Tipi Patente',
-    fields: [
-      { key: 'name', label: 'Nome', type: 'text', placeholder: 'es: Patente D' },
-      { key: 'dailyCost', label: 'Costo Giornaliero (€)', type: 'number', step: '0.01', placeholder: '120.00' }
-    ],
-    display: (item) => `${item.name} (€${parseFloat(item.dailyCost).toFixed(2)}/giorno)`
-  },
-  {
-    key: 'vehicleTypes',
-    title: 'Tipi Veicolo',
-    fields: [
-      { key: 'name', label: 'Nome', type: 'text', placeholder: 'es: Autotreno' },
-      {
-        key: 'licenseId',
-        label: 'Patente Richiesta',
-        type: 'select',
-        options: () => {
-          const licenses = settings.licenseTypes || [];
-          if (licenses.length === 0) {
-            return [{ value: 'b', label: 'Configura prima le patenti' }];
-          }
-          return licenses.map(l => ({ value: l.id, label: l.name }));
-        }
-      }
-    ],
-    display: (item) => {
-      const license = (settings.licenseTypes || []).find(l => l.id === item.licenseId);
-      return `${item.name} (${license?.name || 'N/A'})`;
-    }
-  },
-  {
-    key: 'chargeTypes',
-    title: 'Tipi Ricarica Elettrica',
-    fields: [
-      { key: 'name', label: 'Nome', type: 'text', placeholder: 'es: Aziendale' },
-      { key: 'unit', label: 'Unità', type: 'text', placeholder: '€/kWh', disabled: true },
-      { key: 'price', label: 'Prezzo (€/kWh)', type: 'number', step: '0.001', placeholder: '0.700' }
-    ],
-    display: (item) => `${item.name} (€${parseFloat(item.price).toFixed(3)}/kWh)`
-  },
-  {
-    key: 'trailerTypes',
-    title: 'Tipi Rimorchio',
-    fields: [
-      { key: 'name', label: 'Nome', type: 'text', placeholder: 'es: Centinato' }
-    ],
-    display: (item) => item.name
-  }
-];
+  if (!settings) return null;
 
   return (
-    <div className="container mx-auto px-4 py-8">
-      <div className="mb-6">
-        <h1 className="text-3xl font-bold text-gray-800 mb-2 flex items-center">
-          <Settings className="w-8 h-8 mr-3 text-primary-600" />
-          Impostazioni
-        </h1>
-        <p className="text-gray-600">Configura i parametri base</p>
-      </div>
+    <div className="min-h-screen bg-slate-50 py-8 px-4 sm:px-6 lg:px-8">
+      <div className="max-w-7xl mx-auto space-y-6">
+        {/* Header */}
+        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+          <div>
+            <div className="flex items-center space-x-2">
+              <span className="p-2 bg-slate-100 text-slate-800 rounded-lg">
+                <Settings className="w-6 h-6" />
+              </span>
+              <div>
+                <h1 className="text-2xl font-black text-slate-900 tracking-tight">Impostazioni & Tariffe di Riferimento</h1>
+                <p className="text-xs text-slate-500">
+                  Gestione prezzi vettori energetici, tariffe autisti e parametri standard di calcolo
+                </p>
+              </div>
+            </div>
+          </div>
 
-      <button
-        onClick={saveSettings}
-        className="mb-6 flex items-center space-x-2 bg-primary-600 text-white px-6 py-3 rounded-lg hover:bg-primary-700 transition font-medium"
-      >
-        <Save className="w-5 h-5" />
-        <span>Salva Tutto</span>
-      </button>
+          <div className="flex items-center space-x-2">
+            {saveMessage && (
+              <span className="text-xs font-bold text-emerald-700 bg-emerald-100 px-3 py-1.5 rounded-lg flex items-center">
+                <CheckCircle2 className="w-4 h-4 mr-1" />
+                {saveMessage}
+              </span>
+            )}
+            <button
+              onClick={handleSaveAll}
+              className="inline-flex items-center space-x-1.5 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl font-bold text-xs shadow-sm transition"
+            >
+              <Save className="w-4 h-4" />
+              <span>Salva Modifiche</span>
+            </button>
+          </div>
+        </div>
 
-      <div className="space-y-6">
-        {sections.map(section => (
-          <div key={section.key} className="bg-white rounded-lg shadow-md p-6">
-            <div className="flex justify-between items-center mb-4">
-              <h2 className="text-xl font-semibold text-gray-800">{section.title}</h2>
-              <button
-                onClick={() => handleAdd(section.key)}
-                className="flex items-center space-x-1 bg-primary-600 text-white px-3 py-1.5 rounded text-sm hover:bg-primary-700"
-              >
-                <Plus className="w-4 h-4" />
-                <span>Aggiungi</span>
-              </button>
+        {/* Griglia Sezioni Impostazioni */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Prezzi Vettori Energetici */}
+          <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center space-x-2">
+                <Zap className="w-4 h-4 text-emerald-600" />
+                <h2 className="text-sm font-bold text-slate-900">Prezzi Vettori Energetici (€ / Unità)</h2>
+              </div>
+              <span className="text-xs text-slate-400">Aggiornati da Excel</span>
             </div>
 
-            {editingSection === section.key && (
-              <div className="bg-gray-50 p-4 rounded-lg mb-4">
-                <div className="space-y-3">
-                  {section.fields.map(field => (
-                    <div key={field.key}>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">
-                        {field.label}
-                      </label>
-                      {field.type === 'select' ? (
-                        <select
-                          value={formData[field.key] || ''}
-                          onChange={(e) => setFormData({ ...formData, [field.key]: e.target.value })}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                        >
-                          {(field.options ? field.options() : []).map(opt => (
-                            <option key={opt.value} value={opt.value}>{opt.label}</option>
-                          ))}
-                        </select>
-                      ) : (
-                        <input
-                          type={field.type}
-                          step={field.step}
-                          value={formData[field.key] || ''}
-                          onChange={(e) => setFormData({
-                            ...formData,
-                            [field.key]: field.type === 'number' ? parseFloat(e.target.value) || 0 : e.target.value
-                          })}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                          placeholder={field.placeholder}
-                        />
-                      )}
-                    </div>
-                  ))}
-                </div>
-                <div className="flex space-x-2 mt-4">
-                  <button onClick={handleSaveItem} className="bg-primary-600 text-white px-4 py-2 rounded hover:bg-primary-700">
-                    Salva
-                  </button>
-                  <button onClick={() => setEditingSection(null)} className="bg-gray-300 px-4 py-2 rounded hover:bg-gray-400">
-                    Annulla
-                  </button>
-                </div>
-              </div>
-            )}
-
-            <div className="space-y-2">
-              {(settings[section.key] || []).map((item, index) => (
-                <div key={index} className="flex items-center justify-between p-3 bg-gray-50 rounded">
-                  <span className="font-medium">{section.display(item)}</span>
-                  <div className="flex space-x-2">
-                    <button onClick={() => handleEdit(section.key, index)} className="text-blue-600">
-                      <Edit2 className="w-4 h-4" />
-                    </button>
-                    <button onClick={() => handleDelete(section.key, index)} className="text-red-600">
-                      <Trash2 className="w-4 h-4" />
-                    </button>
+            <div className="space-y-3">
+              {settings.fuelTypes.map((fuel) => (
+                <div key={fuel.id} className="p-3 bg-slate-50 rounded-xl border border-slate-200/80 flex items-center justify-between text-xs">
+                  <div>
+                    <span className="font-bold text-slate-900 block">{fuel.name}</span>
+                    <span className="text-[11px] text-slate-500">{fuel.notes || fuel.unit}</span>
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <span className="text-slate-500 font-medium">{fuel.unit}:</span>
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={fuel.price}
+                      onChange={(e) => handleFuelPriceChange(fuel.id, e.target.value)}
+                      className="w-24 px-2.5 py-1.5 border border-slate-300 rounded-lg text-right font-bold text-slate-900 bg-white"
+                    />
+                    <span className="font-bold text-slate-700">€</span>
                   </div>
                 </div>
               ))}
             </div>
           </div>
-        ))}
+
+          {/* Tariffe Autisti di Riferimento */}
+          <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center space-x-2">
+                <Clock className="w-4 h-4 text-blue-600" />
+                <h2 className="text-sm font-bold text-slate-900">Tariffe Autisti di Riferimento (€ / Giorno)</h2>
+              </div>
+              <span className="text-xs text-slate-400">Standard CCNL Logistica</span>
+            </div>
+
+            <div className="space-y-3">
+              {settings.licenseTypes.map((lic) => (
+                <div key={lic.id} className="p-3 bg-slate-50 rounded-xl border border-slate-200/80 flex items-center justify-between text-xs">
+                  <div>
+                    <span className="font-bold text-slate-900 block">{lic.name}</span>
+                    <span className="text-[11px] text-slate-500">
+                      Stima mensile: ~{formatEUR(lic.dailyCost * 22)}
+                    </span>
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <span className="text-slate-500 font-medium">Costo / gg:</span>
+                    <input
+                      type="number"
+                      step="5"
+                      value={lic.dailyCost}
+                      onChange={(e) => handleLicenseCostChange(lic.id, e.target.value)}
+                      className="w-24 px-2.5 py-1.5 border border-slate-300 rounded-lg text-right font-bold text-slate-900 bg-white"
+                    />
+                    <span className="font-bold text-slate-700">€</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Gestione Backup & Reset Dati */}
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-4">
+          <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+            <div className="flex items-center space-x-2">
+              <RefreshCw className="w-4 h-4 text-emerald-600" />
+              <h2 className="text-sm font-bold text-slate-900">Backup, Ripristino & Sincronizzazione Dati</h2>
+            </div>
+            <span className="text-xs text-emerald-700 font-semibold">Persistenza Locale Offline Attiva</span>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+            <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-2">
+              <h3 className="font-bold text-slate-900">Esporta Backup (.json)</h3>
+              <p className="text-slate-500 text-[11px]">
+                Scarica un file JSON completo con tutti i dati di flotta, commesse, budget e parametri di costo.
+              </p>
+              <button
+                onClick={handleExportBackup}
+                className="w-full py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-lg font-semibold flex items-center justify-center space-x-1.5 transition"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Scarica Backup JSON</span>
+              </button>
+            </div>
+
+            <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-2">
+              <h3 className="font-bold text-slate-900">Importa Backup (.json)</h3>
+              <p className="text-slate-500 text-[11px]">
+                Ripristina un archivio dati precedentemente esportato o importalo su un'altra postazione.
+              </p>
+              <label className="w-full py-2 bg-slate-200 hover:bg-slate-300 text-slate-800 rounded-lg font-semibold flex items-center justify-center space-x-1.5 transition cursor-pointer">
+                <Upload className="w-3.5 h-3.5" />
+                <span>Carica File Backup</span>
+                <input
+                  type="file"
+                  accept=".json"
+                  onChange={handleImportBackup}
+                  className="hidden"
+                />
+              </label>
+            </div>
+
+            <div className="p-4 bg-amber-50 rounded-xl border border-amber-200 space-y-2">
+              <h3 className="font-bold text-amber-950">Ripristina Dati Originali Excel</h3>
+              <p className="text-amber-800 text-[11px]">
+                Ricarica lo stato iniziale del file Excel con tutti i 17 progetti storici e la flotta pre-configurata.
+              </p>
+              <button
+                onClick={handleResetDefaults}
+                className="w-full py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg font-semibold flex items-center justify-center space-x-1.5 transition"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>Ripristina Tutto da Excel</span>
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );

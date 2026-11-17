@@ -1,10 +1,10 @@
 import { useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
-import { Truck, Mail, Lock } from 'lucide-react';
+import { Truck, Mail, Lock, ShieldCheck, ArrowRight, Leaf } from 'lucide-react';
 
 const LoginPage = () => {
-  const { login, signup } = useAuth();
+  const { login, signup, loginLocal } = useAuth();
   const navigate = useNavigate();
   const [isLogin, setIsLogin] = useState(true);
   const [email, setEmail] = useState('');
@@ -28,7 +28,7 @@ const LoginPage = () => {
       console.error('Errore autenticazione:', error);
       setError(
         isLogin
-          ? 'Email o password non corretti'
+          ? 'Accesso online fallito. Puoi comunque entrare subito usando la Modalità Locale sotto.'
           : 'Errore durante la registrazione. Email già in uso?'
       );
     } finally {
@@ -36,98 +36,119 @@ const LoginPage = () => {
     }
   };
 
+  const handleLocalAccess = () => {
+    loginLocal('Manager');
+    navigate('/');
+  };
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-primary-50 to-primary-100 flex items-center justify-center px-4">
+    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-emerald-950 to-slate-900 flex items-center justify-center px-4 py-8">
       <div className="max-w-md w-full">
-        {/* Logo e Titolo */}
+        {/* Brand FOUR */}
         <div className="text-center mb-8">
-          <div className="flex justify-center mb-4">
-            <div className="bg-primary-600 p-4 rounded-full">
-              <Truck className="w-12 h-12 text-white" />
-            </div>
+          <div className="inline-flex items-center justify-center p-4 bg-emerald-600/30 border border-emerald-500/40 rounded-2xl mb-3 shadow-xl backdrop-blur-sm">
+            <Leaf className="w-10 h-10 text-emerald-400 mr-2" />
+            <span className="text-4xl font-extrabold text-white tracking-wider">FOUR</span>
           </div>
-          <h1 className="text-3xl font-bold text-gray-800 mb-2">FleetCost Pro</h1>
-          <p className="text-gray-600">Simulatore costi operativi flotte</p>
+          <h1 className="text-2xl font-bold text-white mb-1">Trasporti a Basso Impatto Ambientale</h1>
+          <p className="text-emerald-200/80 text-sm">Controllo Costi, Flotta, Budget & Cash Flow Forecast</p>
         </div>
 
-        {/* Form Login/Signup */}
-        <div className="bg-white rounded-lg shadow-xl p-8">
-          <h2 className="text-2xl font-semibold text-gray-800 mb-6">
-            {isLogin ? 'Accedi' : 'Registrati'}
-          </h2>
+        {/* Card */}
+        <div className="bg-white rounded-2xl shadow-2xl p-8 border border-emerald-100">
+          <div className="flex items-center justify-between mb-6">
+            <h2 className="text-xl font-bold text-gray-900">
+              {isLogin ? 'Accedi al Gestionale' : 'Crea Account'}
+            </h2>
+            <span className="px-2.5 py-1 text-xs font-semibold rounded-full bg-emerald-100 text-emerald-800">
+              Versione Locale 2.0
+            </span>
+          </div>
 
           {error && (
-            <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg mb-4">
+            <div className="bg-amber-50 border border-amber-200 text-amber-800 px-4 py-3 rounded-xl mb-4 text-sm">
               {error}
             </div>
           )}
 
+          {/* Quick Local Access Button (1-Click) */}
+          <div className="mb-6 p-4 bg-emerald-50 rounded-xl border border-emerald-200/70">
+            <div className="flex items-start">
+              <ShieldCheck className="w-5 h-5 text-emerald-600 mt-0.5 mr-2.5 flex-shrink-0" />
+              <div>
+                <p className="text-xs font-semibold text-emerald-900 mb-1">Sviluppo & Operatività Locale</p>
+                <p className="text-xs text-emerald-700 mb-3">
+                  Tutti i dati del file Excel, flotta e commesse sono pre-caricati e funzionanti offline al 100%.
+                </p>
+                <button
+                  type="button"
+                  onClick={handleLocalAccess}
+                  className="w-full flex items-center justify-center space-x-2 bg-emerald-600 hover:bg-emerald-700 text-white font-medium py-2.5 px-4 rounded-lg shadow-sm transition"
+                >
+                  <span>Entra Subito in Locale</span>
+                  <ArrowRight className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div className="relative my-6 text-center">
+            <div className="absolute inset-0 flex items-center">
+              <div className="w-full border-t border-gray-200"></div>
+            </div>
+            <span className="relative px-3 bg-white text-xs text-gray-500 uppercase tracking-wider">
+              oppure accedi online
+            </span>
+          </div>
+
           <form onSubmit={handleSubmit} className="space-y-4">
-            {/* Email */}
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Email
-              </label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
               <div className="relative">
-                <Mail className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
+                <Mail className="w-5 h-5 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
                 <input
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  className="w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
-                  placeholder="tuo@email.com"
-                  required
+                  className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 text-sm"
+                  placeholder="operativo@four-trasporti.it"
                 />
               </div>
             </div>
 
-            {/* Password */}
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Password
-              </label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Password</label>
               <div className="relative">
-                <Lock className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
+                <Lock className="w-5 h-5 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
                 <input
                   type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className="w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                  className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 text-sm"
                   placeholder="••••••••"
-                  required
-                  minLength={6}
                 />
               </div>
             </div>
 
-            {/* Submit Button */}
             <button
               type="submit"
               disabled={loading}
-              className="w-full bg-primary-600 text-white py-3 rounded-lg hover:bg-primary-700 transition font-medium disabled:opacity-50"
+              className="w-full bg-slate-800 hover:bg-slate-900 text-white font-medium py-2.5 rounded-lg transition text-sm disabled:opacity-50"
             >
-              {loading ? 'Caricamento...' : isLogin ? 'Accedi' : 'Registrati'}
+              {loading ? 'Accesso in corso...' : isLogin ? 'Accedi con Firebase' : 'Registrati'}
             </button>
           </form>
 
-          {/* Toggle Login/Signup */}
-          <div className="mt-6 text-center">
+          <div className="mt-4 text-center">
             <button
-              onClick={() => {
-                setIsLogin(!isLogin);
-                setError('');
-              }}
-              className="text-primary-600 hover:text-primary-700 text-sm font-medium"
+              type="button"
+              onClick={() => setIsLogin(!isLogin)}
+              className="text-xs text-emerald-700 hover:underline"
             >
-              {isLogin ? 'Non hai un account? Registrati' : 'Hai già un account? Accedi'}
+              {isLogin ? 'Non hai un account online? Registrati' : 'Hai già un account? Accedi'}
             </button>
           </div>
         </div>
-
-        {/* Footer */}
-        <p className="text-center text-gray-600 text-sm mt-6">
-          © 2025 FleetCost Pro - Gestione costi flotte veicoli
-        </p>
       </div>
     </div>
   );

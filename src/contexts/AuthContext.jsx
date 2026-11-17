@@ -12,24 +12,80 @@ const AuthContext = createContext();
 export const useAuth = () => useContext(AuthContext);
 
 export const AuthProvider = ({ children }) => {
-  const [currentUser, setCurrentUser] = useState(null);
-  const [loading, setLoading] = useState(true);
+  // Supporto sessione locale persistente
+  const [currentUser, setCurrentUser] = useState(() => {
+    const savedLocalUser = localStorage.getItem('four_local_user');
+    if (savedLocalUser) {
+      try {
+        return JSON.parse(savedLocalUser);
+      } catch (e) {
+        return null;
+      }
+    }
+    // Per consentire lo sviluppo locale immediato, impostiamo di default l'utente locale FOUR
+    const defaultUser = {
+      uid: 'local_four_admin',
+      email: 'operativo@four-trasporti.it',
+      displayName: 'FOUR Team',
+      isLocal: true
+    };
+    localStorage.setItem('four_local_user', JSON.stringify(defaultUser));
+    return defaultUser;
+  });
 
-  const login = (email, password) => {
-    return signInWithEmailAndPassword(auth, email, password);
+  const [loading, setLoading] = useState(false);
+
+  // Login con credenziali Firebase
+  const login = async (email, password) => {
+    try {
+      const userCred = await signInWithEmailAndPassword(auth, email, password);
+      setCurrentUser(userCred.user);
+      localStorage.removeItem('four_local_user');
+      return userCred.user;
+    } catch (error) {
+      console.warn('Login Firebase fallito, consento fallback locale:', error);
+      throw error;
+    }
   };
 
-  const signup = (email, password) => {
-    return createUserWithEmailAndPassword(auth, email, password);
+  // Login locale istantaneo per sviluppo locale / offline
+  const loginLocal = (role = 'Amministratore') => {
+    const localUser = {
+      uid: 'local_four_admin',
+      email: 'operativo@four-trasporti.it',
+      displayName: `FOUR ${role}`,
+      isLocal: true
+    };
+    localStorage.setItem('four_local_user', JSON.stringify(localUser));
+    setCurrentUser(localUser);
+    return localUser;
   };
 
-  const logout = () => {
-    return signOut(auth);
+  const signup = async (email, password) => {
+    const userCred = await createUserWithEmailAndPassword(auth, email, password);
+    setCurrentUser(userCred.user);
+    return userCred.user;
+  };
+
+  const logout = async () => {
+    try {
+      if (auth.currentUser) {
+        await signOut(auth);
+      }
+    } catch (e) {
+      console.warn('Errore logout Firebase:', e);
+    } finally {
+      localStorage.removeItem('four_local_user');
+      setCurrentUser(null);
+    }
   };
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
-      setCurrentUser(user);
+      if (user) {
+        setCurrentUser(user);
+        localStorage.removeItem('four_local_user');
+      }
       setLoading(false);
     });
     return unsubscribe;
@@ -38,6 +94,7 @@ export const AuthProvider = ({ children }) => {
   const value = {
     currentUser,
     login,
+    loginLocal,
     signup,
     logout
   };
