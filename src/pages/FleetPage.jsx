@@ -40,8 +40,19 @@ const FleetPage = () => {
     categoryLabel: 'Trattore Stradale 4x2',
     fuelTypeId: 'elettrico',
     avgConsumption: 1.2,
+    yieldKmPerUnit: 0.83, // km/kWh o km/kg ("al contrario")
     monthlyLease: 4500,
-    ownershipType: 'noleggio',
+    ownershipType: 'noleggio', // noleggio, proprieta, terzi
+    // Parametri Mezzi di Proprietà
+    purchaseCost: 140000,
+    amortizationYears: 5,
+    insuranceYearly: 5600,
+    roadTaxYearly: 0,
+    maintenanceMonthly: 350,
+    // Parametri Gomme
+    tireCostKm: 0.04,
+    tireCount: 12,
+    // Termini Noleggio
     leasePaymentTerms: 0, // 0 = Anticipato (1° mese), 30 = 30 gg f.m., 60 = 60 gg
     lessorName: '',
     licenseTypeId: 'ce_diurno',
@@ -63,14 +74,27 @@ const FleetPage = () => {
   const handleOpenModal = (item = null, type = activeTab) => {
     if (item) {
       setEditingItem({ ...item, itemType: type });
+      const cons = item.avgConsumption || 1.0;
+      const yieldVal = item.fuelTypeId === 'elettrico'
+        ? (cons > 0 ? +(1 / cons).toFixed(2) : 0.83)
+        : (cons > 0 ? +(100 / cons).toFixed(2) : 2.7);
+
       setFormData({
         name: item.name || '',
         category: item.category || 'trattore',
         categoryLabel: item.categoryLabel || '',
         fuelTypeId: item.fuelTypeId || 'elettrico',
-        avgConsumption: item.avgConsumption || 1.0,
+        avgConsumption: cons,
+        yieldKmPerUnit: item.yieldKmPerUnit || yieldVal,
         monthlyLease: item.monthlyLease || 0,
         ownershipType: item.ownershipType || 'noleggio',
+        purchaseCost: item.purchaseCost || 140000,
+        amortizationYears: item.amortizationYears || 5,
+        insuranceYearly: item.insuranceYearly || 5600,
+        roadTaxYearly: item.roadTaxYearly || 0,
+        maintenanceMonthly: item.maintenanceMonthly || 350,
+        tireCostKm: item.tireCostKm || 0.04,
+        tireCount: item.tireCount || 12,
         leasePaymentTerms: item.leasePaymentTerms !== undefined ? item.leasePaymentTerms : 0,
         lessorName: item.lessorName || '',
         licenseTypeId: item.licenseTypeId || 'ce_diurno',
@@ -88,8 +112,16 @@ const FleetPage = () => {
           categoryLabel: 'Trattore Stradale 4x2',
           fuelTypeId: 'elettrico',
           avgConsumption: 1.2,
+          yieldKmPerUnit: 0.83,
           monthlyLease: 4800,
           ownershipType: 'noleggio',
+          purchaseCost: 150000,
+          amortizationYears: 5,
+          insuranceYearly: 5600,
+          roadTaxYearly: 0,
+          maintenanceMonthly: 350,
+          tireCostKm: 0.04,
+          tireCount: 12,
           leasePaymentTerms: 0,
           lessorName: 'Volvo / Scania Financial',
           licenseTypeId: 'ce_diurno',
@@ -105,8 +137,16 @@ const FleetPage = () => {
           categoryLabel: 'Semirimorchio Frigo',
           fuelTypeId: 'azoto',
           avgConsumption: 0,
+          yieldKmPerUnit: 0,
           monthlyLease: 1600,
           ownershipType: 'noleggio',
+          purchaseCost: 65000,
+          amortizationYears: 7,
+          insuranceYearly: 2400,
+          roadTaxYearly: 400,
+          maintenanceMonthly: 150,
+          tireCostKm: 0.02,
+          tireCount: 6,
           leasePaymentTerms: 30,
           lessorName: 'Lamberet / TIP Services',
           licenseTypeId: 'ce_diurno',
@@ -118,6 +158,16 @@ const FleetPage = () => {
       }
     }
     setShowModal(true);
+  };
+
+  // Calcolo automatico costo mensile per mezzi di proprietà
+  const calculateOwnedMonthlyCost = (fData) => {
+    const amortMonths = (fData.amortizationYears || 5) * 12;
+    const amortMonthly = amortMonths > 0 ? (fData.purchaseCost || 0) / amortMonths : 0;
+    const insMonthly = (fData.insuranceYearly || 0) / 12;
+    const taxMonthly = (fData.roadTaxYearly || 0) / 12;
+    const maintMonthly = Number(fData.maintenanceMonthly) || 0;
+    return Math.round(amortMonthly + insMonthly + taxMonthly + maintMonthly);
   };
 
   const handleSave = (e) => {
@@ -430,8 +480,23 @@ const FleetPage = () => {
                   )}
 
                   <div className="flex justify-between items-center">
-                    <span className="text-slate-500">Canone Noleggio Mensile:</span>
-                    <span className="font-extrabold text-slate-900">{formatEUR(item.monthlyLease)} / mese</span>
+                    <span className="text-slate-500">Possesso:</span>
+                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                      item.ownershipType === 'proprieta'
+                        ? 'bg-blue-100 text-blue-900 border border-blue-300'
+                        : item.ownershipType === 'terzi'
+                        ? 'bg-purple-100 text-purple-900 border border-purple-300'
+                        : 'bg-slate-100 text-slate-800'
+                    }`}>
+                      {item.ownershipType === 'proprieta' ? 'Proprietà FOUR' : item.ownershipType === 'terzi' ? 'Padroncino / Terzi' : 'Noleggio NLT'}
+                    </span>
+                  </div>
+
+                  <div className="flex justify-between items-center">
+                    <span className="text-slate-500">
+                      {item.ownershipType === 'proprieta' ? 'Costo Fisso Proprietà / Mese:' : 'Canone Noleggio / Mese:'}
+                    </span>
+                    <span className="font-extrabold text-slate-900">{formatEUR(item.monthlyLease)} / m</span>
                   </div>
 
                   <div className="flex justify-between items-center">
@@ -443,7 +508,7 @@ const FleetPage = () => {
 
                   {item.lessorName && (
                     <div className="flex justify-between items-center">
-                      <span className="text-slate-500">Noleggiatore:</span>
+                      <span className="text-slate-500">Fornitore / Noleggiatore:</span>
                       <span className="font-semibold text-slate-700 truncate max-w-[150px]" title={item.lessorName}>
                         {item.lessorName}
                       </span>
@@ -459,10 +524,17 @@ const FleetPage = () => {
 
                   {item.avgConsumption > 0 && (
                     <div className="flex justify-between items-center">
-                      <span className="text-slate-500">Consumo Medio:</span>
-                      <span className="font-medium text-slate-800">
-                        {item.avgConsumption} {item.fuelTypeId === 'elettrico' ? 'kWh/km' : 'kg/100km'}
-                      </span>
+                      <span className="text-slate-500">Consumo & Resa:</span>
+                      <div className="text-right">
+                        <span className="font-bold text-slate-900 block">
+                          {item.avgConsumption} {item.fuelTypeId === 'elettrico' ? 'kWh/km' : 'kg/100km'}
+                        </span>
+                        <span className="text-[10px] text-emerald-700 font-bold">
+                          {item.fuelTypeId === 'elettrico'
+                            ? `~${(1 / item.avgConsumption).toFixed(2)} km/kWh`
+                            : `~${(100 / item.avgConsumption).toFixed(1)} km/kg`}
+                        </span>
+                      </div>
                     </div>
                   )}
 
@@ -594,17 +666,27 @@ const FleetPage = () => {
                 </div>
               </div>
 
+              {/* Tipologia Possesso / Acquisizione */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Canone Noleggio Mensile (€) *</label>
-                  <input
-                    type="number"
-                    step="50"
-                    required
-                    value={formData.monthlyLease}
-                    onChange={(e) => setFormData({ ...formData, monthlyLease: parseFloat(e.target.value) || 0 })}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 font-bold"
-                  />
+                  <label className="block font-semibold text-slate-700 mb-1">Tipologia Possesso *</label>
+                  <select
+                    value={formData.ownershipType}
+                    onChange={(e) => {
+                      const own = e.target.value;
+                      if (own === 'proprieta') {
+                        const calculated = calculateOwnedMonthlyCost(formData);
+                        setFormData({ ...formData, ownershipType: own, monthlyLease: calculated });
+                      } else {
+                        setFormData({ ...formData, ownershipType: own });
+                      }
+                    }}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 font-bold bg-white"
+                  >
+                    <option value="noleggio">Noleggio a Lungo Termine (NLT)</option>
+                    <option value="proprieta">Proprietà FOUR (Ammortamento & Spese)</option>
+                    <option value="terzi">Padroncino / Vettore Terzo</option>
+                  </select>
                 </div>
 
                 <div>
@@ -618,58 +700,192 @@ const FleetPage = () => {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Termini Pagamento Nolo *</label>
-                  <select
-                    value={formData.leasePaymentTerms}
-                    onChange={(e) => setFormData({ ...formData, leasePaymentTerms: parseInt(e.target.value) || 0 })}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 font-bold bg-white"
-                  >
-                    <option value="0">Anticipato (1° del mese)</option>
-                    <option value="30">30 giorni d.f. fine mese</option>
-                    <option value="60">60 giorni d.f. fine mese</option>
-                  </select>
+              {/* SE PROPRIETÀ: PARAMETRI ASSICURATIVI, BOLLO, AMMORTAMENTO */}
+              {formData.ownershipType === 'proprieta' ? (
+                <div className="p-4 bg-blue-50/70 border border-blue-200 rounded-xl space-y-3">
+                  <span className="text-[11px] font-extrabold text-blue-900 uppercase tracking-wider flex items-center">
+                    <Shield className="w-4 h-4 mr-1 text-blue-700" />
+                    Parametri Mezzo di Proprietà FOUR (Calcolo Costo Fisso Mensile)
+                  </span>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                    <div>
+                      <label className="block font-semibold text-slate-700 mb-0.5">Costo Acquisto (€)</label>
+                      <input
+                        type="number"
+                        step="1000"
+                        value={formData.purchaseCost}
+                        onChange={(e) => {
+                          const val = parseFloat(e.target.value) || 0;
+                          const next = { ...formData, purchaseCost: val };
+                          setFormData({ ...next, monthlyLease: calculateOwnedMonthlyCost(next) });
+                        }}
+                        className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg bg-white font-bold"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block font-semibold text-slate-700 mb-0.5">Anni Ammortamento</label>
+                      <input
+                        type="number"
+                        min="2"
+                        max="10"
+                        value={formData.amortizationYears}
+                        onChange={(e) => {
+                          const val = parseInt(e.target.value) || 5;
+                          const next = { ...formData, amortizationYears: val };
+                          setFormData({ ...next, monthlyLease: calculateOwnedMonthlyCost(next) });
+                        }}
+                        className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg bg-white"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block font-semibold text-slate-700 mb-0.5">Assicurazione (RCA+Kasko €/a)</label>
+                      <input
+                        type="number"
+                        step="100"
+                        value={formData.insuranceYearly}
+                        onChange={(e) => {
+                          const val = parseFloat(e.target.value) || 0;
+                          const next = { ...formData, insuranceYearly: val };
+                          setFormData({ ...next, monthlyLease: calculateOwnedMonthlyCost(next) });
+                        }}
+                        className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg bg-white"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block font-semibold text-slate-700 mb-0.5">Bollo / Tassa Possesso (€/a)</label>
+                      <input
+                        type="number"
+                        step="50"
+                        value={formData.roadTaxYearly}
+                        onChange={(e) => {
+                          const val = parseFloat(e.target.value) || 0;
+                          const next = { ...formData, roadTaxYearly: val };
+                          setFormData({ ...next, monthlyLease: calculateOwnedMonthlyCost(next) });
+                        }}
+                        className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg bg-white"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block font-semibold text-slate-700 mb-0.5">Manutenzione (€/mese)</label>
+                      <input
+                        type="number"
+                        step="25"
+                        value={formData.maintenanceMonthly}
+                        onChange={(e) => {
+                          const val = parseFloat(e.target.value) || 0;
+                          const next = { ...formData, maintenanceMonthly: val };
+                          setFormData({ ...next, monthlyLease: calculateOwnedMonthlyCost(next) });
+                        }}
+                        className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg bg-white"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block font-semibold text-blue-900 mb-0.5">Costo Fisso Risultante / Mese</label>
+                      <div className="px-2.5 py-1.5 bg-blue-100 rounded-lg font-black text-blue-950 text-sm">
+                        {formatEUR(formData.monthlyLease)} / m
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                /* SE NOLEGGIO NLT */
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">Canone Noleggio Mensile (€) *</label>
+                    <input
+                      type="number"
+                      step="50"
+                      required
+                      value={formData.monthlyLease}
+                      onChange={(e) => setFormData({ ...formData, monthlyLease: parseFloat(e.target.value) || 0 })}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 font-bold"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">Termini Pagamento Nolo *</label>
+                    <select
+                      value={formData.leasePaymentTerms}
+                      onChange={(e) => setFormData({ ...formData, leasePaymentTerms: parseInt(e.target.value) || 0 })}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 font-bold bg-white"
+                    >
+                      <option value="0">Anticipato (1° del mese)</option>
+                      <option value="30">30 giorni d.f. fine mese</option>
+                      <option value="60">60 giorni d.f. fine mese</option>
+                    </select>
+                  </div>
+                </div>
+              )}
+
+              {/* SEZIONE CONSUMO BIDIREZIONALE ("AL CONTRARIO") */}
+              <div className="p-3.5 bg-emerald-50/70 border border-emerald-200/80 rounded-xl space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-bold text-emerald-950 uppercase tracking-wider flex items-center">
+                    <ArrowRightLeft className="w-3.5 h-3.5 mr-1 text-emerald-700" />
+                    Consumo Specifico & Resa "Al Contrario"
+                  </span>
+                  <span className="text-[10px] text-emerald-800 font-medium">Sincronizzazione Automatica</span>
                 </div>
 
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Noleggiatore / Fornitore NLT</label>
-                  <input
-                    type="text"
-                    placeholder="Es. Scania Finance, Fraikin, TIP..."
-                    value={formData.lessorName}
-                    onChange={(e) => setFormData({ ...formData, lessorName: e.target.value })}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500"
-                  />
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">
+                      Consumo ({formData.fuelTypeId === 'elettrico' ? 'kWh/km' : 'kg o L / 100km'})
+                    </label>
+                    <input
+                      type="number"
+                      step="0.05"
+                      value={formData.avgConsumption}
+                      onChange={(e) => {
+                        const cons = parseFloat(e.target.value) || 0;
+                        const y = formData.fuelTypeId === 'elettrico'
+                          ? (cons > 0 ? +(1 / cons).toFixed(2) : 0)
+                          : (cons > 0 ? +(100 / cons).toFixed(2) : 0);
+                        setFormData({ ...formData, avgConsumption: cons, yieldKmPerUnit: y });
+                      }}
+                      className="w-full px-3 py-1.5 border border-emerald-300 rounded-lg font-bold bg-white"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block font-semibold text-emerald-900 mb-1">
+                      Resa "Al Contrario" ({formData.fuelTypeId === 'elettrico' ? 'km/kWh' : 'km con 1 kg o L'})
+                    </label>
+                    <input
+                      type="number"
+                      step="0.05"
+                      value={formData.yieldKmPerUnit}
+                      onChange={(e) => {
+                        const y = parseFloat(e.target.value) || 0;
+                        const cons = formData.fuelTypeId === 'elettrico'
+                          ? (y > 0 ? +(1 / y).toFixed(2) : 0)
+                          : (y > 0 ? +(100 / y).toFixed(2) : 0);
+                        setFormData({ ...formData, yieldKmPerUnit: y, avgConsumption: cons });
+                      }}
+                      className="w-full px-3 py-1.5 border border-emerald-400 rounded-lg font-extrabold text-emerald-900 bg-white"
+                    />
+                  </div>
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">
-                    Consumo Medio ({formData.fuelTypeId === 'elettrico' ? 'kWh/km' : 'kg o L/100km'})
-                  </label>
-                  <input
-                    type="number"
-                    step="0.05"
-                    value={formData.avgConsumption}
-                    onChange={(e) => setFormData({ ...formData, avgConsumption: parseFloat(e.target.value) || 0 })}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500"
-                  />
-                </div>
-
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Stato Mezzo</label>
-                  <select
-                    value={formData.status}
-                    onChange={(e) => setFormData({ ...formData, status: e.target.value })}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 font-bold"
-                  >
-                    <option value="available">Libero / Disponibile</option>
-                    <option value="assigned">Assegnato a Commessa</option>
-                    <option value="maintenance">In Manutenzione</option>
-                  </select>
-                </div>
+              {/* Stato Mezzo */}
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">Stato Mezzo</label>
+                <select
+                  value={formData.status}
+                  onChange={(e) => setFormData({ ...formData, status: e.target.value })}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 font-bold bg-white"
+                >
+                  <option value="available">Libero / Disponibile</option>
+                  <option value="assigned">Assegnato a Commessa</option>
+                  <option value="maintenance">In Manutenzione</option>
+                </select>
               </div>
 
               {formData.status === 'assigned' && (

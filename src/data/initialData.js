@@ -1023,12 +1023,30 @@ export const DEFAULT_SETTINGS = {
   fuelTypes: DEFAULT_FUEL_TYPES,
   licenseTypes: DEFAULT_LICENSE_TYPES,
   standardCosts: {
-    tireCostKm: 0.03,
+    tireCostKm: 0.04,
     tollRateHighwayKm: 0.12,
-    telematicsDaily: 2.50,
-    parkingFeeDaily: 100.00,
-    miscDaily: 10.00,
+    telematicsMonthly: 35.00, // Canone GPS/telematica per mezzo al mese
+    telepassMonthly: 15.00, // Canone apparato Telepass al mese
+    adbluePricePerLiter: 0.85, // Prezzo AdBlue €/L
+    adbluePercentOfFuel: 5.0, // Consumo AdBlue stimato in % su gasolio/HVO
+    azotoFrigoKgPrice: 0.45, // Azoto liquido €/kg
+    azotoFrigoDailyEstimate: 20.00, // Costo medio giornaliero frigo azoto
     co2SavingsVsDieselKgKm: 0.75 // kg CO2 risparmiati per km con trazione elettrica/biometano
+  },
+  tireParameters: {
+    costPerTire: 450, // Costo medio per pneumatico nuovo (€)
+    tiresTractor: 6, // 6 gomme trattore
+    tiresTrailer: 6, // 6 gomme semirimorchio (totale 12)
+    tireLifeKm: 90000, // Durata chilometrica stimata treno
+    estimatedTireCostKm: 0.04 // (6 * 450 + 6 * 450) / 90000 = 0.06
+  },
+  ownershipDefaults: {
+    annualInsuranceRCA: 3200, // RCA annuale
+    annualInsuranceKasko: 2400, // Kasko/Furto/Incendio annuale
+    annualRoadTax: 1100, // Bollo annuo (0 per veicoli elettrici esenti)
+    monthlyMaintenance: 350, // Manutenzione programmata e tagliandi al mese
+    amortizationYears: 5, // Anni ammortamento standard
+    inspectionYearly: 200 // Revisione periodica e taratura cronotachigrafo
   },
   financialDefaults: {
     clientPaymentTermsDays: 60, // DSO predefinito
