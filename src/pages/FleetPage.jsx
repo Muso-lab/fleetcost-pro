@@ -42,6 +42,8 @@ const FleetPage = () => {
     avgConsumption: 1.2,
     monthlyLease: 4500,
     ownershipType: 'noleggio',
+    leasePaymentTerms: 0, // 0 = Anticipato (1° mese), 30 = 30 gg f.m., 60 = 60 gg
+    lessorName: '',
     licenseTypeId: 'ce_diurno',
     capacityPlt: 33,
     status: 'available',
@@ -69,6 +71,8 @@ const FleetPage = () => {
         avgConsumption: item.avgConsumption || 1.0,
         monthlyLease: item.monthlyLease || 0,
         ownershipType: item.ownershipType || 'noleggio',
+        leasePaymentTerms: item.leasePaymentTerms !== undefined ? item.leasePaymentTerms : 0,
+        lessorName: item.lessorName || '',
         licenseTypeId: item.licenseTypeId || 'ce_diurno',
         capacityPlt: item.capacityPlt || 33,
         status: item.status || 'available',
@@ -86,6 +90,8 @@ const FleetPage = () => {
           avgConsumption: 1.2,
           monthlyLease: 4800,
           ownershipType: 'noleggio',
+          leasePaymentTerms: 0,
+          lessorName: 'Volvo / Scania Financial',
           licenseTypeId: 'ce_diurno',
           capacityPlt: 33,
           status: 'available',
@@ -101,6 +107,8 @@ const FleetPage = () => {
           avgConsumption: 0,
           monthlyLease: 1600,
           ownershipType: 'noleggio',
+          leasePaymentTerms: 30,
+          lessorName: 'Lamberet / TIP Services',
           licenseTypeId: 'ce_diurno',
           capacityPlt: 33,
           status: 'available',
@@ -427,6 +435,22 @@ const FleetPage = () => {
                   </div>
 
                   <div className="flex justify-between items-center">
+                    <span className="text-slate-500">Termini Pagam. Nolo:</span>
+                    <span className="font-bold text-amber-800 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
+                      {item.leasePaymentTerms === 0 ? 'Anticipato (1° mese)' : `${item.leasePaymentTerms || 30} gg f.m.`}
+                    </span>
+                  </div>
+
+                  {item.lessorName && (
+                    <div className="flex justify-between items-center">
+                      <span className="text-slate-500">Noleggiatore:</span>
+                      <span className="font-semibold text-slate-700 truncate max-w-[150px]" title={item.lessorName}>
+                        {item.lessorName}
+                      </span>
+                    </div>
+                  )}
+
+                  <div className="flex justify-between items-center">
                     <span className="text-slate-500">Quota Giornaliera (22gg):</span>
                     <span className="font-semibold text-slate-700">
                       {formatEUR(item.monthlyLease ? item.monthlyLease / 22 : 0)} / gg
@@ -589,6 +613,32 @@ const FleetPage = () => {
                     type="number"
                     value={formData.capacityPlt}
                     onChange={(e) => setFormData({ ...formData, capacityPlt: parseInt(e.target.value) || 33 })}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Termini Pagamento Nolo *</label>
+                  <select
+                    value={formData.leasePaymentTerms}
+                    onChange={(e) => setFormData({ ...formData, leasePaymentTerms: parseInt(e.target.value) || 0 })}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 font-bold bg-white"
+                  >
+                    <option value="0">Anticipato (1° del mese)</option>
+                    <option value="30">30 giorni d.f. fine mese</option>
+                    <option value="60">60 giorni d.f. fine mese</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Noleggiatore / Fornitore NLT</label>
+                  <input
+                    type="text"
+                    placeholder="Es. Scania Finance, Fraikin, TIP..."
+                    value={formData.lessorName}
+                    onChange={(e) => setFormData({ ...formData, lessorName: e.target.value })}
                     className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500"
                   />
                 </div>

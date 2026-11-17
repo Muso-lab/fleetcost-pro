@@ -168,9 +168,65 @@ const ProjectsPage = () => {
         ...prev,
         vehicleId: vId,
         vehicleLeaseDaily: vLease,
-        managementType: selectedVeh.ownershipType === 'terzi' ? 'T' : prev.managementType
+        managementType: selectedVeh.ownershipType === 'terzi' ? 'T' : prev.managementType,
+        paymentTermsLease: selectedVeh.leasePaymentTerms !== undefined ? selectedVeh.leasePaymentTerms : prev.paymentTermsLease
       }));
     }
+  };
+
+  // Assistente di Calcolo Automatico dei costi della commessa da parametri fisici
+  const handleAutoCalculateCosts = () => {
+    const vehicle = fleet.find(v => v.id === formData.vehicleId);
+    const trailer = trailers.find(t => t.id === formData.trailerId);
+    const settings = storageService.getSettings();
+
+    const km = Number(formData.kmDaily) || 0;
+    const workingDays = Number(formData.workingDaysMonth) || 22;
+
+    // 1. Carburante / Energia
+    let fuelDaily = 0;
+    if (vehicle) {
+      const fuelType = settings.fuelTypes.find(f => f.id === vehicle.fuelTypeId);
+      const price = fuelType ? fuelType.price : 1.10;
+      if (vehicle.fuelTypeId === 'elettrico') {
+        fuelDaily = +( (vehicle.avgConsumption || 1.2) * km * price ).toFixed(2);
+      } else {
+        fuelDaily = +( ((vehicle.avgConsumption || 30) / 100) * km * price ).toFixed(2);
+      }
+    }
+
+    // 2. Pedaggi (stima 70% autostrada a 0.12 €/km)
+    const tollsDaily = +(km * 0.70 * 0.12).toFixed(2);
+
+    // 3. Gomme (0.04 €/km)
+    const tiresDaily = +(km * 0.04).toFixed(2);
+
+    // 4. Autista
+    let driverDaily = 220;
+    if (vehicle) {
+      if (vehicle.category === 'motrice') driverDaily = 180;
+      if (vehicle.category === 'furgone') driverDaily = 140;
+    }
+
+    // 5. Noleggi ripartiti
+    const vLease = vehicle && workingDays > 0 ? +(vehicle.monthlyLease / workingDays).toFixed(2) : formData.vehicleLeaseDaily;
+    const tLease = trailer && workingDays > 0 ? +(trailer.monthlyLease / workingDays).toFixed(2) : 0;
+
+    // 6. Margine partner terzista (10% se Terzi)
+    const partnerDaily = formData.managementType === 'T'
+      ? +((driverDaily + fuelDaily + tollsDaily + tiresDaily) * 0.10).toFixed(2)
+      : 0;
+
+    setFormData(prev => ({
+      ...prev,
+      fuelCostDaily: fuelDaily,
+      tollsDaily: tollsDaily,
+      tiresDaily: tiresDaily,
+      driverCostDaily: driverDaily,
+      vehicleLeaseDaily: vLease,
+      trailerLeaseDaily: tLease,
+      partnerMarginDaily: partnerDaily
+    }));
   };
 
   const handleTrailerChangeInModal = (tId) => {
@@ -719,9 +775,20 @@ const ProjectsPage = () => {
 
                 {/* Costi Giornalieri */}
                 <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-2">
-                  <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wider">
-                    Dettaglio Costi Giornalieri (€ / Giorno)
-                  </span>
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 pb-1 border-b border-slate-200/60">
+                    <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wider">
+                      Dettaglio Costi Giornalieri (€ / Giorno)
+                    </span>
+                    <button
+                      type="button"
+                      onClick={handleAutoCalculateCosts}
+                      className="inline-flex items-center space-x-1.5 px-2.5 py-1 bg-emerald-100 hover:bg-emerald-200 text-emerald-800 rounded-lg text-[11px] font-bold transition border border-emerald-300"
+                      title="Calcola automaticamente Carburante, Pedaggi, Gomme e Noleggi usando i km e le caratteristiche del mezzo selezionato"
+                    >
+                      <TrendingUp className="w-3.5 h-3.5 text-emerald-700" />
+                      <span>Calcola Automaticamente da Mezzo & Km</span>
+                    </button>
+                  </div>
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                     <div>
                       <label className="block text-slate-600 mb-0.5">Autista (€/gg)</label>

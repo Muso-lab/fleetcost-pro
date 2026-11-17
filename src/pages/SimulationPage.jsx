@@ -209,7 +209,7 @@ const SimulationPage = () => {
       molPercent: simulationResult.molPercent,
       paymentTermsClient,
       paymentTermsSuppliers,
-      paymentTermsLease: 30,
+      paymentTermsLease: simulationResult.vehicle.leasePaymentTerms !== undefined ? simulationResult.vehicle.leasePaymentTerms : 0,
       depositAmount: 0,
       cashAdvanceRequired: +simulationResult.workingCapitalNeed.toFixed(2),
       notes: `Preventivo generato dal simulatore con margine target ${simulationResult.molPercent}%`
