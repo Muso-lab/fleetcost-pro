@@ -693,3 +693,55 @@ export const formatPercent = (value) => {
   const num = typeof value === 'string' ? parseFloat(value) : (value || 0);
   return `${num.toFixed(1)}%`;
 };
+
+/**
+ * Calcola il costo chilometrico dei pneumatici con durate differenziate FOUR:
+ * - Semirimorchi: 80.000 km (6 gomme da rimorchio)
+ * - Trattori Elettrici: 50.000 km (6 gomme, coppia istantanea 2400+ Nm e peso batterie)
+ * - Motrici Elettriche: 80.000 km (4 o 6 gomme)
+ * - Trattori Bio-LNG / Termici: 85.000 km (6 gomme)
+ */
+export const calculateTireCostPerKm = (vehicle, trailer, options = {}) => {
+  const {
+    costPerTire = 450,
+    lifeTrailer = 80000,
+    lifeTractorElectric = 50000,
+    lifeRigidElectric = 80000,
+    lifeTractorBiolng = 85000
+  } = options;
+
+  let vehicleRate = 0;
+  let trailerRate = 0;
+
+  if (vehicle) {
+    const isElectric = vehicle.fuelTypeId === 'elettrico' || vehicle.fuelType === 'elettrico';
+    const isTractor = vehicle.category === 'trattore';
+    const isRigid = vehicle.category === 'motrice';
+
+    if (isTractor && isElectric) {
+      const tires = vehicle.tireCount || 6;
+      vehicleRate = (tires * costPerTire) / lifeTractorElectric; // 6 * 450 / 50000 = 0.0540 €/km
+    } else if (isRigid && isElectric) {
+      const tires = vehicle.tireCount || (vehicle.capacityPlt && vehicle.capacityPlt <= 12 ? 4 : 6);
+      vehicleRate = (tires * costPerTire) / lifeRigidElectric; // 6 * 450 / 80000 = 0.0338 €/km
+    } else if (isTractor) {
+      const tires = vehicle.tireCount || 6;
+      vehicleRate = (tires * costPerTire) / lifeTractorBiolng; // 6 * 450 / 85000 = 0.0318 €/km
+    } else {
+      const tires = vehicle.tireCount || 4;
+      vehicleRate = (tires * costPerTire) / lifeRigidElectric;
+    }
+  }
+
+  if (trailer) {
+    const tires = trailer.tireCount || 6;
+    trailerRate = (tires * costPerTire) / lifeTrailer; // 6 * 450 / 80000 = 0.03375 €/km
+  }
+
+  const total = vehicleRate + trailerRate;
+  return {
+    vehicleRate: +vehicleRate.toFixed(4),
+    trailerRate: +trailerRate.toFixed(4),
+    totalRate: +(total > 0 ? total : 0.04).toFixed(4)
+  };
+};

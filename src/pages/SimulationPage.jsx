@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import storageService from '../services/storageService';
-import { formatEUR, formatPercent } from '../utils/cashFlowCalculations';
+import { formatEUR, formatPercent, calculateTireCostPerKm } from '../utils/cashFlowCalculations';
 import {
   Calculator,
   TrendingUp,
@@ -63,6 +63,7 @@ const SimulationPage = () => {
     if (f.length > 0) {
       setSelectedVehicleId(f[0].id);
       updateFuelForVehicle(f[0], s);
+      updateTireForCombo(f[0], null, s);
     }
   };
 
@@ -74,11 +75,33 @@ const SimulationPage = () => {
     }
   };
 
+  const updateTireForCombo = (vehicle, trailer, curSettings) => {
+    const calc = calculateTireCostPerKm(vehicle, trailer, {
+      costPerTire: curSettings?.tireParameters?.costPerTire || 450,
+      lifeTrailer: curSettings?.tireParameters?.lifeKmTrailer || 80000,
+      lifeTractorElectric: curSettings?.tireParameters?.lifeKmTractorElectric || 50000,
+      lifeRigidElectric: curSettings?.tireParameters?.lifeKmRigidElectric || 80000,
+      lifeTractorBiolng: curSettings?.tireParameters?.lifeKmTractorBiolng || 85000
+    });
+    setTireRate(calc.totalRate);
+  };
+
   const handleVehicleChange = (vId) => {
     setSelectedVehicleId(vId);
     const vehicle = fleet.find(v => v.id === vId);
+    const trailer = trailers.find(t => t.id === selectedTrailerId);
     if (vehicle && settings) {
       updateFuelForVehicle(vehicle, settings);
+      updateTireForCombo(vehicle, trailer, settings);
+    }
+  };
+
+  const handleTrailerChange = (tId) => {
+    setSelectedTrailerId(tId);
+    const vehicle = fleet.find(v => v.id === selectedVehicleId);
+    const trailer = trailers.find(t => t.id === tId);
+    if (vehicle && settings) {
+      updateTireForCombo(vehicle, trailer, settings);
     }
   };
 
@@ -348,7 +371,7 @@ const SimulationPage = () => {
                 </label>
                 <select
                   value={selectedTrailerId}
-                  onChange={(e) => setSelectedTrailerId(e.target.value)}
+                  onChange={(e) => handleTrailerChange(e.target.value)}
                   className="w-full px-3 py-2 border border-slate-300 rounded-xl bg-white focus:ring-2 focus:ring-emerald-500"
                 >
                   <option value="">-- Nessun Semirimorchio --</option>
@@ -439,6 +462,31 @@ const SimulationPage = () => {
                     </label>
                   )}
                 </div>
+              </div>
+
+              {/* Usura Pneumatici Differenziata FOUR */}
+              <div className="p-3 bg-amber-50/70 rounded-xl border border-amber-200 space-y-1">
+                <div className="flex items-center justify-between">
+                  <label className="font-bold text-amber-950 text-xs">
+                    Costo Pneumatici Differenziato (€/km):
+                  </label>
+                  <span className="text-[10px] text-amber-800 font-semibold">
+                    Calcolato su combinazione Mezzo & Rimorchio
+                  </span>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <input
+                    type="number"
+                    step="0.005"
+                    value={tireRate}
+                    onChange={(e) => setTireRate(parseFloat(e.target.value) || 0.04)}
+                    className="w-full px-3 py-1.5 border border-amber-300 rounded-lg font-black text-amber-950 bg-white text-xs"
+                  />
+                  <span className="text-amber-900 font-bold text-xs">€/km</span>
+                </div>
+                <p className="text-[10px] text-amber-700 leading-tight">
+                  Trattori BEV: 50.000 km (~0,054 €/km) | Motrici & Semirimorchi: 80.000 km (~0,034 €/km).
+                </p>
               </div>
 
               {/* Margine Target & Termini di Pagamento */}

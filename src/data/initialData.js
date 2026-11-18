@@ -1239,9 +1239,15 @@ export const DEFAULT_SETTINGS = {
   tireParameters: {
     costPerTire: 450, // Costo medio per pneumatico nuovo (€)
     tiresTractor: 6, // 6 gomme trattore
-    tiresTrailer: 6, // 6 gomme semirimorchio (totale 12)
-    tireLifeKm: 90000, // Durata chilometrica stimata treno
-    estimatedTireCostKm: 0.04 // (6 * 450 + 6 * 450) / 90000 = 0.06
+    tiresTrailer: 6, // 6 gomme semirimorchio (totale 12 bilico)
+    tiresRigidTruck: 6, // 6 gomme motrice (o 4 per 9-12 plt)
+    // Durate chilometriche differenziate FOUR:
+    lifeKmTrailer: 80000, // 80.000 km per semirimorchi
+    lifeKmTractorElectric: 50000, // 50.000 km per trattori elettrici (coppia 2400+ Nm & peso batterie)
+    lifeKmRigidElectric: 80000, // 80.000 km per motrici elettriche
+    lifeKmTractorBiolng: 85000, // 85.000 km per trattori Bio-LNG / Diesel
+    tireLifeKm: 80000, // durata di riferimento
+    estimatedTireCostKm: 0.054 // costo medio km
   },
   ownershipDefaults: {
     annualInsuranceRCA: 3200, // RCA annuale

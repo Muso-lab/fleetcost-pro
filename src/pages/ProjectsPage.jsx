@@ -6,7 +6,8 @@ import {
   formatPercent,
   calculateSingleProjectMetrics,
   LEASE_PAYMENT_TIMINGS,
-  normalizeLeaseTiming
+  normalizeLeaseTiming,
+  calculateTireCostPerKm
 } from '../utils/cashFlowCalculations';
 import {
   Briefcase,
@@ -201,8 +202,15 @@ const ProjectsPage = () => {
     // 2. Pedaggi (stima 70% autostrada a 0.12 €/km)
     const tollsDaily = +(km * 0.70 * 0.12).toFixed(2);
 
-    // 3. Gomme (0.04 €/km)
-    const tiresDaily = +(km * 0.04).toFixed(2);
+    // 3. Gomme con durate differenziate FOUR (80k semirimorchi, 50k trattori BEV, 80k motrici BEV)
+    const tireCalc = calculateTireCostPerKm(vehicle, trailer, {
+      costPerTire: settings.tireParameters?.costPerTire || 450,
+      lifeTrailer: settings.tireParameters?.lifeKmTrailer || 80000,
+      lifeTractorElectric: settings.tireParameters?.lifeKmTractorElectric || 50000,
+      lifeRigidElectric: settings.tireParameters?.lifeKmRigidElectric || 80000,
+      lifeTractorBiolng: settings.tireParameters?.lifeKmTractorBiolng || 85000
+    });
+    const tiresDaily = +(km * tireCalc.totalRate).toFixed(2);
 
     // 4. Autista
     let driverDaily = 220;

@@ -34,10 +34,14 @@ const SettingsPage = () => {
   const [calcYieldValue, setCalcYieldValue] = useState(2.7); // 2.7 km con 1 kg (dal file Excel)
   const [calcConsumptionValue, setCalcConsumptionValue] = useState(37.04); // 37.04 kg/100km
 
-  // Stato Calcolatore Gomme
+  // Stato Calcolatore Gomme con Durate Differenziate FOUR
   const [tireCostUnit, setTireCostUnit] = useState(450);
   const [tireCount, setTireCount] = useState(12); // 6 trattore + 6 semirimorchio
-  const [tireLifeKm, setTireLifeKm] = useState(90000);
+  const [tireLifeKm, setTireLifeKm] = useState(80000);
+  const [lifeKmTrailer, setLifeKmTrailer] = useState(80000); // Semirimorchi: 80.000 km
+  const [lifeKmTractorElectric, setLifeKmTractorElectric] = useState(50000); // Trattori elettrici: 50.000 km
+  const [lifeKmRigidElectric, setLifeKmRigidElectric] = useState(80000); // Motrici elettriche: 80.000 km
+  const [lifeKmTractorBiolng, setLifeKmTractorBiolng] = useState(85000); // Trattori Bio-LNG: 85.000 km
 
   useEffect(() => {
     loadSettings();
@@ -49,7 +53,11 @@ const SettingsPage = () => {
     if (s.tireParameters) {
       setTireCostUnit(s.tireParameters.costPerTire || 450);
       setTireCount((s.tireParameters.tiresTractor || 6) + (s.tireParameters.tiresTrailer || 6));
-      setTireLifeKm(s.tireParameters.tireLifeKm || 90000);
+      setTireLifeKm(s.tireParameters.tireLifeKm || 80000);
+      setLifeKmTrailer(s.tireParameters.lifeKmTrailer || 80000);
+      setLifeKmTractorElectric(s.tireParameters.lifeKmTractorElectric || 50000);
+      setLifeKmRigidElectric(s.tireParameters.lifeKmRigidElectric || 80000);
+      setLifeKmTractorBiolng(s.tireParameters.lifeKmTractorBiolng || 85000);
     }
   };
 
@@ -94,27 +102,34 @@ const SettingsPage = () => {
   };
 
   const handleSaveAll = () => {
-    // Calcola il costo gomme risultante
-    const estimatedTireCostKm = tireLifeKm > 0 ? (tireCount * tireCostUnit) / tireLifeKm : 0.04;
+    // Calcola il costo gomme risultante combinato (es. bilico elettrico completo: trattore 50k + semirimorchio 80k)
+    const costTractorBEV = (6 * tireCostUnit) / (lifeKmTractorElectric || 50000);
+    const costTrailer = (6 * tireCostUnit) / (lifeKmTrailer || 80000);
+    const combinedElectricArticulatedKm = +(costTractorBEV + costTrailer).toFixed(4);
 
     const updatedSettings = {
       ...settings,
       tireParameters: {
         costPerTire: tireCostUnit,
-        tiresTractor: tireCount === 12 ? 6 : Math.round(tireCount / 2),
-        tiresTrailer: tireCount === 12 ? 6 : Math.round(tireCount / 2),
+        tiresTractor: 6,
+        tiresTrailer: 6,
+        tiresRigidTruck: 6,
+        lifeKmTrailer,
+        lifeKmTractorElectric,
+        lifeKmRigidElectric,
+        lifeKmTractorBiolng,
         tireLifeKm,
-        estimatedTireCostKm: +estimatedTireCostKm.toFixed(4)
+        estimatedTireCostKm: combinedElectricArticulatedKm
       },
       standardCosts: {
         ...settings.standardCosts,
-        tireCostKm: +estimatedTireCostKm.toFixed(4)
+        tireCostKm: combinedElectricArticulatedKm
       }
     };
 
     storageService.saveSettings(updatedSettings);
     setSettings(updatedSettings);
-    setSaveMessage('Impostazioni, parametri di proprietà e tariffe salvati!');
+    setSaveMessage('Impostazioni, parametri usura gomme FOUR e tariffe salvati!');
     setTimeout(() => setSaveMessage(''), 3000);
   };
 
@@ -190,8 +205,12 @@ const SettingsPage = () => {
     ? calcConsumptionValue * currentFuelPrice
     : (calcConsumptionValue / 100) * currentFuelPrice;
 
-  // Calcolo costo gomme dinamico
-  const calculatedTireCostKm = tireLifeKm > 0 ? (tireCount * tireCostUnit) / tireLifeKm : 0.04;
+  // Calcolo costo gomme dinamico FOUR per categoria specifica
+  const tireCostTractorBEV = lifeKmTractorElectric > 0 ? (6 * tireCostUnit) / lifeKmTractorElectric : 0.054;
+  const tireCostTrailer = lifeKmTrailer > 0 ? (6 * tireCostUnit) / lifeKmTrailer : 0.03375;
+  const tireCostRigidBEV = lifeKmRigidElectric > 0 ? (6 * tireCostUnit) / lifeKmRigidElectric : 0.03375;
+  const tireCostTractorBio = lifeKmTractorBiolng > 0 ? (6 * tireCostUnit) / lifeKmTractorBiolng : 0.03176;
+  const calculatedTireCostKm = +(tireCostTractorBEV + tireCostTrailer).toFixed(4); // Bilico elettrico completo
 
   if (!settings) return null;
 
@@ -575,19 +594,19 @@ const SettingsPage = () => {
               <div className="flex items-center space-x-2">
                 <CircleDot className="w-5 h-5 text-amber-600" />
                 <div>
-                  <h2 className="text-sm font-bold text-slate-900">Modello di Consumo Pneumatici (Gomme)</h2>
-                  <p className="text-[11px] text-slate-500">Calcolo scientifico del costo usura gomme al km</p>
+                  <h2 className="text-sm font-bold text-slate-900">Modello Consumo Pneumatici con Durate Reali FOUR</h2>
+                  <p className="text-[11px] text-slate-500">Durate differenziate per semirimorchi (80k km), trattori elettrici (50k km) e motrici elettriche (80k km)</p>
                 </div>
               </div>
               <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-800">
-                Pneumatici
+                Pneumatici Differenziati
               </span>
             </div>
 
             <div className="space-y-3 text-xs">
               <div className="p-3 bg-slate-50 rounded-xl border border-slate-200/80 flex items-center justify-between">
                 <div>
-                  <span className="font-bold text-slate-900 block">Costo Medio per Pneumatico Nuovo:</span>
+                  <span className="font-bold text-slate-900 block">Costo Medio per Pneumatico Nuovo (€):</span>
                   <span className="text-[11px] text-slate-500">Pneumatici di prima fascia (Michelin, Goodyear, Bridgestone)</span>
                 </div>
                 <div className="flex items-center space-x-1">
@@ -598,56 +617,95 @@ const SettingsPage = () => {
                     onChange={(e) => setTireCostUnit(parseFloat(e.target.value) || 0)}
                     className="w-24 px-2.5 py-1.5 border border-slate-300 rounded-lg text-right font-bold bg-white"
                   />
-                  <span className="text-slate-500 font-bold">€</span>
+                  <span className="text-slate-500 font-bold">€ / gomma</span>
                 </div>
               </div>
 
-              <div className="p-3 bg-slate-50 rounded-xl border border-slate-200/80 flex items-center justify-between">
-                <div>
-                  <span className="font-bold text-slate-900 block">Numero Totale Gomme (Trattore + Semirimorchio):</span>
-                  <span className="text-[11px] text-slate-500">Es. Bilico 5 assi = 6 trattore + 6 semirimorchio = 12</span>
+              {/* Grid 3 Durate Specifiche Four */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                {/* 1. Trattori Elettrici: 50.000 km */}
+                <div className="p-3.5 bg-rose-50/70 rounded-xl border border-rose-200 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="font-extrabold text-rose-950 uppercase text-[10px] tracking-wider">Trattori Elettrici (BEV)</span>
+                    <span className="px-1.5 py-0.5 bg-rose-200 text-rose-900 rounded font-black text-[10px]">6 Gomme</span>
+                  </div>
+                  <div className="flex items-center space-x-1">
+                    <input
+                      type="number"
+                      step="5000"
+                      value={lifeKmTractorElectric}
+                      onChange={(e) => setLifeKmTractorElectric(parseFloat(e.target.value) || 50000)}
+                      className="w-24 px-2 py-1 border border-rose-300 rounded font-black text-rose-900 bg-white"
+                    />
+                    <span className="text-rose-900 font-bold">Km</span>
+                  </div>
+                  <p className="text-[10px] text-rose-800 leading-tight">
+                    Forte usura per coppia istantanea elevata (2400+ Nm) e carico batterie.
+                  </p>
+                  <div className="pt-1 border-t border-rose-200 font-bold text-rose-950 text-right">
+                    Costo: <strong>{formatEUR(tireCostTractorBEV)} / km</strong>
+                  </div>
                 </div>
-                <div className="flex items-center space-x-1">
-                  <select
-                    value={tireCount}
-                    onChange={(e) => setTireCount(parseInt(e.target.value))}
-                    className="w-24 px-2 py-1.5 border border-slate-300 rounded-lg text-right font-bold bg-white"
-                  >
-                    <option value="6">6 (Motrice/Trattore solo)</option>
-                    <option value="10">10 (Autocarro 4 assi)</option>
-                    <option value="12">12 (Bilico Completo)</option>
-                    <option value="14">14 (Biga/Autotreno)</option>
-                  </select>
-                  <span className="text-slate-500 font-bold">Gomme</span>
+
+                {/* 2. Semirimorchi: 80.000 km */}
+                <div className="p-3.5 bg-blue-50/70 rounded-xl border border-blue-200 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="font-extrabold text-blue-950 uppercase text-[10px] tracking-wider">Semirimorchi (Casse/Frigo)</span>
+                    <span className="px-1.5 py-0.5 bg-blue-200 text-blue-900 rounded font-black text-[10px]">6 Gomme</span>
+                  </div>
+                  <div className="flex items-center space-x-1">
+                    <input
+                      type="number"
+                      step="5000"
+                      value={lifeKmTrailer}
+                      onChange={(e) => setLifeKmTrailer(parseFloat(e.target.value) || 80000)}
+                      className="w-24 px-2 py-1 border border-blue-300 rounded font-black text-blue-900 bg-white"
+                    />
+                    <span className="text-blue-900 font-bold">Km</span>
+                  </div>
+                  <p className="text-[10px] text-blue-800 leading-tight">
+                    Semirimorchi standard e frigo 3 assi (80.000 km).
+                  </p>
+                  <div className="pt-1 border-t border-blue-200 font-bold text-blue-950 text-right">
+                    Costo: <strong>{formatEUR(tireCostTrailer)} / km</strong>
+                  </div>
+                </div>
+
+                {/* 3. Motrici Elettriche: 80.000 km */}
+                <div className="p-3.5 bg-emerald-50/70 rounded-xl border border-emerald-200 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="font-extrabold text-emerald-950 uppercase text-[10px] tracking-wider">Motrici Elettriche (18/12 plt)</span>
+                    <span className="px-1.5 py-0.5 bg-emerald-200 text-emerald-900 rounded font-black text-[10px]">4-6 Gomme</span>
+                  </div>
+                  <div className="flex items-center space-x-1">
+                    <input
+                      type="number"
+                      step="5000"
+                      value={lifeKmRigidElectric}
+                      onChange={(e) => setLifeKmRigidElectric(parseFloat(e.target.value) || 80000)}
+                      className="w-24 px-2 py-1 border border-emerald-300 rounded font-black text-emerald-900 bg-white"
+                    />
+                    <span className="text-emerald-900 font-bold">Km</span>
+                  </div>
+                  <p className="text-[10px] text-emerald-800 leading-tight">
+                    Distribuzione urbana/regionale Camst, Decathlon, Tigotà (80.000 km).
+                  </p>
+                  <div className="pt-1 border-t border-emerald-200 font-bold text-emerald-950 text-right">
+                    Costo: <strong>{formatEUR(tireCostRigidBEV)} / km</strong>
+                  </div>
                 </div>
               </div>
 
-              <div className="p-3 bg-slate-50 rounded-xl border border-slate-200/80 flex items-center justify-between">
+              {/* Riepilogo Combinato Bilico Completo */}
+              <div className="p-3.5 bg-amber-50 rounded-xl border border-amber-200 text-amber-950 flex flex-col sm:flex-row justify-between sm:items-center gap-2 font-bold">
                 <div>
-                  <span className="font-bold text-slate-900 block">Durata Chilometrica Stimata del Treno:</span>
-                  <span className="text-[11px] text-slate-500">Km medi percorsi prima della sostituzione completa</span>
-                </div>
-                <div className="flex items-center space-x-1">
-                  <input
-                    type="number"
-                    step="5000"
-                    value={tireLifeKm}
-                    onChange={(e) => setTireLifeKm(parseFloat(e.target.value) || 0)}
-                    className="w-24 px-2.5 py-1.5 border border-slate-300 rounded-lg text-right font-bold bg-white"
-                  />
-                  <span className="text-slate-500 font-bold">Km</span>
-                </div>
-              </div>
-
-              <div className="p-3 bg-amber-50 rounded-xl border border-amber-200 text-amber-950 flex justify-between items-center font-bold">
-                <div>
-                  <span className="block">Costo Treno Completo: {formatEUR(tireCount * tireCostUnit)}</span>
+                  <span className="block text-sm">Bilico Elettrico Completo (Trattore BEV 50k + Semirimorchio 80k):</span>
                   <span className="text-[11px] text-amber-800 font-normal">
-                    Formula: ({tireCount} gomme × {formatEUR(tireCostUnit)}) ÷ {tireLifeKm.toLocaleString('it-IT')} km
+                    Formula: Trattore ({formatEUR(tireCostTractorBEV)}/km) + Semirimorchio ({formatEUR(tireCostTrailer)}/km)
                   </span>
                 </div>
                 <div className="text-right">
-                  <span className="text-base text-amber-900 font-black">
+                  <span className="text-lg text-amber-900 font-black">
                     {formatEUR(calculatedTireCostKm)} / km
                   </span>
                   <span className="block text-[10px] text-amber-700">
