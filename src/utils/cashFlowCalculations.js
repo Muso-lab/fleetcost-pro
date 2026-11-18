@@ -64,7 +64,7 @@ export const normalizeLeaseTiming = (projectOrVehicle) => {
 /**
  * Calcola se un progetto è attivo in un determinato mese dell'anno
  */
-export const isProjectActiveInMonth = (project, monthIndex, targetYear = 2026) => {
+export const isProjectActiveInMonth = (project, monthIndex, targetYear = 2026, options = {}) => {
   if (!project.startDate) return false;
   const start = new Date(project.startDate);
   const startYear = start.getFullYear();
@@ -76,7 +76,29 @@ export const isProjectActiveInMonth = (project, monthIndex, targetYear = 2026) =
   const diffMonths = (currentMonthDate.getFullYear() - projectStartDate.getFullYear()) * 12 +
     (currentMonthDate.getMonth() - projectStartDate.getMonth());
 
-  return diffMonths >= 0 && diffMonths < (project.operatingMonths || 12);
+  const opMonths = project.operatingMonths || 12;
+
+  // 1. Periodo contrattuale naturale
+  if (diffMonths >= 0 && diffMonths < opMonths) {
+    return true;
+  }
+
+  // 2. Rollover automatico / Proiezione anno successivo dando per buoni i dati dell'anno precedente
+  const isRolloverEnabled = options.rolloverPreviousYearBudget !== undefined
+    ? options.rolloverPreviousYearBudget
+    : targetYear > 2026;
+
+  if (isRolloverEnabled && targetYear > startYear) {
+    const prevYear = targetYear - 1;
+    const endMonthIndex = startMonth + opMonths;
+    const endYear = startYear + Math.floor((endMonthIndex - 1) / 12);
+    // Se era attivo durante o fino alla fine dell'anno precedente, proietta la continuità a regime
+    if (endYear >= prevYear) {
+      return true;
+    }
+  }
+
+  return false;
 };
 
 /**
@@ -132,7 +154,8 @@ export const calculateAnnualBudgetAndCashFlow = (projects, options = {}) => {
     factoringFeePercent = 1.5,
     acciseRecoveryEnabled = true, // Toggle Recupero Accise Carburante
     acciseRatePerLiter = 0.21418, // Rimborso accise gasolio commerciale art. 24-ter TUA (€/L)
-    taxRatePercent = 25 // Stima IRES/IRAP per calcolo DSCR
+    taxRatePercent = 25, // Stima IRES/IRAP per calcolo DSCR
+    rolloverPreviousYearBudget = options.rolloverPreviousYearBudget !== undefined ? options.rolloverPreviousYearBudget : (year > 2026)
   } = options;
 
   // 1. Matrice P&L Competenza (12 Mesi)
@@ -233,7 +256,7 @@ export const calculateAnnualBudgetAndCashFlow = (projects, options = {}) => {
 
     // Itera sui 12 mesi dell'anno corrente
     for (let m = 0; m < 12; m++) {
-      if (isProjectActiveInMonth(project, m, year)) {
+      if (isProjectActiveInMonth(project, m, year, { rolloverPreviousYearBudget })) {
         const rev = Number(project.monthlyRevenue) || 0;
         const workingDays = project.workingDaysMonth || 22;
 
@@ -328,6 +351,27 @@ export const calculateAnnualBudgetAndCashFlow = (projects, options = {}) => {
           if (biweeklyColl < totalBiweeklyHorizon) {
             biweeklyCashInflows[biweeklyColl] += rev;
             biweeklyInflowBreakdown[biweeklyColl].clients += rev;
+          }
+        }
+
+        // Continuità dei flussi di cassa per anno a regime (es. 2027 da dati 2026)
+        // Incasso a Gennaio e Febbraio delle fatture emesse a Novembre e Dicembre dell'anno precedente
+        if (rolloverPreviousYearBudget && m === 0) {
+          if (clientDelayMonths >= 2) {
+            cashInflows[0] += rev;
+            cashInflowBreakdown[0].clientsRegular += rev;
+            if (biweeklyCashInflows.length > 1) {
+              biweeklyCashInflows[1] += rev;
+              biweeklyInflowBreakdown[1].clients += rev;
+            }
+          }
+          if (clientDelayMonths >= 1) {
+            cashInflows[1] += rev;
+            cashInflowBreakdown[1].clientsRegular += rev;
+            if (biweeklyCashInflows.length > 3) {
+              biweeklyCashInflows[3] += rev;
+              biweeklyInflowBreakdown[3].clients += rev;
+            }
           }
         }
 

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import storageService from '../services/storageService';
 import {
@@ -55,6 +55,11 @@ const DashboardPage = () => {
     year: selectedYear,
     initialCashBalance: 30000
   });
+
+  // Modelli pluriennali per confronto strategico
+  const model2025 = useMemo(() => calculateAnnualBudgetAndCashFlow(projects, { year: 2025, rolloverPreviousYearBudget: false }), [projects]);
+  const model2026 = useMemo(() => calculateAnnualBudgetAndCashFlow(projects, { year: 2026, rolloverPreviousYearBudget: false }), [projects]);
+  const model2027 = useMemo(() => calculateAnnualBudgetAndCashFlow(projects, { year: 2027, rolloverPreviousYearBudget: true }), [projects]);
 
   const {
     annualRevenue,
@@ -137,6 +142,7 @@ const DashboardPage = () => {
                   onChange={(e) => setSelectedYear(parseInt(e.target.value))}
                   className="bg-transparent text-white font-bold text-xs outline-none cursor-pointer [&>option]:text-slate-900"
                 >
+                  <option value="2027">Anno Budget 2027 (Proiezione Anno Successivo)</option>
                   <option value="2026">Anno Budget 2026 (Corrente)</option>
                   <option value="2025">Anno Storico 2025</option>
                 </select>
@@ -202,6 +208,124 @@ const DashboardPage = () => {
               </span>
             </div>
             <p className="text-xs text-slate-500 mt-1">Rispetto al gasolio tradizionale</p>
+          </div>
+        </div>
+
+        {/* Sezione Confronto Pluriennale di Budget (2025 - 2026 - 2027 Proiettato) */}
+        <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pb-4 border-b border-slate-100">
+            <div>
+              <div className="flex items-center space-x-2">
+                <TrendingUp className="w-5 h-5 text-emerald-600" />
+                <h3 className="text-base font-black text-slate-900 tracking-tight">
+                  Proiezione Strategica Pluriennale (2025 Storico • 2026 Corrente • 2027 Anno Successivo)
+                </h3>
+              </div>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Pianificazione e continuità aziendale dando per buoni i dati a regime e le condizioni economiche dell'anno precedente
+              </p>
+            </div>
+            <div className="flex items-center space-x-2">
+              <span className="text-[11px] font-bold text-slate-500">Vista attiva:</span>
+              <span className="text-xs font-black px-2.5 py-1 rounded-lg bg-emerald-100 text-emerald-800 border border-emerald-300">
+                Anno {selectedYear}
+              </span>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
+            {/* 2025 Storico */}
+            <div
+              onClick={() => setSelectedYear(2025)}
+              className={`p-4 rounded-xl border cursor-pointer transition ${
+                selectedYear === 2025
+                  ? 'bg-slate-50 border-slate-900 ring-2 ring-slate-900 shadow-sm'
+                  : 'bg-white border-slate-200 hover:border-slate-300'
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-black uppercase text-slate-500 tracking-wider">2025 Storico</span>
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">
+                  Consuntivo
+                </span>
+              </div>
+              <div className="mt-3 space-y-1.5 text-xs">
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Ricavi Totali:</span>
+                  <span className="font-bold text-slate-800">{formatEUR(model2025.annualRevenue)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Costi Operativi:</span>
+                  <span className="font-medium text-slate-600">{formatEUR(model2025.annualCost)}</span>
+                </div>
+                <div className="flex justify-between pt-1 border-t border-slate-100 font-black">
+                  <span className="text-slate-700">M.O.L. Annuo:</span>
+                  <span className="text-slate-800">{formatEUR(model2025.annualMol)} ({formatPercent(model2025.annualMolPercent)})</span>
+                </div>
+              </div>
+            </div>
+
+            {/* 2026 Budget Corrente */}
+            <div
+              onClick={() => setSelectedYear(2026)}
+              className={`p-4 rounded-xl border cursor-pointer transition ${
+                selectedYear === 2026
+                  ? 'bg-emerald-50/50 border-emerald-600 ring-2 ring-emerald-600 shadow-sm'
+                  : 'bg-white border-slate-200 hover:border-slate-300'
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-black uppercase text-emerald-800 tracking-wider">2026 Budget</span>
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
+                  Esercizio Corrente
+                </span>
+              </div>
+              <div className="mt-3 space-y-1.5 text-xs">
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Ricavi Totali:</span>
+                  <span className="font-bold text-slate-900">{formatEUR(model2026.annualRevenue)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Costi Operativi:</span>
+                  <span className="font-medium text-slate-700">{formatEUR(model2026.annualCost)}</span>
+                </div>
+                <div className="flex justify-between pt-1 border-t border-slate-100 font-black">
+                  <span className="text-emerald-700">M.O.L. Annuo:</span>
+                  <span className="text-emerald-700">{formatEUR(model2026.annualMol)} ({formatPercent(model2026.annualMolPercent)})</span>
+                </div>
+              </div>
+            </div>
+
+            {/* 2027 Proiezione Anno Successivo */}
+            <div
+              onClick={() => setSelectedYear(2027)}
+              className={`p-4 rounded-xl border cursor-pointer transition ${
+                selectedYear === 2027
+                  ? 'bg-teal-50/50 border-teal-600 ring-2 ring-teal-600 shadow-sm'
+                  : 'bg-white border-slate-200 hover:border-slate-300'
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-black uppercase text-teal-800 tracking-wider">2027 Proiezione</span>
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-teal-100 text-teal-800">
+                  Anno Successivo
+                </span>
+              </div>
+              <div className="mt-3 space-y-1.5 text-xs">
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Ricavi Totali:</span>
+                  <span className="font-bold text-slate-900">{formatEUR(model2027.annualRevenue)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Costi Operativi:</span>
+                  <span className="font-medium text-slate-700">{formatEUR(model2027.annualCost)}</span>
+                </div>
+                <div className="flex justify-between pt-1 border-t border-slate-100 font-black">
+                  <span className="text-teal-700">M.O.L. Annuo:</span>
+                  <span className="text-teal-700">{formatEUR(model2027.annualMol)} ({formatPercent(model2027.annualMolPercent)})</span>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 

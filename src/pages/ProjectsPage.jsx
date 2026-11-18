@@ -45,6 +45,7 @@ const ProjectsPage = () => {
   const [marginFilter, setMarginFilter] = useState('all');
   const [contractFilter, setContractFilter] = useState('all');
   const [showModal, setShowModal] = useState(false);
+  const [showNextYearModal, setShowNextYearModal] = useState(false);
   const [editingProject, setEditingProject] = useState(null);
 
   // Form State per Nuovo/Modifica Progetto
@@ -319,6 +320,20 @@ const ProjectsPage = () => {
     setProjects(updated);
   };
 
+  // Estensione formale di tutti i contratti a tutto il 2027 (+12 mesi dando per buoni i dati 2026)
+  const handleExtendAllTo2027 = () => {
+    const updated = projects.map(p => {
+      const currentMonths = Number(p.operatingMonths) || 12;
+      return {
+        ...p,
+        operatingMonths: Math.max(24, currentMonths + 12)
+      };
+    });
+    storageService.saveProjects(updated);
+    setProjects(updated);
+    setShowNextYearModal(false);
+  };
+
   // Statistiche scadenze contrattuali
   const contractStats = useMemo(() => {
     let active = 0;
@@ -394,6 +409,14 @@ const ProjectsPage = () => {
             </div>
           </div>
           <div className="flex items-center space-x-2">
+            <button
+              onClick={() => setShowNextYearModal(true)}
+              className="inline-flex items-center space-x-1.5 bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-700 hover:to-teal-800 text-white px-3.5 py-2.5 rounded-xl font-bold text-xs shadow-sm transition"
+              title="Pianifica e attiva il budget per l'anno successivo 2027 dando per buoni i dati 2026"
+            >
+              <Calendar className="w-4 h-4 text-emerald-200" />
+              <span>Budget Anno Succ. (2027)</span>
+            </button>
             <button
               onClick={handleRenewAllTo2026}
               className="inline-flex items-center space-x-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 px-3.5 py-2.5 rounded-xl font-bold text-xs transition border border-slate-300 shadow-sm"
@@ -1328,6 +1351,94 @@ const ProjectsPage = () => {
                   </button>
                 </div>
               </form>
+            </div>
+          </div>
+        )}
+        {/* Modal Pianificazione Budget Anno Successivo 2027 */}
+        {showNextYearModal && (
+          <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl shadow-2xl max-w-xl w-full p-6 border border-slate-200">
+              <div className="flex justify-between items-center pb-4 border-b border-slate-100">
+                <div className="flex items-center space-x-2">
+                  <div className="p-2 bg-teal-100 text-teal-800 rounded-xl">
+                    <Calendar className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-black text-slate-900">
+                      Pianificazione Budget Anno Successivo (2027)
+                    </h3>
+                    <p className="text-xs text-slate-500">
+                      Continuità economica dando per confermati i dati e contratti del 2026
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setShowNextYearModal(false)}
+                  className="text-slate-400 hover:text-slate-600 p-1 rounded-lg"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="mt-4 space-y-4 text-xs">
+                <p className="text-slate-600 leading-relaxed">
+                  Il sistema implementa la <strong>continuità aziendale a regime</strong> per il 2027:
+                  tutte le 19 linee attive nel 2026 vengono considerate operative con le medesime tariffe,
+                  percorrenze chilometriche e canoni di noleggio, senza il buco di cassa iniziale da startup.
+                </p>
+
+                {/* KPI Anteprima 2027 */}
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 p-4 bg-slate-50 rounded-xl border border-slate-200">
+                  <div>
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Ricavi Stimati 2027</span>
+                    <div className="text-sm font-black text-slate-900 mt-0.5">
+                      {formatEUR(totalMonthlyBudgetRevenue * 12)}
+                    </div>
+                  </div>
+                  <div>
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Costi Operativi 2027</span>
+                    <div className="text-sm font-bold text-slate-700 mt-0.5">
+                      {formatEUR(totalMonthlyBudgetCost * 12)}
+                    </div>
+                  </div>
+                  <div className="col-span-2 sm:col-span-1">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">M.O.L. Annuo (EBITDA)</span>
+                    <div className="text-sm font-black text-emerald-600 mt-0.5">
+                      {formatEUR(totalMonthlyBudgetMol * 12)}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="p-3.5 bg-emerald-50 rounded-xl border border-emerald-200 space-y-1 text-emerald-950">
+                  <p className="font-bold">Come viene applicato il Budget 2027:</p>
+                  <ul className="list-disc pl-4 space-y-1 text-[11px] text-emerald-900">
+                    <li>
+                      <strong>Proiezione nei Report (Attiva)</strong>: selezionando <em>"Anno Budget 2027"</em> nel Cash Flow e nella Dashboard visualizzi l'intero piano finanziario del nuovo anno senza dover modificare i contratti.
+                    </li>
+                    <li>
+                      <strong>Proroga Formale Contratti (+12m)</strong>: puoi estendere formalmente la scadenza contrattuale di tutte le commesse al <strong>31 Dicembre 2027</strong>.
+                    </li>
+                  </ul>
+                </div>
+
+                <div className="pt-3 border-t border-slate-100 flex flex-col sm:flex-row items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowNextYearModal(false)}
+                    className="w-full sm:w-auto px-4 py-2 border border-slate-300 rounded-xl font-medium text-slate-700 hover:bg-slate-50 transition"
+                  >
+                    Chiudi
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleExtendAllTo2027}
+                    className="w-full sm:w-auto px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold shadow-sm transition flex items-center justify-center space-x-1.5"
+                  >
+                    <CheckCircle2 className="w-4 h-4" />
+                    <span>Estendi Contratti al 31/12/2027 (+12m)</span>
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         )}

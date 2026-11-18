@@ -233,6 +233,7 @@ const CashFlowPage = () => {
               onChange={(e) => setSelectedYear(parseInt(e.target.value))}
               className="text-xs font-bold py-2 px-3 rounded-xl border border-slate-300 bg-white focus:ring-2 focus:ring-emerald-500 shadow-sm"
             >
+              <option value="2027">Anno Budget 2027 (Proiezione Anno Successivo)</option>
               <option value="2026">Anno Budget 2026 (Corrente)</option>
               <option value="2025">Anno Storico 2025</option>
             </select>
@@ -246,6 +247,28 @@ const CashFlowPage = () => {
             </button>
           </div>
         </div>
+
+        {/* Banner Notifica Proiezione Budget Anno Successivo 2027 */}
+        {selectedYear === 2027 && (
+          <div className="bg-gradient-to-r from-emerald-50 to-teal-50 border border-emerald-200 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 shadow-sm">
+            <div className="flex items-center space-x-3">
+              <div className="p-2 bg-emerald-100 text-emerald-800 rounded-xl flex-shrink-0">
+                <Calendar className="w-5 h-5" />
+              </div>
+              <div>
+                <p className="text-xs font-bold text-emerald-950">
+                  Proiezione Budget & Cash Flow Anno Successivo (2027)
+                </p>
+                <p className="text-[11px] text-emerald-800 mt-0.5">
+                  I flussi di tesoreria sono calcolati in regime di continuità aziendale dando per confermati i contratti a regime e le condizioni economiche dell'esercizio 2026.
+                </p>
+              </div>
+            </div>
+            <span className="text-xs font-bold bg-emerald-200/80 text-emerald-900 px-3 py-1 rounded-full border border-emerald-300 w-fit">
+              Continuità Operativa 2026 → 2027
+            </span>
+          </div>
+        )}
 
         {/* Dashboard Financial Summary Cards (Bancabilità & Tesoreria) */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
