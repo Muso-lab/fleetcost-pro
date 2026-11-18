@@ -291,7 +291,22 @@ class StorageService {
 
   saveSettings(settings) {
     localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(settings));
+    this.syncAllProjectsWithSettings(settings);
     return settings;
+  }
+
+  syncAllProjectsWithSettings(settings) {
+    try {
+      const data = localStorage.getItem(STORAGE_KEYS.PROJECTS);
+      if (!data) return;
+      const projects = JSON.parse(data);
+      const fleet = this.getFleet();
+      const trailers = this.getTrailers();
+      const updated = projects.map(p => recalculateProjectCost(p, fleet, trailers, settings));
+      localStorage.setItem(STORAGE_KEYS.PROJECTS, JSON.stringify(updated));
+    } catch (e) {
+      console.error('Errore sincronizzazione commesse con nuove impostazioni:', e);
+    }
   }
 
   // --- SIMULATIONS (PREVENTIVI TRATTA) ---

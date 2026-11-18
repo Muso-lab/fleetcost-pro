@@ -124,10 +124,12 @@ const SimulationPage = () => {
       // Consumo kWh/km * km * prezzo €/kWh
       fuelDaily = (vehicle.avgConsumption || 1.2) * km * fuelPrice;
     } else if (vehicle.fuelTypeId === 'biolng') {
-      // Consumo kg/100km / 100 * km * prezzo €/kg
-      fuelDaily = ((vehicle.avgConsumption || 30) / 100) * km * fuelPrice;
+      if (vehicle.yieldKmPerUnit && vehicle.yieldKmPerUnit > 0) {
+        fuelDaily = (km / vehicle.yieldKmPerUnit) * fuelPrice;
+      } else {
+        fuelDaily = ((vehicle.avgConsumption || 30) / 100) * km * fuelPrice;
+      }
     } else {
-      // Litri / 100km
       fuelDaily = ((vehicle.avgConsumption || 32) / 100) * km * fuelPrice;
     }
 

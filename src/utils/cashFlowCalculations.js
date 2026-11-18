@@ -105,6 +105,7 @@ export const calculateAnnualBudgetAndCashFlow = (projects, options = {}) => {
     molNetOfAccise: 0,
     costBreakdown: {
       driver: 0,
+      fuel: 0,
       fuelGross: 0,
       fuelNet: 0,
       acciseCredit: 0,
@@ -238,6 +239,7 @@ export const calculateAnnualBudgetAndCashFlow = (projects, options = {}) => {
         monthlyPnl[m].costBreakdown.driver += driverC;
         monthlyPnl[m].costBreakdown.fuelGross += fuelGrossC;
         monthlyPnl[m].costBreakdown.fuelNet += fuelNetC;
+        monthlyPnl[m].costBreakdown.fuel += fuelNetC;
         monthlyPnl[m].costBreakdown.acciseCredit += acciseCreditMonthly;
         monthlyPnl[m].costBreakdown.tolls += tollsC;
         monthlyPnl[m].costBreakdown.tires += tiresC;

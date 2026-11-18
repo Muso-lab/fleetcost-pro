@@ -89,13 +89,14 @@ const DashboardPage = () => {
   // Dati per Grafico Breakdown Costi Annuali
   const annualCostBreakdown = monthlyCashFlow.reduce((acc, m) => {
     acc.driver += m.costBreakdown.driver;
-    acc.fuel += m.costBreakdown.fuel;
+    acc.fuel += (m.costBreakdown.fuelNet !== undefined ? m.costBreakdown.fuelNet : (m.costBreakdown.fuel || 0));
     acc.tolls += m.costBreakdown.tolls;
     acc.tires += m.costBreakdown.tires;
     acc.leases += (m.costBreakdown.vehicleLease + m.costBreakdown.trailerLease);
     acc.partner += m.costBreakdown.partnerMargin;
+    acc.porterage += (m.costBreakdown.porterage || 0);
     return acc;
-  }, { driver: 0, fuel: 0, tolls: 0, tires: 0, leases: 0, partner: 0 });
+  }, { driver: 0, fuel: 0, tolls: 0, tires: 0, leases: 0, partner: 0, porterage: 0 });
 
   const pieData = [
     { name: 'Autisti & Personale', value: Math.round(annualCostBreakdown.driver), color: '#3b82f6' },
@@ -103,6 +104,7 @@ const DashboardPage = () => {
     { name: 'Energia / Carburante', value: Math.round(annualCostBreakdown.fuel), color: '#10b981' },
     { name: 'Autostrada & Pedaggi', value: Math.round(annualCostBreakdown.tolls), color: '#f59e0b' },
     { name: 'Gomme & Manutenz.', value: Math.round(annualCostBreakdown.tires), color: '#64748b' },
+    { name: 'Facchinaggio', value: Math.round(annualCostBreakdown.porterage), color: '#a855f7' },
     { name: 'Margine Terzisti', value: Math.round(annualCostBreakdown.partner), color: '#ec4899' }
   ].filter(item => item.value > 0);
 
