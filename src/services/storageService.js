@@ -13,25 +13,41 @@ const STORAGE_KEYS = {
   ACTIVE_SCENARIO: 'four_active_scenario'
 };
 
+const FLEET_DATA_VERSION_KEY = 'fleetcost_data_version_2026';
+const CURRENT_DATA_VERSION = 'v2026_four_fleet_satellitari_official_v5';
+
 class StorageService {
   constructor() {
     this.initDefaults();
   }
 
   initDefaults(forceReset = false) {
-    if (forceReset || !localStorage.getItem(STORAGE_KEYS.FLEET)) {
+    const currentVer = localStorage.getItem(FLEET_DATA_VERSION_KEY);
+    const needsMigration = forceReset || currentVer !== CURRENT_DATA_VERSION;
+
+    if (needsMigration) {
+      localStorage.setItem(STORAGE_KEYS.FLEET, JSON.stringify(DEFAULT_FLEET));
+      localStorage.setItem(STORAGE_KEYS.TRAILERS, JSON.stringify(DEFAULT_TRAILERS));
+      localStorage.setItem(STORAGE_KEYS.PROJECTS, JSON.stringify(DEFAULT_PROJECTS));
+      localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(DEFAULT_SETTINGS));
+      localStorage.setItem(STORAGE_KEYS.SIMULATIONS, JSON.stringify([]));
+      localStorage.setItem(FLEET_DATA_VERSION_KEY, CURRENT_DATA_VERSION);
+      return;
+    }
+
+    if (!localStorage.getItem(STORAGE_KEYS.FLEET)) {
       localStorage.setItem(STORAGE_KEYS.FLEET, JSON.stringify(DEFAULT_FLEET));
     }
-    if (forceReset || !localStorage.getItem(STORAGE_KEYS.TRAILERS)) {
+    if (!localStorage.getItem(STORAGE_KEYS.TRAILERS)) {
       localStorage.setItem(STORAGE_KEYS.TRAILERS, JSON.stringify(DEFAULT_TRAILERS));
     }
-    if (forceReset || !localStorage.getItem(STORAGE_KEYS.PROJECTS)) {
+    if (!localStorage.getItem(STORAGE_KEYS.PROJECTS)) {
       localStorage.setItem(STORAGE_KEYS.PROJECTS, JSON.stringify(DEFAULT_PROJECTS));
     }
-    if (forceReset || !localStorage.getItem(STORAGE_KEYS.SETTINGS)) {
+    if (!localStorage.getItem(STORAGE_KEYS.SETTINGS)) {
       localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(DEFAULT_SETTINGS));
     }
-    if (forceReset || !localStorage.getItem(STORAGE_KEYS.SIMULATIONS)) {
+    if (!localStorage.getItem(STORAGE_KEYS.SIMULATIONS)) {
       localStorage.setItem(STORAGE_KEYS.SIMULATIONS, JSON.stringify([]));
     }
   }
