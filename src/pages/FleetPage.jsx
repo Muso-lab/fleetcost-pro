@@ -12,6 +12,7 @@ import {
   AlertTriangle,
   Zap,
   Flame,
+  Leaf,
   Fuel,
   Layers,
   Search,
