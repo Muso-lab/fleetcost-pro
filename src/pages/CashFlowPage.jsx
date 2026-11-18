@@ -45,7 +45,7 @@ import * as XLSX from 'xlsx';
 
 const CashFlowPage = () => {
   const [projects, setProjects] = useState([]);
-  const [selectedYear, setSelectedYear] = useState(2025);
+  const [selectedYear, setSelectedYear] = useState(2026);
   const [initialCash, setInitialCash] = useState(30000);
   const [stressTestDays, setStressTestDays] = useState(0); // 0, 15, 30, 60 gg di ritardo
   const [factoringEnabled, setFactoringEnabled] = useState(false);
@@ -231,10 +231,10 @@ const CashFlowPage = () => {
             <select
               value={selectedYear}
               onChange={(e) => setSelectedYear(parseInt(e.target.value))}
-              className="text-xs font-bold py-2 px-3 rounded-xl border border-slate-300 bg-white focus:ring-2 focus:ring-emerald-500"
+              className="text-xs font-bold py-2 px-3 rounded-xl border border-slate-300 bg-white focus:ring-2 focus:ring-emerald-500 shadow-sm"
             >
-              <option value="2025">Anno Budget 2025</option>
-              <option value="2026">Anno Budget 2026</option>
+              <option value="2026">Anno Budget 2026 (Corrente)</option>
+              <option value="2025">Anno Storico 2025</option>
             </select>
 
             <button

@@ -23,7 +23,8 @@ import {
   DollarSign,
   PieChart as PieIcon,
   BarChart3,
-  ShieldAlert
+  ShieldAlert,
+  Calendar
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -43,7 +44,7 @@ const DashboardPage = () => {
   const navigate = useNavigate();
   const [fleet, setFleet] = useState([]);
   const [projects, setProjects] = useState([]);
-  const [selectedYear, setSelectedYear] = useState(2025);
+  const [selectedYear, setSelectedYear] = useState(2026);
 
   useEffect(() => {
     setFleet(storageService.getFleet());
@@ -129,6 +130,18 @@ const DashboardPage = () => {
             </div>
 
             <div className="flex flex-wrap items-center gap-3">
+              <div className="flex items-center bg-white/10 hover:bg-white/15 transition backdrop-blur-md rounded-xl px-2.5 py-1.5 border border-white/20">
+                <Calendar className="w-4 h-4 text-emerald-300 mr-2" />
+                <select
+                  value={selectedYear}
+                  onChange={(e) => setSelectedYear(parseInt(e.target.value))}
+                  className="bg-transparent text-white font-bold text-xs outline-none cursor-pointer [&>option]:text-slate-900"
+                >
+                  <option value="2026">Anno Budget 2026 (Corrente)</option>
+                  <option value="2025">Anno Storico 2025</option>
+                </select>
+              </div>
+
               <button
                 onClick={() => navigate('/projects')}
                 className="inline-flex items-center space-x-2 bg-emerald-500 hover:bg-emerald-600 text-slate-950 px-4 py-2.5 rounded-xl font-bold text-xs transition shadow-lg shadow-emerald-950/40"

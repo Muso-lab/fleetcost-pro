@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import storageService from '../services/storageService';
 import {
@@ -8,7 +8,8 @@ import {
   LEASE_PAYMENT_TIMINGS,
   normalizeLeaseTiming,
   calculateTireCostPerKm,
-  recalculateProjectCost
+  recalculateProjectCost,
+  getContractValidity
 } from '../utils/cashFlowCalculations';
 import {
   Briefcase,
@@ -29,7 +30,8 @@ import {
   Save,
   DollarSign,
   Calendar,
-  AlertCircle
+  AlertCircle,
+  RotateCw
 } from 'lucide-react';
 
 const ProjectsPage = () => {
@@ -41,6 +43,7 @@ const ProjectsPage = () => {
   const [clientFilter, setClientFilter] = useState('all');
   const [managementFilter, setManagementFilter] = useState('all');
   const [marginFilter, setMarginFilter] = useState('all');
+  const [contractFilter, setContractFilter] = useState('all');
   const [showModal, setShowModal] = useState(false);
   const [editingProject, setEditingProject] = useState(null);
 
@@ -50,7 +53,7 @@ const ProjectsPage = () => {
     name: '',
     client: '',
     route: '',
-    startDate: '2025-01-01',
+    startDate: '2026-01-01',
     operatingMonths: 12,
     workingDaysMonth: 22,
     kmDaily: 250,
@@ -124,7 +127,7 @@ const ProjectsPage = () => {
         name: project.name || '',
         client: project.client || '',
         route: project.route || '',
-        startDate: project.startDate || '2025-01-01',
+        startDate: project.startDate || '2026-01-01',
         operatingMonths: project.operatingMonths || 12,
         workingDaysMonth: project.workingDaysMonth || 22,
         kmDaily: project.kmDaily || 250,
@@ -156,7 +159,7 @@ const ProjectsPage = () => {
         name: defaultVeh ? `Servizio con ${defaultVeh.name}` : '',
         client: '',
         route: '',
-        startDate: '2025-01-01',
+        startDate: '2026-01-01',
         operatingMonths: 12,
         workingDaysMonth: workingDays,
         kmDaily: 250,
@@ -277,6 +280,59 @@ const ProjectsPage = () => {
     loadData();
   };
 
+  // Proroga rapida singolo contratto (+12 mesi o allineamento al 2026)
+  const handleExtendContract = (projectId, monthsToAdd = 12) => {
+    const updated = projects.map(p => {
+      if (p.id !== projectId) return p;
+      let newStart = p.startDate || '2026-01-01';
+      let newMonths = Number(p.operatingMonths) || 12;
+      if (newStart.startsWith('2025')) {
+        newStart = '2026-01-01';
+        newMonths = 12;
+      } else {
+        newMonths += monthsToAdd;
+      }
+      return {
+        ...p,
+        startDate: newStart,
+        operatingMonths: newMonths
+      };
+    });
+    storageService.saveProjects(updated);
+    setProjects(updated);
+  };
+
+  // Allineamento / rinnovo massivo di tutti i contratti all'esercizio 2026
+  const handleRenewAllTo2026 = () => {
+    const updated = projects.map(p => {
+      const v = getContractValidity(p);
+      if (v.isExpired || v.endYear < 2026 || p.startDate?.startsWith('2025')) {
+        return {
+          ...p,
+          startDate: '2026-01-01',
+          operatingMonths: 12
+        };
+      }
+      return p;
+    });
+    storageService.saveProjects(updated);
+    setProjects(updated);
+  };
+
+  // Statistiche scadenze contrattuali
+  const contractStats = useMemo(() => {
+    let active = 0;
+    let expiring = 0;
+    let expired = 0;
+    projects.forEach(p => {
+      const v = getContractValidity(p);
+      if (v.isExpired) expired++;
+      else if (v.isExpiringSoon) expiring++;
+      else active++;
+    });
+    return { active, expiring, expired };
+  }, [projects]);
+
   // Statistiche di Portfolio
   const totalProjectsCount = projects.length;
   const totalMonthlyBudgetRevenue = projects.reduce((sum, p) => sum + (Number(p.monthlyRevenue) || 0), 0);
@@ -306,11 +362,18 @@ const ProjectsPage = () => {
     if (marginFilter === 'low') matchesMargin = (p.molPercent || 0) > 0 && (p.molPercent || 0) < 15;
     if (marginFilter === 'negative') matchesMargin = (p.molPercent || 0) <= 0;
 
-    return matchesSearch && matchesClient && matchesManagement && matchesMargin;
+    let matchesContract = true;
+    const validity = getContractValidity(p);
+    if (contractFilter === 'active2026') matchesContract = validity.isActive && validity.endYear >= 2026;
+    if (contractFilter === 'expiring') matchesContract = validity.isExpiringSoon;
+    if (contractFilter === 'expired') matchesContract = validity.isExpired;
+
+    return matchesSearch && matchesClient && matchesManagement && matchesMargin && matchesContract;
   });
 
   // Calcoli live per la modal
   const liveModalMetrics = calculateSingleProjectMetrics(formData);
+  const liveValidity = getContractValidity(formData);
 
   return (
     <div className="min-h-screen bg-slate-50 py-8 px-4 sm:px-6 lg:px-8">
@@ -330,7 +393,15 @@ const ProjectsPage = () => {
               </div>
             </div>
           </div>
-          <div className="flex items-center space-x-3">
+          <div className="flex items-center space-x-2">
+            <button
+              onClick={handleRenewAllTo2026}
+              className="inline-flex items-center space-x-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 px-3.5 py-2.5 rounded-xl font-bold text-xs transition border border-slate-300 shadow-sm"
+              title="Allinea o estende tutti i contratti al budget 2026 (+12 mesi se scaduti)"
+            >
+              <RotateCw className="w-4 h-4 text-emerald-600" />
+              <span>Allinea Contratti a 2026</span>
+            </button>
             <button
               onClick={() => handleOpenModal(null)}
               className="inline-flex items-center space-x-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2.5 rounded-xl font-semibold text-sm shadow-sm transition"
@@ -341,17 +412,45 @@ const ProjectsPage = () => {
           </div>
         </div>
 
+        {/* Banner Notifica Contratti Scaduti / Pre-2026 */}
+        {contractStats.expired > 0 && (
+          <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 shadow-sm">
+            <div className="flex items-center space-x-3">
+              <div className="p-2 bg-amber-100 text-amber-800 rounded-xl flex-shrink-0">
+                <AlertTriangle className="w-5 h-5" />
+              </div>
+              <div>
+                <p className="text-xs font-bold text-amber-950">
+                  Attenzione: {contractStats.expired} contratti risultano scaduti o limitati all'esercizio 2025
+                </p>
+                <p className="text-[11px] text-amber-800 mt-0.5">
+                  I contratti scaduti non generano ricavi nel Budget 2026. Puoi rinnovarli o allinearli tutti in blocco con un clic per visualizzare il budget a regime completo.
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={handleRenewAllTo2026}
+              className="inline-flex items-center space-x-2 bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded-xl font-bold text-xs shadow-sm transition whitespace-nowrap self-start sm:self-center"
+            >
+              <RotateCw className="w-4 h-4" />
+              <span>Rinnova tutti per il 2026 (+12 Mesi)</span>
+            </button>
+          </div>
+        )}
+
         {/* Portfolio KPI Bar */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
           <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
-            <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Commesse Attive</span>
+            <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Commesse Attive 2026</span>
             <div className="flex items-baseline justify-between mt-2">
-              <span className="text-3xl font-black text-slate-900">{totalProjectsCount}</span>
-              <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-700">
-                Linee
+              <span className="text-3xl font-black text-slate-900">{contractStats.active} <span className="text-sm font-semibold text-slate-400">/ {totalProjectsCount}</span></span>
+              <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
+                contractStats.expired > 0 ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800'
+              }`}>
+                {contractStats.expired > 0 ? `${contractStats.expired} scadute` : '100% attive'}
               </span>
             </div>
-            <p className="text-xs text-slate-500 mt-1">Servizi inseriti a budget</p>
+            <p className="text-xs text-slate-500 mt-1">Servizi attivi per l'esercizio 2026</p>
           </div>
 
           <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
@@ -442,6 +541,17 @@ const ProjectsPage = () => {
                 <option value="low">Margine Basso (&lt; 15%)</option>
                 <option value="negative">In Perdita (&lt; 0%)</option>
               </select>
+
+              <select
+                value={contractFilter}
+                onChange={(e) => setContractFilter(e.target.value)}
+                className="text-xs py-1.5 px-3 rounded-xl border border-slate-300 bg-white focus:ring-2 focus:ring-emerald-500 font-semibold"
+              >
+                <option value="all">Tutti i Contratti ({projects.length})</option>
+                <option value="active2026">🟢 Attivi nel 2026 ({contractStats.active})</option>
+                <option value="expiring">🟡 In Scadenza (≤ 60gg) ({contractStats.expiring})</option>
+                <option value="expired">🔴 Scaduti (&lt; 2026) ({contractStats.expired})</option>
+              </select>
             </div>
           </div>
         </div>
@@ -454,7 +564,8 @@ const ProjectsPage = () => {
                 <tr>
                   <th className="py-3.5 px-4">Cod / Linea</th>
                   <th className="py-3.5 px-4">Cliente & Tratta</th>
-                  <th className="py-3.5 px-4">Gest.</th>
+                  <th className="py-3.5 px-4">Validità & Scadenza</th>
+                  <th className="py-3.5 px-4 text-center">Gest.</th>
                   <th className="py-3.5 px-4">Mezzo & Rimorchio</th>
                   <th className="py-3.5 px-4 text-right">Ricavo / Mese</th>
                   <th className="py-3.5 px-4 text-right">Costi / Mese</th>
@@ -467,6 +578,7 @@ const ProjectsPage = () => {
               <tbody className="divide-y divide-slate-100">
                 {filteredProjects.map((project) => {
                   const metrics = calculateSingleProjectMetrics(project);
+                  const validity = getContractValidity(project);
                   const isNegative = metrics.monthlyMol < 0;
                   const isLowMargin = !isNegative && metrics.molPercent < 15;
                   const assignedVeh = fleet.find(v => v.id === project.vehicleId);
@@ -500,7 +612,41 @@ const ProjectsPage = () => {
                         </div>
                       </td>
 
-                      <td className="py-3.5 px-4">
+                      <td className="py-3.5 px-4 whitespace-nowrap">
+                        <div className="flex flex-col gap-1">
+                          {validity.isExpired ? (
+                            <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 border border-rose-200 w-fit">
+                              <Clock className="w-3 h-3 text-rose-600" />
+                              Scaduto ({validity.formattedEnd})
+                            </span>
+                          ) : validity.isExpiringSoon ? (
+                            <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-200 w-fit">
+                              <Clock className="w-3 h-3 text-amber-600" />
+                              In scadenza ({validity.formattedEnd})
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200 w-fit">
+                              <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                              Attivo fino a {validity.formattedEnd}
+                            </span>
+                          )}
+                          <div className="text-[10px] text-slate-500 font-medium">
+                            Da {validity.formattedStart} • {validity.months} mesi
+                          </div>
+                          {(validity.isExpired || validity.isExpiringSoon) && (
+                            <button
+                              onClick={() => handleExtendContract(project.id, 12)}
+                              className="inline-flex items-center gap-1 text-[10px] font-bold text-blue-600 hover:text-blue-800 hover:underline w-fit mt-0.5"
+                              title="Proroga la commessa per 12 mesi o allineala al 2026"
+                            >
+                              <RotateCw className="w-3 h-3 inline" />
+                              <span>Proroga +12m</span>
+                            </button>
+                          )}
+                        </div>
+                      </td>
+
+                      <td className="py-3.5 px-4 text-center">
                         <span
                           className={`inline-flex items-center justify-center w-6 h-6 rounded-full text-xs font-extrabold ${
                             project.managementType === 'D'
@@ -784,6 +930,39 @@ const ProjectsPage = () => {
                       onChange={(e) => handleKmChange(parseFloat(e.target.value) || 0)}
                       className="w-full px-3 py-2 border border-emerald-400 bg-emerald-50/40 rounded-xl focus:ring-2 focus:ring-emerald-500 font-bold"
                     />
+                  </div>
+
+                  {/* Calcolo Dinamico Scadenza Contratto */}
+                  <div className="col-span-2 md:col-span-4 bg-slate-50 border border-slate-200 rounded-xl p-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 shadow-inner">
+                    <div className="flex items-center space-x-2.5">
+                      <div className="p-1.5 bg-emerald-100 text-emerald-800 rounded-lg">
+                        <Calendar className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Validità & Scadenza Contratto</span>
+                        <div className="text-xs font-bold text-slate-800">
+                          Dal <span className="text-slate-900 font-extrabold">{liveValidity.formattedStart}</span> al <span className="text-emerald-700 font-extrabold">{liveValidity.formattedEnd}</span> ({liveValidity.months} mesi di operatività)
+                        </div>
+                      </div>
+                    </div>
+                    <div>
+                      {liveValidity.isExpired ? (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-rose-100 text-rose-800 border border-rose-200">
+                          <Clock className="w-3.5 h-3.5 text-rose-600" />
+                          Scaduto ({liveValidity.formattedEnd})
+                        </span>
+                      ) : liveValidity.isExpiringSoon ? (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-200">
+                          <Clock className="w-3.5 h-3.5 text-amber-600" />
+                          In scadenza ({liveValidity.diffDays} gg)
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                          Attivo fino a {liveValidity.formattedEnd}
+                        </span>
+                      )}
+                    </div>
                   </div>
                 </div>
 

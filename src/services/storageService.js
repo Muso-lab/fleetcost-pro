@@ -14,7 +14,7 @@ const STORAGE_KEYS = {
 };
 
 const FLEET_DATA_VERSION_KEY = 'fleetcost_data_version_2026';
-const CURRENT_DATA_VERSION = 'v2026_four_fleet_satellitari_official_v5';
+const CURRENT_DATA_VERSION = 'v2026_four_fleet_satellitari_official_v6';
 
 class StorageService {
   constructor() {

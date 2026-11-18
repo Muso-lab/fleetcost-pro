@@ -64,7 +64,7 @@ export const normalizeLeaseTiming = (projectOrVehicle) => {
 /**
  * Calcola se un progetto è attivo in un determinato mese dell'anno
  */
-export const isProjectActiveInMonth = (project, monthIndex, targetYear = 2025) => {
+export const isProjectActiveInMonth = (project, monthIndex, targetYear = 2026) => {
   if (!project.startDate) return false;
   const start = new Date(project.startDate);
   const startYear = start.getFullYear();
@@ -80,12 +80,51 @@ export const isProjectActiveInMonth = (project, monthIndex, targetYear = 2025) =
 };
 
 /**
+ * Calcola validità, data di scadenza e stato contrattuale di un progetto
+ */
+export const getContractValidity = (project, referenceDate = new Date()) => {
+  const startStr = project?.startDate || '2026-01-01';
+  const months = Number(project?.operatingMonths) || 12;
+  const parts = startStr.split('-');
+  const startYear = parseInt(parts[0], 10) || 2026;
+  const startMonth = (parseInt(parts[1], 10) || 1) - 1; // 0..11
+  const startDay = parseInt(parts[2], 10) || 1;
+
+  const startDate = new Date(startYear, startMonth, startDay);
+  const endDate = new Date(startYear, startMonth + months, 0);
+
+  const MONTH_SHORT = ['Gen', 'Feb', 'Mar', 'Apr', 'Mag', 'Giu', 'Lug', 'Ago', 'Set', 'Ott', 'Nov', 'Dic'];
+  const formattedStart = `${startDate.getDate().toString().padStart(2, '0')} ${MONTH_SHORT[startDate.getMonth()]} ${startDate.getFullYear()}`;
+  const formattedEnd = `${endDate.getDate().toString().padStart(2, '0')} ${MONTH_SHORT[endDate.getMonth()]} ${endDate.getFullYear()}`;
+
+  const isExpired = endDate < referenceDate;
+  const diffDays = Math.ceil((endDate - referenceDate) / (1000 * 60 * 60 * 24));
+  const isExpiringSoon = !isExpired && diffDays <= 60;
+  const isActive = !isExpired;
+
+  return {
+    startDate,
+    endDate,
+    startStr,
+    endStr: endDate.toISOString().split('T')[0],
+    formattedStart,
+    formattedEnd,
+    months,
+    diffDays,
+    isExpired,
+    isExpiringSoon,
+    isActive,
+    endYear: endDate.getFullYear()
+  };
+};
+
+/**
  * Motore Principale: Calcola Piano Economico (P&L), Cash Flow Mensile,
  * Cash Flow Quindicinale (24 periodi), Recupero Accise e Indici di Bancabilità (DSCR & Fido)
  */
 export const calculateAnnualBudgetAndCashFlow = (projects, options = {}) => {
   const {
-    year = 2025,
+    year = 2026,
     initialCashBalance = 50000,
     stressTestClientDays = 0, // es. +30 giorni ritardo clienti
     factoringEnabled = false,
