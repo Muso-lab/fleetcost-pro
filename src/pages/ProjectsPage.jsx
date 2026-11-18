@@ -4,7 +4,9 @@ import storageService from '../services/storageService';
 import {
   formatEUR,
   formatPercent,
-  calculateSingleProjectMetrics
+  calculateSingleProjectMetrics,
+  LEASE_PAYMENT_TIMINGS,
+  normalizeLeaseTiming
 } from '../utils/cashFlowCalculations';
 import {
   Briefcase,
@@ -169,7 +171,8 @@ const ProjectsPage = () => {
         vehicleId: vId,
         vehicleLeaseDaily: vLease,
         managementType: selectedVeh.ownershipType === 'terzi' ? 'T' : prev.managementType,
-        paymentTermsLease: selectedVeh.leasePaymentTerms !== undefined ? selectedVeh.leasePaymentTerms : prev.paymentTermsLease
+        paymentTermsLease: selectedVeh.leasePaymentTerms !== undefined ? selectedVeh.leasePaymentTerms : prev.paymentTermsLease,
+        leasePaymentTiming: selectedVeh.leasePaymentTiming || normalizeLeaseTiming(selectedVeh)
       }));
     }
   };
@@ -919,16 +922,41 @@ const ProjectsPage = () => {
 
                     <div>
                       <label className="block font-semibold text-slate-700 mb-1">
-                        Pagamento Noleggio
+                        Scadenza Addebito Nolo
                       </label>
                       <select
-                        value={formData.paymentTermsLease}
-                        onChange={(e) => setFormData({ ...formData, paymentTermsLease: parseInt(e.target.value) })}
-                        className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-amber-500 bg-white font-bold"
+                        value={formData.leasePaymentTiming || normalizeLeaseTiming(formData)}
+                        onChange={(e) => {
+                          const timingKey = e.target.value;
+                          const terms = timingKey === 'M1_D10' ? 0 : timingKey === 'M1_D30' ? 30 : 60;
+                          setFormData({ ...formData, leasePaymentTiming: timingKey, paymentTermsLease: terms });
+                        }}
+                        className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-amber-500 bg-white font-bold text-xs"
                       >
-                        <option value="0">Anticipato (1° del mese)</option>
-                        <option value="30">30 giorni fine mese</option>
+                        <option value="M1_D10">Giorno 10 M1 (Anticipato / Inizio Mese)</option>
+                        <option value="M1_D30">Giorno 30 M1 (Fine Mese)</option>
+                        <option value="M2_D20">Giorno 20 M2 (Mese Successivo / +20 gg dffm)</option>
                       </select>
+                      <p className="text-[10px] text-slate-500 mt-1">
+                        {LEASE_PAYMENT_TIMINGS[formData.leasePaymentTiming || normalizeLeaseTiming(formData)]?.description}
+                      </p>
+                    </div>
+
+                    <div>
+                      <label className="block font-semibold text-slate-700 mb-1">
+                        Recupero Accise (€ 0,214/L)
+                      </label>
+                      <select
+                        value={formData.acciseRecoveryEligible !== false ? 'yes' : 'no'}
+                        onChange={(e) => setFormData({ ...formData, acciseRecoveryEligible: e.target.value === 'yes' })}
+                        className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-amber-500 bg-white font-bold text-xs"
+                      >
+                        <option value="yes">Attivo (Trattori & Mezzi &gt; 7.5t)</option>
+                        <option value="no">Escluso per questa commessa</option>
+                      </select>
+                      <p className="text-[10px] text-slate-500 mt-1">
+                        Credito d'imposta trimestrale art. 24-ter TUA a Q+1
+                      </p>
                     </div>
 
                     <div>

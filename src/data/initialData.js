@@ -1,6 +1,37 @@
 // Dati aggiornati e benchmark realistici di mercato per FOUR Trasporti Ecologici
 // Riferimenti di mercato 2024-2026: costruttori (Volvo, Scania, Iveco, Renault), prezzi vettori energetici e CCNL
 
+// Opzioni standard di pagamento Noleggi a Lungo Termine (3 opzioni contrattuali Four)
+export const LEASE_PAYMENT_TIMINGS = [
+  {
+    id: 'M1_D10',
+    name: 'Giorno 10 Mese 1 (Anticipato / Inizio Mese)',
+    shortName: '10 M1 (Anticipato)',
+    monthOffset: 0,
+    quindicina: 1, // 1ª quindicina (1-15)
+    day: 10,
+    description: 'Addebito SDD il giorno 10 dello stesso mese di noleggio'
+  },
+  {
+    id: 'M1_D30',
+    name: 'Giorno 30 Mese 1 (Fine Mese)',
+    shortName: '30 M1 (Fine Mese)',
+    monthOffset: 0,
+    quindicina: 2, // 2ª quindicina (16-31)
+    day: 30,
+    description: 'Addebito SDD il giorno 30 a fine mese del noleggio'
+  },
+  {
+    id: 'M2_D20',
+    name: 'Giorno 20 Mese 2 (Mese Successivo / +20 gg d.f.f.m.)',
+    shortName: '20 M2 (Posticipato)',
+    monthOffset: 1,
+    quindicina: 2, // 2ª quindicina (16-31) del mese successivo
+    day: 20,
+    description: 'Addebito SDD il giorno 20 del mese successivo a quello di noleggio'
+  }
+];
+
 export const DEFAULT_FUEL_TYPES = [
   {
     id: 'elettrico',
@@ -1227,5 +1258,16 @@ export const DEFAULT_SETTINGS = {
     initialCashBalance: 50000, // Cassa iniziale disponibile
     factoringAdvanceRatePercent: 80, // % anticipo fatture factoring se attivato
     factoringCostPercent: 1.5 // costo factoring
+  },
+  treasuryRules: {
+    defaultLeaseTiming: 'M1_D10', // M1_D10 | M1_D30 | M2_D20
+    lngPaymentTerms: 'quindicinale_30gg', // 15 e 30 M+1
+    telepassPaymentTerms: 'quindicinale_15gg', // 30 M (50%) e 15 M+1 (50%)
+    acciseRecovery: {
+      enabled: true,
+      ratePerLiterDiesel: 0.21418, // Rimborso accise autotrazione > 7.5t (€/litro)
+      frequency: 'quarterly_plus_1', // Liquidazione/compensazione F24 a Q+1
+      creditMonths: [4, 7, 10, 13] // Maggio (Q1), Agosto (Q2), Novembre (Q3), Febbraio M+1 (Q4)
+    }
   }
 };

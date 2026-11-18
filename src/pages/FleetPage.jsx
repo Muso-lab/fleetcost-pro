@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import storageService from '../services/storageService';
-import { formatEUR } from '../utils/cashFlowCalculations';
+import { formatEUR, LEASE_PAYMENT_TIMINGS, normalizeLeaseTiming } from '../utils/cashFlowCalculations';
 import { MARKET_VEHICLE_BENCHMARKS } from '../data/initialData';
 import {
   Truck,
@@ -126,6 +126,7 @@ const FleetPage = () => {
           maintenanceMonthly: 350,
           tireCostKm: 0.04,
           tireCount: 12,
+          leasePaymentTiming: 'M1_D10',
           leasePaymentTerms: 0,
           lessorName: 'Volvo / Scania Financial',
           licenseTypeId: 'ce_diurno',
@@ -504,9 +505,9 @@ const FleetPage = () => {
                   </div>
 
                   <div className="flex justify-between items-center">
-                    <span className="text-slate-500">Termini Pagam. Nolo:</span>
-                    <span className="font-bold text-amber-800 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
-                      {item.leasePaymentTerms === 0 ? 'Anticipato (1° mese)' : `${item.leasePaymentTerms || 30} gg f.m.`}
+                    <span className="text-slate-500">Addebito Scadenza Nolo:</span>
+                    <span className="font-bold text-amber-900 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
+                      {LEASE_PAYMENT_TIMINGS[item.leasePaymentTiming || normalizeLeaseTiming(item)]?.shortName || `${item.leasePaymentTerms || 30} gg f.m.`}
                     </span>
                   </div>
 
@@ -857,16 +858,23 @@ const FleetPage = () => {
                   </div>
 
                   <div>
-                    <label className="block font-semibold text-slate-700 mb-1">Termini Pagamento Nolo *</label>
+                    <label className="block font-semibold text-slate-700 mb-1">Scadenza Addebito Nolo *</label>
                     <select
-                      value={formData.leasePaymentTerms}
-                      onChange={(e) => setFormData({ ...formData, leasePaymentTerms: parseInt(e.target.value) || 0 })}
-                      className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 font-bold bg-white"
+                      value={formData.leasePaymentTiming || normalizeLeaseTiming(formData)}
+                      onChange={(e) => {
+                        const timingKey = e.target.value;
+                        const terms = timingKey === 'M1_D10' ? 0 : timingKey === 'M1_D30' ? 30 : 60;
+                        setFormData({ ...formData, leasePaymentTiming: timingKey, leasePaymentTerms: terms });
+                      }}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 font-bold bg-white text-xs"
                     >
-                      <option value="0">Anticipato (1° del mese)</option>
-                      <option value="30">30 giorni d.f. fine mese</option>
-                      <option value="60">60 giorni d.f. fine mese</option>
+                      <option value="M1_D10">Giorno 10 M1 (Anticipato / Inizio Mese)</option>
+                      <option value="M1_D30">Giorno 30 M1 (Fine Mese)</option>
+                      <option value="M2_D20">Giorno 20 M2 (Mese Successivo / +20 gg dffm)</option>
                     </select>
+                    <p className="text-[10px] text-slate-500 mt-1">
+                      {LEASE_PAYMENT_TIMINGS[formData.leasePaymentTiming || normalizeLeaseTiming(formData)]?.description}
+                    </p>
                   </div>
                 </div>
               )}

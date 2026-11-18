@@ -808,6 +808,133 @@ const SettingsPage = () => {
           </div>
         </div>
 
+        {/* 4.5 SEZIONE REGOLE DI TESORERIA & RECUPERO ACCISE */}
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-4">
+          <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+            <div className="flex items-center space-x-2">
+              <Shield className="w-5 h-5 text-emerald-600" />
+              <div>
+                <h2 className="text-sm font-bold text-slate-900">Regole di Tesoreria, Scadenze Reali Uscite & Recupero Accise</h2>
+                <p className="text-[11px] text-slate-500">Configurazione delle date valuta esatte e compensazioni F24 per FOUR</p>
+              </div>
+            </div>
+            <span className="text-xs font-bold px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200">
+              Cash Flow Reale
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 text-xs">
+            {/* Box Noleggi */}
+            <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-2">
+              <span className="text-[11px] font-bold text-slate-900 uppercase tracking-wider block">
+                Noleggi Mezzi (Predefinito)
+              </span>
+              <p className="text-[11px] text-slate-500">
+                Opzione di pagamento applicata ai nuovi veicoli NLT
+              </p>
+              <select
+                value={settings.treasuryRules?.defaultLeaseTiming || 'M1_D10'}
+                onChange={(e) => {
+                  setSettings({
+                    ...settings,
+                    treasuryRules: {
+                      ...settings.treasuryRules,
+                      defaultLeaseTiming: e.target.value
+                    }
+                  });
+                }}
+                className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs font-bold bg-white"
+              >
+                <option value="M1_D10">Giorno 10 M1 (Anticipato / Inizio Mese)</option>
+                <option value="M1_D30">Giorno 30 M1 (Fine Mese)</option>
+                <option value="M2_D20">Giorno 20 M2 (Mese Successivo)</option>
+              </select>
+            </div>
+
+            {/* Box LNG */}
+            <div className="p-4 bg-blue-50/60 rounded-xl border border-blue-200 space-y-2">
+              <span className="text-[11px] font-bold text-blue-950 uppercase tracking-wider block">
+                LNG / Carburanti
+              </span>
+              <div className="inline-block px-2 py-0.5 rounded text-[10px] font-extrabold bg-blue-100 text-blue-900">
+                30 gg data fattura quindicinale
+              </div>
+              <p className="text-[11px] text-blue-900 leading-tight">
+                1-15 M1 saldato il <strong>15 M2</strong>.<br />
+                16-31 M1 saldato il <strong>30 M2</strong>.<br />
+                <span className="font-semibold text-blue-950">100% dell'importo esce a Mese 2.</span>
+              </p>
+            </div>
+
+            {/* Box Telepass */}
+            <div className="p-4 bg-amber-50/60 rounded-xl border border-amber-200 space-y-2">
+              <span className="text-[11px] font-bold text-amber-950 uppercase tracking-wider block">
+                Telepass / Pedaggi
+              </span>
+              <div className="inline-block px-2 py-0.5 rounded text-[10px] font-extrabold bg-amber-100 text-amber-900">
+                15 gg data fattura quindicinale
+              </div>
+              <p className="text-[11px] text-amber-900 leading-tight">
+                1-15 M1 saldato il <strong>30 M1</strong> (50%).<br />
+                16-31 M1 saldato il <strong>15 M2</strong> (50%).<br />
+                <span className="font-semibold text-amber-950">50% a Mese 1, 50% a Mese 2.</span>
+              </p>
+            </div>
+
+            {/* Box Accise */}
+            <div className="p-4 bg-emerald-50/60 rounded-xl border border-emerald-200 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-bold text-emerald-950 uppercase tracking-wider">
+                  Recupero Accise
+                </span>
+                <input
+                  type="checkbox"
+                  checked={settings.treasuryRules?.acciseRecovery?.enabled !== false}
+                  onChange={(e) => {
+                    setSettings({
+                      ...settings,
+                      treasuryRules: {
+                        ...settings.treasuryRules,
+                        acciseRecovery: {
+                          ...settings.treasuryRules?.acciseRecovery,
+                          enabled: e.target.checked
+                        }
+                      }
+                    });
+                  }}
+                  className="w-4 h-4 text-emerald-600 rounded focus:ring-emerald-500"
+                />
+              </div>
+              <div className="flex items-center space-x-1">
+                <span className="text-[11px] text-emerald-900 font-semibold">Credito:</span>
+                <input
+                  type="number"
+                  step="0.005"
+                  value={settings.treasuryRules?.acciseRecovery?.ratePerLiterDiesel || 0.21418}
+                  onChange={(e) => {
+                    const val = parseFloat(e.target.value) || 0.21418;
+                    setSettings({
+                      ...settings,
+                      treasuryRules: {
+                        ...settings.treasuryRules,
+                        acciseRecovery: {
+                          ...settings.treasuryRules?.acciseRecovery,
+                          ratePerLiterDiesel: val
+                        }
+                      }
+                    });
+                  }}
+                  className="w-20 px-1.5 py-1 border border-emerald-300 rounded text-right font-bold text-xs bg-white"
+                />
+                <span className="text-[11px] text-emerald-900 font-bold">€/L</span>
+              </div>
+              <p className="text-[10px] text-emerald-800 leading-tight">
+                Compensazione F24 a <strong>Q+1</strong> (Maggio, Agosto, Novembre, Febbraio).
+              </p>
+            </div>
+          </div>
+        </div>
+
         {/* 5. GESTIONE BACKUP & RESET DATI */}
         <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-4">
           <div className="flex items-center justify-between pb-3 border-b border-slate-100">

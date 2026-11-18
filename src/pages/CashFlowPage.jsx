@@ -20,7 +20,13 @@ import {
   ArrowDownRight,
   HelpCircle,
   ShieldAlert,
-  Percent
+  Percent,
+  Layers,
+  Shield,
+  Fuel,
+  CreditCard,
+  Building2,
+  Zap
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -41,67 +47,144 @@ const CashFlowPage = () => {
   const [projects, setProjects] = useState([]);
   const [selectedYear, setSelectedYear] = useState(2025);
   const [initialCash, setInitialCash] = useState(30000);
-  const [stressTestDays, setStressTestDays] = useState(0); // 0, 15, 30, 45 giorni di ritardo
+  const [stressTestDays, setStressTestDays] = useState(0); // 0, 15, 30, 60 gg di ritardo
   const [factoringEnabled, setFactoringEnabled] = useState(false);
   const [factoringRate, setFactoringRate] = useState(80); // 80% anticipato
-  const [activeTab, setActiveTab] = useState('cashflow'); // 'cashflow' or 'pnl'
+  const [acciseEnabled, setAcciseEnabled] = useState(true); // Toggle Recupero Accise
+  const [acciseRate, setAcciseRate] = useState(0.21418); // €/L rimborso
+  const [activeTab, setActiveTab] = useState('cashflow'); // 'cashflow' | 'biweekly' | 'pnl'
 
   useEffect(() => {
     loadProjects();
   }, []);
 
   const loadProjects = () => {
-    setProjects(storageService.getProjects());
+    const prjs = storageService.getProjects();
+    setProjects(prjs);
+    const settings = storageService.getSettings();
+    if (settings?.treasuryRules?.acciseRecovery) {
+      setAcciseEnabled(settings.treasuryRules.acciseRecovery.enabled !== false);
+      setAcciseRate(settings.treasuryRules.acciseRecovery.ratePerLiterDiesel || 0.21418);
+    }
   };
 
-  // Calcolo del budget e cash flow con le opzioni correnti
+  // Calcolo del budget e cash flow con il nuovo motore avanzato
   const financialModel = calculateAnnualBudgetAndCashFlow(projects, {
     year: selectedYear,
     initialCashBalance: initialCash,
     stressTestClientDays: stressTestDays,
     factoringEnabled,
     factoringAdvanceRate: factoringRate,
-    factoringFeePercent: 1.5
+    factoringFeePercent: 1.5,
+    acciseRecoveryEnabled: acciseEnabled,
+    acciseRatePerLiter: acciseRate
   });
 
   const {
     monthlyCashFlow,
+    biweeklyCashFlow,
     annualRevenue,
     annualCost,
     annualMol,
     annualMolPercent,
+    annualAcciseCredit,
     totalCashIn,
     totalCashOut,
     netAnnualCash,
     finalCashBalance,
     peakFinancingRequired,
+    suggestedCreditLine,
     peakDeficitMonth,
-    minCashBalance
+    peakDeficitBiweekly,
+    minCashBalance,
+    biweeklyMinCashBalance,
+    dscr,
+    dscrRating,
+    dscrColor,
+    totalAnnualLeases,
+    cashScheduleDeadlines
   } = financialModel;
 
-  // Dati per i grafici
-  const chartData = monthlyCashFlow.map(m => ({
-    name: m.shortName,
-    fullName: m.monthName,
-    RicaviPnl: Math.round(m.revenue),
-    CostiPnl: Math.round(m.cost),
-    MolPnl: Math.round(m.mol),
-    IncassiCassa: Math.round(m.cashIn),
-    UsciteCassa: Math.round(m.cashOut),
-    FlussoNetto: Math.round(m.netCashFlow),
-    SaldoCassa: Math.round(m.closingCash),
-    Fabbisogno: m.closingCash < 0 ? Math.round(Math.abs(m.closingCash)) : 0
-  }));
+  // Dati per il grafico in base al tab selezionato (Mensile vs Quindicinale)
+  const isBiweeklyView = activeTab === 'biweekly';
+  const chartData = isBiweeklyView
+    ? biweeklyCashFlow.map(p => ({
+        name: p.shortLabel,
+        fullName: p.label,
+        IncassiCassa: Math.round(p.cashIn),
+        UsciteCassa: Math.round(p.cashOut),
+        FlussoNetto: Math.round(p.netCashFlow),
+        SaldoCassa: Math.round(p.closingCash),
+        Fabbisogno: p.closingCash < 0 ? Math.round(Math.abs(p.closingCash)) : 0
+      }))
+    : monthlyCashFlow.map(m => ({
+        name: m.shortName,
+        fullName: m.monthName,
+        RicaviPnl: Math.round(m.revenue),
+        CostiPnl: Math.round(m.cost),
+        MolPnl: Math.round(m.mol),
+        IncassiCassa: Math.round(m.cashIn),
+        UsciteCassa: Math.round(m.cashOut),
+        FlussoNetto: Math.round(m.netCashFlow),
+        SaldoCassa: Math.round(m.closingCash),
+        Fabbisogno: m.closingCash < 0 ? Math.round(Math.abs(m.closingCash)) : 0
+      }));
 
-  // Esporta in Excel (.xlsx) completo
+  // Esporta in Excel (.xlsx) completo multi-foglio
   const handleExportExcel = () => {
+    // Foglio 1: Cash Flow Mensile
+    const cashFlowRows = monthlyCashFlow.map(m => ({
+      Mese: m.monthName,
+      'Saldo Iniziale (€)': m.openingCash,
+      'Incassi da Clienti (€)': m.inflowBreakdown.clientsRegular,
+      'Anticipi Factoring (€)': m.inflowBreakdown.factoringAdvance,
+      'Recupero Accise F24 (€)': m.inflowBreakdown.acciseRefunds,
+      'Totale Entrate (€)': m.cashIn,
+      'Uscite Autisti (€)': m.outflowBreakdown.drivers,
+      'Uscite LNG Carburante (€)': m.outflowBreakdown.lngFuel,
+      'Uscite Telepass (€)': m.outflowBreakdown.tollsTelepass,
+      'Uscite Noleggi M1-D10 (€)': m.outflowBreakdown.leasesM1D10,
+      'Uscite Noleggi M1-D30 (€)': m.outflowBreakdown.leasesM1D30,
+      'Uscite Noleggi M2-D20 (€)': m.outflowBreakdown.leasesM2D20,
+      'Uscite Fornitori Altri (€)': m.outflowBreakdown.suppliersOther,
+      'Caparre Start-up (€)': m.outflowBreakdown.deposits,
+      'Totale Uscite (€)': m.cashOut,
+      'Flusso Netto Mese (€)': m.netCashFlow,
+      'Saldo Cassa Finale (€)': m.closingCash,
+      'Fabbisogno / Deficit (€)': m.workingCapitalGap
+    }));
+
+    // Foglio 2: Cash Flow Quindicinale (24 periodi)
+    const biweeklyRows = biweeklyCashFlow.map(p => ({
+      Quindicina: p.label,
+      'Saldo Iniziale (€)': p.openingCash,
+      'Incassi Clienti (€)': p.inflowBreakdown.clients,
+      'Anticipi Factoring (€)': p.inflowBreakdown.factoring,
+      'Accise F24 (€)': p.inflowBreakdown.accise,
+      'Totale Entrate (€)': p.cashIn,
+      'Autisti Netti G.10 (€)': p.outflowBreakdown.driversNet,
+      'Autisti INPS/F24 G.16 (€)': p.outflowBreakdown.driversInpsF24,
+      'LNG Carburante (€)': p.outflowBreakdown.lngFuel,
+      'Telepass (€)': p.outflowBreakdown.tollsTelepass,
+      'Noleggi (€)': p.outflowBreakdown.leases,
+      'Altri Fornitori (€)': p.outflowBreakdown.otherSuppliers,
+      'Caparre (€)': p.outflowBreakdown.deposits,
+      'Totale Uscite (€)': p.cashOut,
+      'Flusso Netto (€)': p.netCashFlow,
+      'Saldo Finale (€)': p.closingCash,
+      'Fabbisogno (€)': p.workingCapitalGap
+    }));
+
+    // Foglio 3: Conto Economico P&L
     const pnlRows = monthlyCashFlow.map(m => ({
       Mese: m.monthName,
       'Progetti Attivi': m.activeProjectsCount,
       'Ricavi (€)': m.revenue,
       'Costi Totali (€)': m.cost,
       'Autisti (€)': m.costBreakdown.driver,
-      'Carburante (€)': m.costBreakdown.fuel,
+      'Carburante Lordo (€)': m.costBreakdown.fuelGross,
+      'Credito Accise (€)': m.costBreakdown.acciseCredit,
+      'Carburante Netto (€)': m.costBreakdown.fuelNet,
       'Pedaggi (€)': m.costBreakdown.tolls,
       'Gomme (€)': m.costBreakdown.tires,
       'Noleggi Mezzi (€)': m.costBreakdown.vehicleLease,
@@ -111,28 +194,16 @@ const CashFlowPage = () => {
       'M.O.L. (%)': `${m.molPercent.toFixed(1)}%`
     }));
 
-    const cashFlowRows = monthlyCashFlow.map(m => ({
-      Mese: m.monthName,
-      'Saldo Iniziale (€)': m.openingCash,
-      'Incassi da Clienti (€)': m.cashIn,
-      'Uscite Totali (€)': m.cashOut,
-      'Uscite Personale (€)': m.outflowBreakdown.drivers,
-      'Uscite Fornitori/Carburante (€)': m.outflowBreakdown.suppliers,
-      'Uscite Noleggi (€)': m.outflowBreakdown.leases,
-      'Caparre (€)': m.outflowBreakdown.deposits,
-      'Flusso Netto Mese (€)': m.netCashFlow,
-      'Saldo Cassa Finale (€)': m.closingCash,
-      'Fabbisogno Cassa (€)': m.workingCapitalGap
-    }));
-
     const wb = XLSX.utils.book_new();
     const wsCashFlow = XLSX.utils.json_to_sheet(cashFlowRows);
+    const wsBiweekly = XLSX.utils.json_to_sheet(biweeklyRows);
     const wsPnl = XLSX.utils.json_to_sheet(pnlRows);
 
-    XLSX.utils.book_append_sheet(wb, wsCashFlow, 'Cash Flow Tesoreria');
+    XLSX.utils.book_append_sheet(wb, wsCashFlow, 'Cash Flow Mensile');
+    XLSX.utils.book_append_sheet(wb, wsBiweekly, 'Cash Flow Quindicinale (24P)');
     XLSX.utils.book_append_sheet(wb, wsPnl, 'Budget Economico P&L');
 
-    XLSX.writeFile(wb, `FOUR_Piano_Finanziario_${selectedYear}.xlsx`);
+    XLSX.writeFile(wb, `FOUR_Piano_Finanziario_Completo_${selectedYear}.xlsx`);
   };
 
   return (
@@ -150,7 +221,7 @@ const CashFlowPage = () => {
                   Forecast, Budget & Cash Flow FOUR
                 </h1>
                 <p className="text-xs text-slate-500">
-                  Pianificazione finanziaria con impatto dei termini di pagamento (DSO 60-90 gg vs DPO 15-30 gg)
+                  Modellazione di tesoreria con regole reali (Noleggi G10/G30/G20, LNG 30gg quindicinale, Telepass 15gg quindicinale e Recupero Accise)
                 </p>
               </div>
             </div>
@@ -175,80 +246,104 @@ const CashFlowPage = () => {
           </div>
         </div>
 
-        {/* Dashboard Financial Summary Cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
-          <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
-            <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Ricavi Annui Previsti</span>
-            <div className="text-2xl font-black text-slate-900 mt-2">
+        {/* Dashboard Financial Summary Cards (Bancabilità & Tesoreria) */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
+          {/* Ricavi */}
+          <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200">
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Ricavi Annui Previsti</span>
+            <div className="text-xl font-black text-slate-900 mt-1.5">
               {formatEUR(annualRevenue)}
             </div>
-            <p className="text-[11px] text-slate-500 mt-1">Fatturato totale a budget</p>
+            <p className="text-[10px] text-slate-500 mt-0.5">Fatturato a budget</p>
           </div>
 
-          <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
-            <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Costi Totali Annui</span>
-            <div className="text-2xl font-black text-slate-700 mt-2">
+          {/* Costi */}
+          <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200">
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Costi Totali Annui</span>
+            <div className="text-xl font-black text-slate-700 mt-1.5">
               {formatEUR(annualCost)}
             </div>
-            <p className="text-[11px] text-slate-500 mt-1">Operativi + canoni noleggio</p>
+            <p className="text-[10px] text-slate-500 mt-0.5">Op. + noleggi mezzi</p>
           </div>
 
-          <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
-            <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">M.O.L. Annuo (EBITDA)</span>
-            <div className="flex items-baseline justify-between mt-2">
-              <span className="text-2xl font-black text-emerald-600">{formatEUR(annualMol)}</span>
-              <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
+          {/* M.O.L. */}
+          <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200">
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">M.O.L. (EBITDA)</span>
+            <div className="flex items-baseline justify-between mt-1.5">
+              <span className="text-xl font-black text-emerald-600">{formatEUR(annualMol)}</span>
+              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
                 {formatPercent(annualMolPercent)}
               </span>
             </div>
-            <p className="text-[11px] text-slate-500 mt-1">Margine operativo lordo</p>
+            <p className="text-[10px] text-slate-500 mt-0.5">Margine lordo operativo</p>
           </div>
 
-          <div className={`p-5 rounded-2xl shadow-sm border ${
-            peakFinancingRequired > 0
-              ? 'bg-amber-50/80 border-amber-300'
-              : 'bg-white border-slate-200'
-          }`}>
-            <span className="text-xs font-bold text-amber-900 uppercase tracking-wider flex items-center">
-              <AlertTriangle className="w-3.5 h-3.5 mr-1 text-amber-600" />
-              Picco Fabbisogno Cassa
+          {/* INDICE DSCR (Bancabilità) */}
+          <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200">
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center">
+              <Building2 className="w-3 h-3 mr-1 text-slate-500" />
+              Indice DSCR
             </span>
-            <div className="text-2xl font-black text-amber-700 mt-2">
-              {formatEUR(peakFinancingRequired)}
+            <div className="flex items-baseline justify-between mt-1.5">
+              <span className={`text-xl font-black ${
+                dscrColor === 'emerald' ? 'text-emerald-600' : dscrColor === 'amber' ? 'text-amber-600' : 'text-rose-600'
+              }`}>
+                {dscr.toFixed(2)}x
+              </span>
+              <span className={`text-[9px] font-extrabold px-1.5 py-0.5 rounded ${
+                dscrColor === 'emerald' ? 'bg-emerald-100 text-emerald-800' : dscrColor === 'amber' ? 'bg-amber-100 text-amber-800' : 'bg-rose-100 text-rose-800'
+              }`}>
+                {dscrRating.split(' ')[0]}
+              </span>
             </div>
-            <p className="text-[11px] text-amber-800 mt-1 font-semibold">
-              {peakFinancingRequired > 0 ? `Picco a ${peakDeficitMonth}` : 'Nessun deficit di cassa'}
+            <p className="text-[10px] text-slate-400 mt-0.5" title="Copertura canoni da cassa operativa">Copertura debiti/canoni</p>
+          </div>
+
+          {/* FIDO BANCARIO CONSIGLIATO */}
+          <div className={`p-4 rounded-2xl shadow-sm border ${
+            peakFinancingRequired > 0 ? 'bg-amber-50/80 border-amber-300' : 'bg-white border-slate-200'
+          }`}>
+            <span className="text-[10px] font-bold text-amber-900 uppercase tracking-wider flex items-center">
+              <AlertTriangle className="w-3 h-3 mr-1 text-amber-600" />
+              Fido / Fabbisogno
+            </span>
+            <div className="text-xl font-black text-amber-700 mt-1.5">
+              {formatEUR(suggestedCreditLine)}
+            </div>
+            <p className="text-[10px] text-amber-800 mt-0.5 font-semibold truncate" title={`Picco a ${peakDeficitMonth} (${peakDeficitBiweekly})`}>
+              {peakFinancingRequired > 0 ? `Picco: ${peakDeficitBiweekly || peakDeficitMonth}` : 'Nessun deficit'}
             </p>
           </div>
 
-          <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
-            <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Saldo Cassa a Dicembre</span>
-            <div className={`text-2xl font-black mt-2 ${finalCashBalance >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+          {/* SALDO CASSA DICEMBRE */}
+          <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200">
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Cassa a Dicembre</span>
+            <div className={`text-xl font-black mt-1.5 ${finalCashBalance >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
               {formatEUR(finalCashBalance)}
             </div>
-            <p className="text-[11px] text-slate-500 mt-1">Disponibilità liquida finale</p>
+            <p className="text-[10px] text-slate-500 mt-0.5">Liquidità finale</p>
           </div>
         </div>
 
-        {/* Pannello Scenari e Parametri Finanziari (Stress Test & Factoring) */}
+        {/* Simulatore Scenari di Cassa, Stress Test, Factoring & Recupero Accise */}
         <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 space-y-4">
           <div className="flex items-center justify-between pb-3 border-b border-slate-100">
             <div className="flex items-center space-x-2">
               <Sliders className="w-4 h-4 text-emerald-600" />
               <h3 className="text-sm font-bold text-slate-900">
-                Simulatore Scenari di Cassa & Politiche di Incasso
+                Parametri Tesoreria, Scenari & Recupero Accise
               </h3>
             </div>
             <span className="text-xs text-slate-500">
-              Modifica i parametri per vedere l'impatto in tempo reale sulla tesoreria
+              Ricalcolo istantaneo flussi di cassa, scadenze e fabbisogno fido
             </span>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 text-xs">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 text-xs">
             {/* Cassa Iniziale */}
             <div className="space-y-1.5">
               <label className="font-semibold text-slate-700 block">
-                Disponibilità di Cassa Iniziale (1 Gennaio):
+                Cassa Iniziale (1 Gennaio):
               </label>
               <div className="flex items-center space-x-2">
                 <input
@@ -260,13 +355,13 @@ const CashFlowPage = () => {
                 />
                 <span className="text-slate-500 font-bold">€</span>
               </div>
-              <p className="text-[11px] text-slate-400">Fondo cassa o fido bancario di partenza</p>
+              <p className="text-[10px] text-slate-400">Disponibilità liquida di partenza</p>
             </div>
 
-            {/* Stress Test Ritardo Incassi */}
+            {/* Stress Test Ritardo Clienti */}
             <div className="space-y-1.5">
               <label className="font-semibold text-slate-700 block">
-                Stress-Test: Ritardo Incassi Clienti (+gg):
+                Stress-Test: Ritardo Incassi (+gg):
               </label>
               <select
                 value={stressTestDays}
@@ -274,18 +369,19 @@ const CashFlowPage = () => {
                 className="w-full px-3 py-1.5 border border-slate-300 rounded-xl bg-white font-bold"
               >
                 <option value="0">Nessun ritardo (Termini contrattuali)</option>
-                <option value="15">+15 giorni di ritardo medio</option>
-                <option value="30">+30 giorni (Clienti pagano a 90 gg anziché 60)</option>
-                <option value="60">+60 giorni (Scenario grave crisi liquidità)</option>
+                <option value="15">+15 giorni di ritardo</option>
+                <option value="30">+30 giorni (Incasso a 90 gg anziché 60)</option>
+                <option value="60">+60 giorni (Scenario ritardo grave)</option>
               </select>
-              <p className="text-[11px] text-slate-400">Valuta quanto aumenta il fabbisogno se i clienti ritardano</p>
+              <p className="text-[10px] text-slate-400">Simula l'impatto di clienti lenti a pagare</p>
             </div>
 
             {/* Factoring / Anticipo Fatture */}
-            <div className="space-y-1.5 p-3 bg-emerald-50/70 rounded-xl border border-emerald-200/60">
+            <div className="space-y-1.5 p-3 bg-slate-50 rounded-xl border border-slate-200">
               <div className="flex items-center justify-between">
-                <label className="font-bold text-emerald-950">
-                  Anticipo Fatture / Factoring:
+                <label className="font-bold text-slate-900 flex items-center">
+                  <CreditCard className="w-3.5 h-3.5 mr-1 text-slate-600" />
+                  Anticipo Factoring:
                 </label>
                 <input
                   type="checkbox"
@@ -296,36 +392,112 @@ const CashFlowPage = () => {
               </div>
               {factoringEnabled ? (
                 <div className="flex items-center space-x-2 pt-1">
-                  <span className="text-[11px] text-emerald-800">Anticipo:</span>
+                  <span className="text-[10px] text-slate-600">Anticipo:</span>
                   <select
                     value={factoringRate}
                     onChange={(e) => setFactoringRate(parseInt(e.target.value))}
-                    className="px-2 py-1 border border-emerald-300 rounded-lg text-xs bg-white font-bold"
+                    className="px-2 py-0.5 border border-slate-300 rounded text-xs bg-white font-bold"
                   >
-                    <option value="70">70% a 3 giorni</option>
-                    <option value="80">80% a 3 giorni (Standard)</option>
-                    <option value="90">90% a 3 giorni</option>
+                    <option value="70">70%</option>
+                    <option value="80">80% (Std)</option>
+                    <option value="90">90%</option>
                   </select>
-                  <span className="text-[10px] text-emerald-700 italic">(Costo 1.5%)</span>
+                  <span className="text-[10px] text-slate-500">(Costo 1.5%)</span>
                 </div>
               ) : (
-                <p className="text-[11px] text-emerald-800">
-                  Attiva per simulare l'incasso immediato dell'80% delle fatture tramite anticipo bancario.
+                <p className="text-[10px] text-slate-500">Anticipa l'80% delle fatture emesse</p>
+              )}
+            </div>
+
+            {/* Recupero Accise Carburante */}
+            <div className="space-y-1.5 p-3 bg-emerald-50/70 rounded-xl border border-emerald-200/70">
+              <div className="flex items-center justify-between">
+                <label className="font-bold text-emerald-950 flex items-center">
+                  <Shield className="w-3.5 h-3.5 mr-1 text-emerald-700" />
+                  Recupero Accise:
+                </label>
+                <input
+                  type="checkbox"
+                  checked={acciseEnabled}
+                  onChange={(e) => setAcciseEnabled(e.target.checked)}
+                  className="w-4 h-4 text-emerald-600 rounded focus:ring-emerald-500"
+                />
+              </div>
+              {acciseEnabled ? (
+                <div className="space-y-1 pt-0.5">
+                  <div className="flex items-center justify-between text-[11px] text-emerald-900">
+                    <span>Totale credito annuo:</span>
+                    <span className="font-extrabold">{formatEUR(annualAcciseCredit)}</span>
+                  </div>
+                  <p className="text-[10px] text-emerald-800 leading-tight">
+                    Accredito F24 a <strong>Q+1</strong> (Maggio, Agosto, Novembre, Febbraio).
+                  </p>
+                </div>
+              ) : (
+                <p className="text-[10px] text-emerald-800">
+                  Attiva il recupero di € 0,214/L sui veicoli commerciali &gt; 7.5t.
                 </p>
               )}
             </div>
           </div>
         </div>
 
+        {/* CALENDARIO SCADENZE DI CASSA DEL MESE OPERATIVO (CASH SCHEDULE) */}
+        <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-2">
+              <Clock className="w-4 h-4 text-blue-600" />
+              <h3 className="text-sm font-bold text-slate-900">
+                Calendario Scadenze di Cassa del Mese Operativo (Cash Timeline FOUR)
+              </h3>
+            </div>
+            <span className="text-[11px] font-semibold text-slate-500">
+              Rappresentazione delle uscite nei 5 giorni chiave del mese
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 text-xs">
+            {cashScheduleDeadlines.map((dl, idx) => (
+              <div
+                key={idx}
+                className={`p-3.5 rounded-xl border flex flex-col justify-between ${
+                  dl.day === 10
+                    ? 'bg-rose-50/70 border-rose-200'
+                    : dl.day === 15
+                    ? 'bg-amber-50/70 border-amber-200'
+                    : dl.day === 16
+                    ? 'bg-purple-50/70 border-purple-200'
+                    : dl.day === 20
+                    ? 'bg-blue-50/70 border-blue-200'
+                    : 'bg-emerald-50/70 border-emerald-200'
+                }`}
+              >
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-lg font-black text-slate-900">Giorno {dl.day}</span>
+                    <span className={`px-2 py-0.5 rounded text-[9px] font-extrabold uppercase ${
+                      dl.type === 'outflow' ? 'bg-rose-100 text-rose-800' : 'bg-emerald-100 text-emerald-800'
+                    }`}>
+                      {dl.type === 'outflow' ? 'Uscita Cassa' : 'Misto / Incassi'}
+                    </span>
+                  </div>
+                  <h4 className="font-bold text-slate-900 text-xs mb-1">{dl.title}</h4>
+                  <p className="text-[11px] text-slate-600 leading-snug">{dl.description}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
         {/* Grafico Andamento Cassa & Fabbisogno */}
         <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-4">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
             <div>
               <h3 className="text-base font-bold text-slate-900">
-                Evoluzione Saldo di Cassa & Fabbisogno Circolante ({selectedYear})
+                Evoluzione Saldo di Cassa & Fabbisogno Circolante ({selectedYear}) {isBiweeklyView ? '- Vista Quindicinale (24 Periodi)' : '- Vista Mensile'}
               </h3>
               <p className="text-xs text-slate-500">
-                La curva mostra il saldo cumulato di tesoreria: sotto la linea dello zero (rossa) si genera fabbisogno da affidamento.
+                La curva mostra il saldo cumulato: sotto la linea rossa (zero) si attiva il fido bancario necessario.
               </p>
             </div>
             <div className="flex items-center space-x-2 text-xs">
@@ -350,74 +522,93 @@ const CashFlowPage = () => {
                 <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
                 <XAxis dataKey="name" tick={{ fontSize: 11 }} />
                 <YAxis
-                  tickFormatter={(val) => `€${(val / 1000).toFixed(0)}k`}
                   tick={{ fontSize: 11 }}
+                  tickFormatter={(val) => `€${(val / 1000).toFixed(0)}k`}
                 />
                 <Tooltip
-                  formatter={(value, name) => [formatEUR(value), name]}
-                  contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155', borderRadius: '12px', color: '#fff', fontSize: '12px' }}
+                  formatter={(val) => formatEUR(val)}
+                  labelFormatter={(name, payload) => payload?.[0]?.payload?.fullName || name}
                 />
-                <ReferenceLine y={0} stroke="#ef4444" strokeWidth={2} strokeDasharray="4 4" label={{ value: 'Zero Cassa', fill: '#ef4444', fontSize: 10, position: 'insideBottomRight' }} />
-                <Bar dataKey="IncassiCassa" name="Incassi Cassa" fill="#3b82f6" opacity={0.6} radius={[4, 4, 0, 0]} />
-                <Bar dataKey="UsciteCassa" name="Uscite Cassa" fill="#f43f5e" opacity={0.5} radius={[4, 4, 0, 0]} />
-                <Area
+                <Legend />
+                <ReferenceLine y={0} stroke="#ef4444" strokeWidth={1.5} strokeDasharray="4 4" />
+                <Bar dataKey="IncassiCassa" name="Incassi Cassa" fill="#3b82f6" fillOpacity={0.6} radius={[4, 4, 0, 0]} />
+                <Bar dataKey="UsciteCassa" name="Uscite Cassa" fill="#f43f5e" fillOpacity={0.6} radius={[4, 4, 0, 0]} />
+                <Line
                   type="monotone"
                   dataKey="SaldoCassa"
                   name="Saldo Cassa Cumulato"
                   stroke="#10b981"
                   strokeWidth={3}
-                  fillOpacity={0.15}
-                  fill="#10b981"
+                  dot={{ r: 3, fill: '#10b981' }}
                 />
               </ComposedChart>
             </ResponsiveContainer>
           </div>
         </div>
 
-        {/* Tabella Mese per Mese: Switch P&L vs Cash Flow */}
+        {/* Tabella Dati con Switch: Mensile / Quindicinale / P&L */}
         <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-          <div className="p-4 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div className="p-5 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <div className="flex p-1 bg-slate-100 rounded-xl max-w-fit">
               <button
                 onClick={() => setActiveTab('cashflow')}
                 className={`px-4 py-2 rounded-lg text-xs font-bold transition ${
-                  activeTab === 'cashflow' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'
+                  activeTab === 'cashflow'
+                    ? 'bg-white text-slate-900 shadow-sm'
+                    : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                Piano di Cassa / Cash Flow Mensile
+                Cash Flow Mensile (12 Mesi)
+              </button>
+              <button
+                onClick={() => setActiveTab('biweekly')}
+                className={`px-4 py-2 rounded-lg text-xs font-bold transition ${
+                  activeTab === 'biweekly'
+                    ? 'bg-white text-slate-900 shadow-sm'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                Dettaglio Quindicinale (24 Periodi)
               </button>
               <button
                 onClick={() => setActiveTab('pnl')}
                 className={`px-4 py-2 rounded-lg text-xs font-bold transition ${
-                  activeTab === 'pnl' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'
+                  activeTab === 'pnl'
+                    ? 'bg-white text-slate-900 shadow-sm'
+                    : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                Budget Economico P&L (Competenza)
+                Budget Economico P&L
               </button>
             </div>
 
             <span className="text-xs text-slate-500 font-medium">
               {activeTab === 'cashflow'
-                ? 'Flussi effettivi monetari con date valuta'
-                : 'Ricavi e costi imputati al periodo di maturazione'}
+                ? 'Flussi mensili con termini contrattuali'
+                : activeTab === 'biweekly'
+                ? 'Evidenzia i picchi intra-mensili (1ª e 2ª quindicina)'
+                : 'Ricavi e costi imputati al periodo di maturazione economica'}
             </span>
           </div>
 
           <div className="overflow-x-auto">
-            {activeTab === 'cashflow' ? (
+            {activeTab === 'cashflow' && (
+              /* TABELLA CASH FLOW MENSILE */
               <table className="min-w-full divide-y divide-slate-200 text-left text-xs">
                 <thead className="bg-slate-50 text-slate-700 font-bold uppercase tracking-wider">
                   <tr>
                     <th className="py-3 px-4">Mese</th>
-                    <th className="py-3 px-4 text-right">Saldo Iniziale</th>
+                    <th className="py-3 px-4 text-right">Saldo Iniz.</th>
                     <th className="py-3 px-4 text-right text-blue-700">(+) Incassi</th>
+                    <th className="py-3 px-4 text-right text-emerald-700">(+) Accise F24</th>
                     <th className="py-3 px-4 text-right text-rose-700">(-) Uscite</th>
-                    <th className="py-3 px-4 text-right">Autisti/Pers.</th>
-                    <th className="py-3 px-4 text-right">Carburante/Forn.</th>
+                    <th className="py-3 px-4 text-right">Autisti</th>
+                    <th className="py-3 px-4 text-right">LNG Carb.</th>
+                    <th className="py-3 px-4 text-right">Telepass</th>
                     <th className="py-3 px-4 text-right">Noleggi</th>
                     <th className="py-3 px-4 text-right">Flusso Netto</th>
-                    <th className="py-3 px-4 text-right font-black">Saldo Finale Cassa</th>
-                    <th className="py-3 px-4 text-center">Fabbisogno</th>
+                    <th className="py-3 px-4 text-right font-black">Saldo Finale</th>
+                    <th className="py-3 px-4 text-center">Stato Cassa</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 font-medium">
@@ -428,24 +619,28 @@ const CashFlowPage = () => {
                         key={m.monthIndex}
                         className={`hover:bg-slate-50/80 transition ${isDeficit ? 'bg-amber-50/40' : ''}`}
                       >
-                        <td className="py-3.5 px-4 font-bold text-slate-900">{m.monthName}</td>
-                        <td className="py-3.5 px-4 text-right text-slate-600">{formatEUR(m.openingCash)}</td>
-                        <td className="py-3.5 px-4 text-right font-bold text-blue-600">{formatEUR(m.cashIn)}</td>
-                        <td className="py-3.5 px-4 text-right font-bold text-rose-600">{formatEUR(m.cashOut)}</td>
-                        <td className="py-3.5 px-4 text-right text-slate-600">{formatEUR(m.outflowBreakdown.drivers)}</td>
-                        <td className="py-3.5 px-4 text-right text-slate-600">{formatEUR(m.outflowBreakdown.suppliers)}</td>
-                        <td className="py-3.5 px-4 text-right text-slate-600">{formatEUR(m.outflowBreakdown.leases)}</td>
-                        <td className="py-3.5 px-4 text-right">
+                        <td className="py-3 px-4 font-bold text-slate-900">{m.monthName}</td>
+                        <td className="py-3 px-4 text-right text-slate-600">{formatEUR(m.openingCash)}</td>
+                        <td className="py-3 px-4 text-right font-bold text-blue-600">{formatEUR(m.inflowBreakdown.clientsRegular + m.inflowBreakdown.factoringAdvance)}</td>
+                        <td className="py-3 px-4 text-right font-bold text-emerald-600">
+                          {m.inflowBreakdown.acciseRefunds > 0 ? `+${formatEUR(m.inflowBreakdown.acciseRefunds)}` : '-'}
+                        </td>
+                        <td className="py-3 px-4 text-right font-bold text-rose-600">{formatEUR(m.cashOut)}</td>
+                        <td className="py-3 px-4 text-right text-slate-600">{formatEUR(m.outflowBreakdown.drivers)}</td>
+                        <td className="py-3 px-4 text-right text-slate-600">{formatEUR(m.outflowBreakdown.lngFuel)}</td>
+                        <td className="py-3 px-4 text-right text-slate-600">{formatEUR(m.outflowBreakdown.tollsTelepass)}</td>
+                        <td className="py-3 px-4 text-right text-slate-600">{formatEUR(m.outflowBreakdown.leasesTotal)}</td>
+                        <td className="py-3 px-4 text-right">
                           <span className={`font-bold ${m.netCashFlow >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
                             {m.netCashFlow >= 0 ? '+' : ''}{formatEUR(m.netCashFlow)}
                           </span>
                         </td>
-                        <td className="py-3.5 px-4 text-right">
+                        <td className="py-3 px-4 text-right">
                           <span className={`font-black text-sm ${isDeficit ? 'text-rose-600' : 'text-emerald-700'}`}>
                             {formatEUR(m.closingCash)}
                           </span>
                         </td>
-                        <td className="py-3.5 px-4 text-center">
+                        <td className="py-3 px-4 text-center">
                           {isDeficit ? (
                             <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-rose-100 text-rose-800 border border-rose-300">
                               DEFICIT {formatEUR(Math.abs(m.closingCash))}
@@ -464,27 +659,106 @@ const CashFlowPage = () => {
                   <tr>
                     <td className="py-3.5 px-4">TOTALE ANNUO</td>
                     <td className="py-3.5 px-4 text-right text-slate-400">{formatEUR(initialCash)}</td>
-                    <td className="py-3.5 px-4 text-right text-emerald-400">{formatEUR(totalCashIn)}</td>
+                    <td className="py-3.5 px-4 text-right text-blue-300">{formatEUR(totalCashIn - annualAcciseCredit)}</td>
+                    <td className="py-3.5 px-4 text-right text-emerald-400">{formatEUR(annualAcciseCredit)}</td>
                     <td className="py-3.5 px-4 text-right text-rose-300">{formatEUR(totalCashOut)}</td>
-                    <td colSpan="3" className="py-3.5 px-4 text-center text-slate-400">Riepilogo Finanziario</td>
+                    <td colSpan="4" className="py-3.5 px-4 text-center text-slate-400">Chiusura Flussi Reali</td>
                     <td className="py-3.5 px-4 text-right text-emerald-300">
                       {netAnnualCash >= 0 ? '+' : ''}{formatEUR(netAnnualCash)}
                     </td>
                     <td className="py-3.5 px-4 text-right text-white font-black text-sm">{formatEUR(finalCashBalance)}</td>
-                    <td className="py-3.5 px-4 text-center text-amber-300">
-                      {peakFinancingRequired > 0 ? `Max Fabb.: ${formatEUR(peakFinancingRequired)}` : 'Coperto'}
+                    <td className="py-3.5 px-4 text-center text-amber-300 font-extrabold">
+                      {peakFinancingRequired > 0 ? `Max: ${formatEUR(peakFinancingRequired)}` : 'Coperto'}
                     </td>
                   </tr>
                 </tfoot>
               </table>
-            ) : (
+            )}
+
+            {activeTab === 'biweekly' && (
+              /* TABELLA CASH FLOW QUINDICINALE (24 PERIODI) */
+              <table className="min-w-full divide-y divide-slate-200 text-left text-xs">
+                <thead className="bg-slate-50 text-slate-700 font-bold uppercase tracking-wider">
+                  <tr>
+                    <th className="py-3 px-4">Periodo</th>
+                    <th className="py-3 px-4 text-right">Saldo Iniziale</th>
+                    <th className="py-3 px-4 text-right text-blue-700">(+) Incassi</th>
+                    <th className="py-3 px-4 text-right text-emerald-700">(+) Accise</th>
+                    <th className="py-3 px-4 text-right text-rose-700">(-) Uscite</th>
+                    <th className="py-3 px-4 text-right">Autisti Netto (G10)</th>
+                    <th className="py-3 px-4 text-right">Autisti INPS (G16)</th>
+                    <th className="py-3 px-4 text-right">LNG (G15/30)</th>
+                    <th className="py-3 px-4 text-right">Telepass</th>
+                    <th className="py-3 px-4 text-right">Noleggi</th>
+                    <th className="py-3 px-4 text-right font-black">Saldo Cassa</th>
+                    <th className="py-3 px-4 text-center">Allerta Cassa</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 font-medium">
+                  {biweeklyCashFlow.map((p) => {
+                    const isDeficit = p.closingCash < 0;
+                    return (
+                      <tr
+                        key={p.periodIndex}
+                        className={`hover:bg-slate-50 transition ${isDeficit ? 'bg-rose-50/50' : p.quindicina === 1 ? 'bg-slate-50/30' : ''}`}
+                      >
+                        <td className="py-2.5 px-4 font-bold text-slate-900">{p.label}</td>
+                        <td className="py-2.5 px-4 text-right text-slate-600">{formatEUR(p.openingCash)}</td>
+                        <td className="py-2.5 px-4 text-right font-bold text-blue-600">
+                          {p.inflowBreakdown.clients + p.inflowBreakdown.factoring > 0
+                            ? formatEUR(p.inflowBreakdown.clients + p.inflowBreakdown.factoring)
+                            : '-'}
+                        </td>
+                        <td className="py-2.5 px-4 text-right font-bold text-emerald-600">
+                          {p.inflowBreakdown.accise > 0 ? `+${formatEUR(p.inflowBreakdown.accise)}` : '-'}
+                        </td>
+                        <td className="py-2.5 px-4 text-right font-bold text-rose-600">{formatEUR(p.cashOut)}</td>
+                        <td className="py-2.5 px-4 text-right text-slate-600">
+                          {p.outflowBreakdown.driversNet > 0 ? formatEUR(p.outflowBreakdown.driversNet) : '-'}
+                        </td>
+                        <td className="py-2.5 px-4 text-right text-slate-600">
+                          {p.outflowBreakdown.driversInpsF24 > 0 ? formatEUR(p.outflowBreakdown.driversInpsF24) : '-'}
+                        </td>
+                        <td className="py-2.5 px-4 text-right text-slate-600">
+                          {p.outflowBreakdown.lngFuel > 0 ? formatEUR(p.outflowBreakdown.lngFuel) : '-'}
+                        </td>
+                        <td className="py-2.5 px-4 text-right text-slate-600">
+                          {p.outflowBreakdown.tollsTelepass > 0 ? formatEUR(p.outflowBreakdown.tollsTelepass) : '-'}
+                        </td>
+                        <td className="py-2.5 px-4 text-right text-slate-600">
+                          {p.outflowBreakdown.leases > 0 ? formatEUR(p.outflowBreakdown.leases) : '-'}
+                        </td>
+                        <td className="py-2.5 px-4 text-right">
+                          <span className={`font-black text-xs ${isDeficit ? 'text-rose-600' : 'text-emerald-700'}`}>
+                            {formatEUR(p.closingCash)}
+                          </span>
+                        </td>
+                        <td className="py-2.5 px-4 text-center">
+                          {isDeficit ? (
+                            <span className="px-2 py-0.5 rounded-full text-[9px] font-extrabold bg-rose-100 text-rose-800">
+                              SCOPERTO {formatEUR(Math.abs(p.closingCash))}
+                            </span>
+                          ) : (
+                            <span className="text-[10px] font-bold text-emerald-700">OK</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+
+            {activeTab === 'pnl' && (
+              /* TABELLA P&L ECONOMICO */
               <table className="min-w-full divide-y divide-slate-200 text-left text-xs">
                 <thead className="bg-slate-50 text-slate-700 font-bold uppercase tracking-wider">
                   <tr>
                     <th className="py-3 px-4">Mese</th>
                     <th className="py-3 px-4 text-center">Commesse</th>
                     <th className="py-3 px-4 text-right">Ricavi Budget</th>
-                    <th className="py-3 px-4 text-right">Costi Operativi</th>
+                    <th className="py-3 px-4 text-right">Carburante Netto</th>
+                    <th className="py-3 px-4 text-right">Credito Accise</th>
                     <th className="py-3 px-4 text-right">Canoni Noleggio</th>
                     <th className="py-3 px-4 text-right">Costi Totali</th>
                     <th className="py-3 px-4 text-right">M.O.L. (€)</th>
@@ -495,26 +769,28 @@ const CashFlowPage = () => {
                   {monthlyCashFlow.map((m) => {
                     const isNegMol = m.mol < 0;
                     const leaseTotal = m.costBreakdown.vehicleLease + m.costBreakdown.trailerLease;
-                    const opCost = m.cost - leaseTotal;
 
                     return (
                       <tr key={m.monthIndex} className="hover:bg-slate-50 transition">
-                        <td className="py-3.5 px-4 font-bold text-slate-900">{m.monthName}</td>
-                        <td className="py-3.5 px-4 text-center">
+                        <td className="py-3 px-4 font-bold text-slate-900">{m.monthName}</td>
+                        <td className="py-3 px-4 text-center">
                           <span className="px-2 py-0.5 rounded-full bg-slate-100 text-slate-800 text-[11px] font-bold">
                             {m.activeProjectsCount}
                           </span>
                         </td>
-                        <td className="py-3.5 px-4 text-right font-bold text-slate-900">{formatEUR(m.revenue)}</td>
-                        <td className="py-3.5 px-4 text-right text-slate-600">{formatEUR(opCost)}</td>
-                        <td className="py-3.5 px-4 text-right text-slate-600">{formatEUR(leaseTotal)}</td>
-                        <td className="py-3.5 px-4 text-right font-semibold text-slate-800">{formatEUR(m.cost)}</td>
-                        <td className="py-3.5 px-4 text-right font-black">
+                        <td className="py-3 px-4 text-right font-bold text-slate-900">{formatEUR(m.revenue)}</td>
+                        <td className="py-3 px-4 text-right text-slate-600">{formatEUR(m.costBreakdown.fuelNet)}</td>
+                        <td className="py-3 px-4 text-right text-emerald-600 font-bold">
+                          {m.acciseCredit > 0 ? `-${formatEUR(m.acciseCredit)}` : '-'}
+                        </td>
+                        <td className="py-3 px-4 text-right text-slate-600">{formatEUR(leaseTotal)}</td>
+                        <td className="py-3 px-4 text-right font-semibold text-slate-800">{formatEUR(m.cost)}</td>
+                        <td className="py-3 px-4 text-right font-black">
                           <span className={isNegMol ? 'text-rose-600' : 'text-emerald-600'}>
                             {formatEUR(m.mol)}
                           </span>
                         </td>
-                        <td className="py-3.5 px-4 text-right">
+                        <td className="py-3 px-4 text-right">
                           <span className={`px-2 py-0.5 rounded font-bold ${
                             isNegMol ? 'bg-rose-100 text-rose-800' : m.molPercent < 15 ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800'
                           }`}>
@@ -530,7 +806,7 @@ const CashFlowPage = () => {
                     <td className="py-3.5 px-4">TOTALE ANNUO P&L</td>
                     <td className="py-3.5 px-4 text-center">-</td>
                     <td className="py-3.5 px-4 text-right text-emerald-400">{formatEUR(annualRevenue)}</td>
-                    <td colSpan="2" className="py-3.5 px-4 text-center text-slate-400">Costi Totali di Esercizio</td>
+                    <td colSpan="3" className="py-3.5 px-4 text-center text-slate-400">Costi Totali di Esercizio</td>
                     <td className="py-3.5 px-4 text-right text-rose-300">{formatEUR(annualCost)}</td>
                     <td className="py-3.5 px-4 text-right text-emerald-300 text-sm font-black">{formatEUR(annualMol)}</td>
                     <td className="py-3.5 px-4 text-right text-white font-black">{formatPercent(annualMolPercent)}</td>
@@ -545,21 +821,14 @@ const CashFlowPage = () => {
         <div className="bg-blue-50 border border-blue-200 rounded-2xl p-6 text-xs text-blue-900 space-y-2">
           <div className="flex items-center space-x-2 font-bold text-sm text-blue-950">
             <HelpCircle className="w-5 h-5 text-blue-600" />
-            <h4>Perché si crea il Fabbisogno Finanziario (Working Capital Gap) in FOUR:</h4>
+            <h4>Come interpretare i disallineamenti di cassa in FOUR:</h4>
           </div>
           <p className="leading-relaxed">
-            Nei contratti di logistica e trasporto, i grandi committenti (es. Decathlon, STEF, Camst, BRT) saldano le fatture tipicamente a <strong>60 giorni data fattura fine mese</strong> (DSO = 60-90 gg).
-            Al contempo, i costi di FOUR devono essere anticipati: stipendi autisti al 10 del mese successivo, terzisti a 15-30 gg, canoni di noleggio veicoli all'inizio del mese e rifornimenti energia/gasolio a 30 gg (DPO = 15-30 gg).
+            I grandi clienti (Decathlon, Camst, BRT, K&N) pagano a <strong>60-90 giorni</strong> (DSO), mentre i noleggi escono il <strong>10 o 30 del mese</strong>, il carburante LNG a <strong>30 gg quindicinale</strong> (15 e 30 del mese succ.) e il Telepass a <strong>15 gg quindicinale</strong> (30 del mese e 15 del mese succ.).
           </p>
           <p className="leading-relaxed font-semibold">
-            Questo disallineamento temporale di 30-45 giorni genera il picco di cassa negativo evidenziato nel grafico.
-            Per sostenere l'avvio di nuovi progetti senza tensioni di liquidità, FOUR può:
+            La vista quindicinale permette di vedere esattamente in quale giorno del mese il conto rischia di andare in rosso, permettendo alla direzione di FOUR di calibrare il fido bancario o anticipare le fatture prima del giorno 10 o 15.
           </p>
-          <ul className="list-disc pl-5 space-y-1 font-medium">
-            <li>Attivare linee di credito bancarie o affidamenti su anticipo fatture (castelletto SBF / factoring pro-soluto all'80%).</li>
-            <li>Negoziare termini di incasso a 30 gg o acconti periodici con i nuovi clienti.</li>
-            <li>Allineare i pagamenti dei padroncini/terzisti a 30-45 gg fine mese invece che a 15 gg.</li>
-          </ul>
         </div>
       </div>
     </div>

@@ -210,6 +210,8 @@ const SimulationPage = () => {
       paymentTermsClient,
       paymentTermsSuppliers,
       paymentTermsLease: simulationResult.vehicle.leasePaymentTerms !== undefined ? simulationResult.vehicle.leasePaymentTerms : 0,
+      leasePaymentTiming: simulationResult.vehicle.leasePaymentTiming || 'M1_D10',
+      acciseRecoveryEligible: true,
       depositAmount: 0,
       cashAdvanceRequired: +simulationResult.workingCapitalNeed.toFixed(2),
       notes: `Preventivo generato dal simulatore con margine target ${simulationResult.molPercent}%`
