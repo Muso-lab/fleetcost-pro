@@ -189,7 +189,8 @@ const CashFlowPage = () => {
       'Gomme (€)': m.costBreakdown.tires,
       'Noleggi Mezzi (€)': m.costBreakdown.vehicleLease,
       'Noleggi Rimorchi (€)': m.costBreakdown.trailerLease,
-      'Margine Partner (€)': m.costBreakdown.partnerMargin,
+      'Facchinaggio (€)': m.costBreakdown.porterage || 0,
+      'Vettore Terzo / Partner (€)': m.costBreakdown.partnerMargin,
       'M.O.L. (€)': m.mol,
       'M.O.L. (%)': `${m.molPercent.toFixed(1)}%`
     }));

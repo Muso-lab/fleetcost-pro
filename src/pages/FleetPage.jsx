@@ -85,6 +85,8 @@ const FleetPage = () => {
 
       setFormData({
         name: item.name || '',
+        plate: item.plate || '',
+        code: item.code || '',
         category: item.category || 'trattore',
         categoryLabel: item.categoryLabel || '',
         fuelTypeId: item.fuelTypeId || 'elettrico',
@@ -112,6 +114,8 @@ const FleetPage = () => {
       if (type === 'vehicles') {
         setFormData({
           name: '',
+          plate: '',
+          code: '',
           category: 'trattore',
           categoryLabel: 'Trattore Stradale 4x2',
           fuelTypeId: 'elettrico',
@@ -138,6 +142,8 @@ const FleetPage = () => {
       } else {
         setFormData({
           name: '',
+          plate: '',
+          code: '',
           category: 'refrigerato',
           categoryLabel: 'Semirimorchio Frigo',
           fuelTypeId: 'azoto',
@@ -221,6 +227,9 @@ const FleetPage = () => {
   const itemsToDisplay = activeTab === 'vehicles' ? fleet : trailers;
   const filteredItems = itemsToDisplay.filter(item => {
     const matchesSearch = item.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (item.plate && item.plate.toLowerCase().includes(searchQuery.toLowerCase())) ||
+      (item.code && item.code.toLowerCase().includes(searchQuery.toLowerCase())) ||
+      (item.lessorName && item.lessorName.toLowerCase().includes(searchQuery.toLowerCase())) ||
       (item.notes && item.notes.toLowerCase().includes(searchQuery.toLowerCase())) ||
       (item.assignedProject && item.assignedProject.toLowerCase().includes(searchQuery.toLowerCase()));
     const matchesStatus = statusFilter === 'all' || item.status === statusFilter;
@@ -449,9 +458,21 @@ const FleetPage = () => {
               <div>
                 <div className="flex items-start justify-between gap-2 mb-3">
                   <div className="flex-1">
-                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                      {item.categoryLabel || item.category}
-                    </span>
+                    <div className="flex items-center flex-wrap gap-1.5 mb-1">
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                        {item.categoryLabel || item.category}
+                      </span>
+                      {item.code && (
+                        <span className="text-[10px] font-bold text-emerald-800 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
+                          {item.code}
+                        </span>
+                      )}
+                      {item.plate && (
+                        <span className="font-mono font-bold text-xs bg-slate-900 text-amber-300 px-2 py-0.5 rounded shadow-sm border border-slate-700 tracking-wider">
+                          {item.plate}
+                        </span>
+                      )}
+                    </div>
                     <h3 className="text-base font-bold text-slate-900 leading-snug">{item.name}</h3>
                   </div>
                   <div className="flex items-center space-x-1">
@@ -648,16 +669,28 @@ const FleetPage = () => {
                 </div>
               )}
 
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">Nome / Modello Mezzo *</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="Es. Trattore E-Truck Scania BEV 4x2"
-                  value={formData.name}
-                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 font-bold"
-                />
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <div className="md:col-span-2">
+                  <label className="block font-semibold text-slate-700 mb-1">Nome / Modello Mezzo *</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Es. Trattore E-Truck Scania BEV 4x2"
+                    value={formData.name}
+                    onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 font-bold"
+                  />
+                </div>
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Targa {activeTab === 'vehicles' ? 'Automezzo' : 'Semirimorchio'}</label>
+                  <input
+                    type="text"
+                    placeholder="Es. GK 843 MH"
+                    value={formData.plate || ''}
+                    onChange={(e) => setFormData({ ...formData, plate: e.target.value.toUpperCase() })}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 font-mono font-bold uppercase tracking-wider bg-slate-50"
+                  />
+                </div>
               </div>
 
               <div className="grid grid-cols-2 gap-3">

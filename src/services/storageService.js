@@ -2,6 +2,7 @@
 // Garantisce il funzionamento offline / standalone al 100% in locale
 
 import { DEFAULT_FLEET, DEFAULT_TRAILERS, DEFAULT_PROJECTS, DEFAULT_SETTINGS } from '../data/initialData';
+import { recalculateProjectCost } from '../utils/cashFlowCalculations';
 
 const STORAGE_KEYS = {
   FLEET: 'four_fleet_vehicles',
@@ -69,9 +70,37 @@ class StorageService {
     if (index !== -1) {
       fleet[index] = { ...fleet[index], ...vehicleData, updatedAt: new Date().toISOString() };
       this.saveFleet(fleet);
+      // Auto-sincronizzazione reattiva: aggiorna all'istante le commesse associate
+      this.syncProjectsForVehicle(fleet[index]);
       return fleet[index];
     }
     return null;
+  }
+
+  syncProjectsForVehicle(vehicle) {
+    try {
+      const data = localStorage.getItem(STORAGE_KEYS.PROJECTS);
+      if (!data) return;
+      const projects = JSON.parse(data);
+      const fleet = this.getFleet();
+      const trailers = this.getTrailers();
+      const settings = this.getSettings();
+
+      let hasChanges = false;
+      const updated = projects.map(p => {
+        if (p.vehicleId === vehicle.id) {
+          hasChanges = true;
+          return recalculateProjectCost(p, fleet, trailers, settings);
+        }
+        return p;
+      });
+
+      if (hasChanges) {
+        localStorage.setItem(STORAGE_KEYS.PROJECTS, JSON.stringify(updated));
+      }
+    } catch (e) {
+      console.error('Errore sincronizzazione commesse con veicolo:', e);
+    }
   }
 
   deleteVehicle(id) {
@@ -114,9 +143,37 @@ class StorageService {
     if (index !== -1) {
       trailers[index] = { ...trailers[index], ...trailerData, updatedAt: new Date().toISOString() };
       this.saveTrailers(trailers);
+      // Auto-sincronizzazione reattiva: aggiorna all'istante le commesse associate
+      this.syncProjectsForTrailer(trailers[index]);
       return trailers[index];
     }
     return null;
+  }
+
+  syncProjectsForTrailer(trailer) {
+    try {
+      const data = localStorage.getItem(STORAGE_KEYS.PROJECTS);
+      if (!data) return;
+      const projects = JSON.parse(data);
+      const fleet = this.getFleet();
+      const trailers = this.getTrailers();
+      const settings = this.getSettings();
+
+      let hasChanges = false;
+      const updated = projects.map(p => {
+        if (p.trailerId === trailer.id) {
+          hasChanges = true;
+          return recalculateProjectCost(p, fleet, trailers, settings);
+        }
+        return p;
+      });
+
+      if (hasChanges) {
+        localStorage.setItem(STORAGE_KEYS.PROJECTS, JSON.stringify(updated));
+      }
+    } catch (e) {
+      console.error('Errore sincronizzazione commesse con rimorchio:', e);
+    }
   }
 
   deleteTrailer(id) {
@@ -129,7 +186,32 @@ class StorageService {
   getProjects() {
     try {
       const data = localStorage.getItem(STORAGE_KEYS.PROJECTS);
-      return data ? JSON.parse(data) : DEFAULT_PROJECTS;
+      const projects = data ? JSON.parse(data) : DEFAULT_PROJECTS;
+      const fleet = this.getFleet();
+      const trailers = this.getTrailers();
+      const settings = this.getSettings();
+
+      // Sincronizzazione automatica se i canoni di noleggio sono variati
+      let needsSave = false;
+      const synchronized = projects.map(p => {
+        const veh = fleet.find(v => v.id === p.vehicleId);
+        const trl = trailers.find(t => t.id === p.trailerId);
+        if (veh || trl) {
+          const expectedVLease = veh && p.workingDaysMonth > 0 ? +(veh.monthlyLease / p.workingDaysMonth).toFixed(2) : p.vehicleLeaseDaily;
+          const expectedTLease = trl && p.workingDaysMonth > 0 ? +(trl.monthlyLease / p.workingDaysMonth).toFixed(2) : p.trailerLeaseDaily;
+          if (p.managementType === 'D' && (expectedVLease !== p.vehicleLeaseDaily || expectedTLease !== p.trailerLeaseDaily)) {
+            needsSave = true;
+            return recalculateProjectCost(p, fleet, trailers, settings);
+          }
+        }
+        return p;
+      });
+
+      if (needsSave) {
+        localStorage.setItem(STORAGE_KEYS.PROJECTS, JSON.stringify(synchronized));
+      }
+
+      return synchronized;
     } catch (e) {
       console.error('Errore lettura commesse:', e);
       return DEFAULT_PROJECTS;

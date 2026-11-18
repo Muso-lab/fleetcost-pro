@@ -358,7 +358,7 @@ const SimulationPage = () => {
                 >
                   {fleet.map(v => (
                     <option key={v.id} value={v.id}>
-                      {v.name} ({formatEUR(v.monthlyLease)}/m - {v.fuelTypeId})
+                      {v.name} {v.plate ? `[${v.plate}]` : ''} ({formatEUR(v.monthlyLease)}/m - {v.fuelTypeId})
                     </option>
                   ))}
                 </select>
@@ -377,7 +377,7 @@ const SimulationPage = () => {
                   <option value="">-- Nessun Semirimorchio --</option>
                   {trailers.map(t => (
                     <option key={t.id} value={t.id}>
-                      {t.name} ({formatEUR(t.monthlyLease)}/m)
+                      {t.name} {t.plate ? `[${t.plate}]` : ''} ({formatEUR(t.monthlyLease)}/m)
                     </option>
                   ))}
                 </select>

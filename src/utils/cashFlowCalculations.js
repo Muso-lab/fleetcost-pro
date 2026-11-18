@@ -113,6 +113,7 @@ export const calculateAnnualBudgetAndCashFlow = (projects, options = {}) => {
       vehicleLease: 0,
       trailerLease: 0,
       partnerMargin: 0,
+      porterage: 0,
       otherCosts: 0
     },
     activeProjectsCount: 0
@@ -204,6 +205,7 @@ export const calculateAnnualBudgetAndCashFlow = (projects, options = {}) => {
         const tLeaseC = (Number(project.trailerLeaseDaily) || 0) * workingDays;
         const totalLeaseC = vLeaseC + tLeaseC;
         const partC = (Number(project.partnerMarginDaily) || 0) * workingDays;
+        const porterageC = (Number(project.porterageDaily) || 0) * workingDays;
         const otherC = (Number(project.otherCostsDaily) || 0) * workingDays;
 
         // Calcolo credito accise per questa commessa
@@ -222,7 +224,7 @@ export const calculateAnnualBudgetAndCashFlow = (projects, options = {}) => {
         }
 
         const fuelNetC = Math.max(0, fuelGrossC - acciseCreditMonthly);
-        const costPnl = driverC + (acciseRecoveryEnabled ? fuelNetC : fuelGrossC) + tollsC + tiresC + totalLeaseC + partC + otherC;
+        const costPnl = driverC + (acciseRecoveryEnabled ? fuelNetC : fuelGrossC) + tollsC + tiresC + totalLeaseC + partC + porterageC + otherC;
         const molPnl = rev - costPnl;
 
         // 1. P&L Competenza Mensile
@@ -242,6 +244,7 @@ export const calculateAnnualBudgetAndCashFlow = (projects, options = {}) => {
         monthlyPnl[m].costBreakdown.vehicleLease += vLeaseC;
         monthlyPnl[m].costBreakdown.trailerLease += tLeaseC;
         monthlyPnl[m].costBreakdown.partnerMargin += partC;
+        monthlyPnl[m].costBreakdown.porterage += porterageC;
         monthlyPnl[m].costBreakdown.otherCosts += otherC;
 
         // Accumulo per trimestre per recupero accise F24 (Q1=m0..2, Q2=m3..5, Q3=m6..8, Q4=m9..11)
@@ -383,8 +386,8 @@ export const calculateAnnualBudgetAndCashFlow = (projects, options = {}) => {
           biweeklyOutflowBreakdown[biweeklyLeasePeriod].leases += totalLeaseC;
         }
 
-        // E. ALTRI FORNITORI, GOMME & TERZISTI: Pagati a DPO
-        const otherSuppliersC = tiresC + partC + otherC;
+        // E. ALTRI FORNITORI, GOMME, FACCHINAGGIO & TERZISTI: Pagati a DPO
+        const otherSuppliersC = tiresC + partC + porterageC + otherC;
         const otherSuppliersMonth = m + supplierDelayMonths;
         if (otherSuppliersMonth < totalMonthsHorizon) {
           cashOutflows[otherSuppliersMonth] += otherSuppliersC;
@@ -637,11 +640,12 @@ export const calculateSingleProjectMetrics = (project) => {
   const tiresCost = Number(project.tiresDaily) || 0;
   const otherCost = Number(project.otherCostsDaily) || 0;
   const partnerMargin = Number(project.partnerMarginDaily) || 0;
+  const porterageCost = Number(project.porterageDaily) || 0;
   const vehicleLease = Number(project.vehicleLeaseDaily) || 0;
   const trailerLease = Number(project.trailerLeaseDaily) || 0;
 
   const totalCostDaily = driverCost + fuelCost + tollsCost + tiresCost + otherCost +
-    partnerMargin + vehicleLease + trailerLease;
+    partnerMargin + porterageCost + vehicleLease + trailerLease;
 
   const revenueDaily = Number(project.revenueDaily) || 0;
   const molDaily = revenueDaily - totalCostDaily;
@@ -743,5 +747,153 @@ export const calculateTireCostPerKm = (vehicle, trailer, options = {}) => {
     vehicleRate: +vehicleRate.toFixed(4),
     trailerRate: +trailerRate.toFixed(4),
     totalRate: +(total > 0 ? total : 0.04).toFixed(4)
+  };
+};
+
+/**
+ * RICALCOLO DINAMICO COMMESSA: Sincronizza i costi al variare di:
+ * - Canone e parametri del mezzo associato (es. da 7.000€ a 5.200€ -> 208€/gg su 25gg)
+ * - Chilometraggio (consumo Bio-LNG/elettrico, pedaggi autostradali, pneumatici)
+ * - Modalità di gestione (Diretta "D" vs Terzi/Fornitore "T")
+ * - Facchinaggio e canone semirimorchio
+ */
+export const recalculateProjectCost = (project, fleet = [], trailers = [], settings = {}) => {
+  const vehicle = fleet.find(v => v.id === project.vehicleId);
+  const trailer = trailers.find(t => t.id === project.trailerId);
+
+  const workingDays = Number(project.workingDaysMonth) || 22;
+  const km = Number(project.kmDaily) || 0;
+  const managementType = project.managementType || 'D';
+
+  const fuelTypes = settings.fuelTypes || [];
+  const standardCosts = settings.standardCosts || {};
+  const tireParameters = settings.tireParameters || {};
+
+  let driverCostDaily = 0;
+  let fuelCostDaily = 0;
+  let tollsDaily = 0;
+  let tiresDaily = 0;
+  let vehicleLeaseDaily = 0;
+  let trailerLeaseDaily = 0;
+  let partnerMarginDaily = Number(project.partnerMarginDaily) || 0;
+  let porterageDaily = Number(project.porterageDaily) || 0;
+  let otherCostsDaily = Number(project.otherCostsDaily) || 0;
+
+  if (managementType === 'T') {
+    // MODALITÀ FORNITORE / TERZISTA ("T"):
+    // Corrispettivo fornitore (partnerMarginDaily) + Quota semirimorchio FOUR + Facchinaggio
+    // I costi diretti di autista, trattore, carburante, pedaggi e gomme sono a carico del vettore!
+    driverCostDaily = Number(project.overrideDriverCostDaily || 0);
+    fuelCostDaily = Number(project.overrideFuelCostDaily || 0);
+    tollsDaily = Number(project.overrideTollsDaily || 0);
+    tiresDaily = Number(project.overrideTiresDaily || 0);
+    vehicleLeaseDaily = Number(project.overrideVehicleLeaseDaily || 0);
+
+    // Semirimorchio FOUR messo a disposizione: quota di ammortamento/canone giornaliero
+    if (trailer && workingDays > 0) {
+      trailerLeaseDaily = +(trailer.monthlyLease / workingDays).toFixed(2);
+    } else {
+      trailerLeaseDaily = Number(project.trailerLeaseDaily) || 0;
+    }
+  } else {
+    // GESTIONE DIRETTA FOUR ("D"):
+    // 1. Quota giornaliera veicolo da canone mensile anagrafica: canone / giorni lavorativi
+    if (vehicle && workingDays > 0) {
+      vehicleLeaseDaily = +(vehicle.monthlyLease / workingDays).toFixed(2);
+    } else {
+      vehicleLeaseDaily = Number(project.vehicleLeaseDaily) || 0;
+    }
+
+    // 2. Quota giornaliera semirimorchio da canone mensile: canone / giorni lavorativi
+    if (trailer && workingDays > 0) {
+      trailerLeaseDaily = +(trailer.monthlyLease / workingDays).toFixed(2);
+    } else {
+      trailerLeaseDaily = Number(project.trailerLeaseDaily) || 0;
+    }
+
+    // 3. Ricalcolo dinamico Carburante al variare dei Km
+    if (vehicle && km > 0) {
+      const fuelType = fuelTypes.find(f => f.id === vehicle.fuelTypeId);
+      const fuelPrice = fuelType ? fuelType.price : (vehicle.fuelTypeId === 'biolng' ? 1.18 : 0.36);
+
+      if (vehicle.fuelTypeId === 'elettrico') {
+        const consumptionKwhKm = vehicle.avgConsumption || 1.18;
+        fuelCostDaily = +(km * consumptionKwhKm * fuelPrice).toFixed(2);
+      } else if (vehicle.fuelTypeId === 'biolng') {
+        // Se c'è una resa (es. 4.2 km/kg per trattore Volvo Bio-LNG)
+        if (vehicle.yieldKmPerUnit && vehicle.yieldKmPerUnit > 0) {
+          fuelCostDaily = +((km / vehicle.yieldKmPerUnit) * fuelPrice).toFixed(2);
+        } else {
+          const consumptionKg100 = vehicle.avgConsumption || 29.5;
+          fuelCostDaily = +(((consumptionKg100) / 100) * km * fuelPrice).toFixed(2);
+        }
+      } else {
+        const consumptionL100 = vehicle.avgConsumption || 30.0;
+        fuelCostDaily = +(((consumptionL100) / 100) * km * fuelPrice).toFixed(2);
+      }
+    } else {
+      fuelCostDaily = Number(project.fuelCostDaily) || 0;
+    }
+
+    // 4. Ricalcolo dinamico Pedaggi Autostrada al variare dei Km (70% autostrada)
+    if (km > 0) {
+      const hPercent = project.highwayPercent !== undefined ? project.highwayPercent : 70;
+      const tollRate = standardCosts.tollRateHighwayKm || 0.12;
+      tollsDaily = +((km * (hPercent / 100)) * tollRate).toFixed(2);
+    } else {
+      tollsDaily = Number(project.tollsDaily) || 0;
+    }
+
+    // 5. Ricalcolo dinamico Pneumatici al variare dei Km (50k BEV / 80k rimorchio)
+    if (km > 0) {
+      const tireCalc = calculateTireCostPerKm(vehicle, trailer, tireParameters);
+      tiresDaily = +(km * tireCalc.totalRate).toFixed(2);
+    } else {
+      tiresDaily = Number(project.tiresDaily) || 0;
+    }
+
+    // 6. Autista dipendente CCNL
+    driverCostDaily = Number(project.driverCostDaily) || 220;
+  }
+
+  // Costo totale giornaliero
+  const totalCostDaily = +(
+    driverCostDaily +
+    fuelCostDaily +
+    tollsDaily +
+    tiresDaily +
+    vehicleLeaseDaily +
+    trailerLeaseDaily +
+    partnerMarginDaily +
+    porterageDaily +
+    otherCostsDaily
+  ).toFixed(2);
+
+  const revenueDaily = Number(project.revenueDaily) || 0;
+  const molDaily = +(revenueDaily - totalCostDaily).toFixed(2);
+
+  const monthlyCost = +(totalCostDaily * workingDays).toFixed(2);
+  const monthlyRevenue = +(revenueDaily * workingDays).toFixed(2);
+  const monthlyMol = +(monthlyRevenue - monthlyCost).toFixed(2);
+  const molPercent = monthlyRevenue > 0 ? +((monthlyMol / monthlyRevenue) * 100).toFixed(2) : 0;
+
+  return {
+    ...project,
+    driverCostDaily,
+    fuelCostDaily,
+    tollsDaily,
+    tiresDaily,
+    vehicleLeaseDaily,
+    trailerLeaseDaily,
+    partnerMarginDaily,
+    porterageDaily,
+    otherCostsDaily,
+    totalCostDaily,
+    revenueDaily,
+    molDaily,
+    monthlyCost,
+    monthlyRevenue,
+    monthlyMol,
+    molPercent
   };
 };

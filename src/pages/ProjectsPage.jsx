@@ -7,7 +7,8 @@ import {
   calculateSingleProjectMetrics,
   LEASE_PAYMENT_TIMINGS,
   normalizeLeaseTiming,
-  calculateTireCostPerKm
+  calculateTireCostPerKm,
+  recalculateProjectCost
 } from '../utils/cashFlowCalculations';
 import {
   Briefcase,
@@ -61,7 +62,8 @@ const ProjectsPage = () => {
     tollsDaily: 35,
     tiresDaily: 12,
     otherCostsDaily: 0,
-    partnerMarginDaily: 20,
+    partnerMarginDaily: 0,
+    porterageDaily: 0,
     vehicleLeaseDaily: 200,
     trailerLeaseDaily: 35,
     revenueDaily: 750,
@@ -95,6 +97,25 @@ const ProjectsPage = () => {
     handleOpenModal(null, v);
   };
 
+  // Funzione unificata di ricalcolo automatico e reattivo
+  const applyAutoRecalculation = (partialData) => {
+    const merged = { ...formData, ...partialData };
+    const settings = storageService.getSettings();
+    const recalculated = recalculateProjectCost(merged, fleet, trailers, settings);
+    return {
+      ...merged,
+      driverCostDaily: recalculated.driverCostDaily,
+      fuelCostDaily: recalculated.fuelCostDaily,
+      tollsDaily: recalculated.tollsDaily,
+      tiresDaily: recalculated.tiresDaily,
+      vehicleLeaseDaily: recalculated.vehicleLeaseDaily,
+      trailerLeaseDaily: recalculated.trailerLeaseDaily,
+      partnerMarginDaily: recalculated.partnerMarginDaily,
+      porterageDaily: recalculated.porterageDaily,
+      otherCostsDaily: recalculated.otherCostsDaily
+    };
+  };
+
   const handleOpenModal = (project = null, preselectedVehicle = null) => {
     if (project) {
       setEditingProject(project);
@@ -110,12 +131,13 @@ const ProjectsPage = () => {
         managementType: project.managementType || 'D',
         vehicleId: project.vehicleId || '',
         trailerId: project.trailerId || '',
-        driverCostDaily: project.driverCostDaily || 220,
+        driverCostDaily: project.driverCostDaily || 0,
         fuelCostDaily: project.fuelCostDaily || 0,
         tollsDaily: project.tollsDaily || 0,
         tiresDaily: project.tiresDaily || 0,
         otherCostsDaily: project.otherCostsDaily || 0,
         partnerMarginDaily: project.partnerMarginDaily || 0,
+        porterageDaily: project.porterageDaily || 0,
         vehicleLeaseDaily: project.vehicleLeaseDaily || 0,
         trailerLeaseDaily: project.trailerLeaseDaily || 0,
         revenueDaily: project.revenueDaily || 0,
@@ -129,9 +151,7 @@ const ProjectsPage = () => {
       setEditingProject(null);
       const defaultVeh = preselectedVehicle || fleet[0];
       const workingDays = 22;
-      const vLease = defaultVeh && defaultVeh.monthlyLease ? +(defaultVeh.monthlyLease / workingDays).toFixed(2) : 200;
-
-      setFormData({
+      const initialProject = {
         code: 'PRJ-' + Math.floor(100 + Math.random() * 900),
         name: defaultVeh ? `Servizio con ${defaultVeh.name}` : '',
         client: '',
@@ -148,8 +168,9 @@ const ProjectsPage = () => {
         tollsDaily: 30,
         tiresDaily: 12,
         otherCostsDaily: 0,
-        partnerMarginDaily: 20,
-        vehicleLeaseDaily: vLease,
+        partnerMarginDaily: defaultVeh?.ownershipType === 'terzi' ? 600 : 0,
+        porterageDaily: 0,
+        vehicleLeaseDaily: defaultVeh && defaultVeh.monthlyLease ? +(defaultVeh.monthlyLease / workingDays).toFixed(2) : 208,
         trailerLeaseDaily: 0,
         revenueDaily: 750,
         paymentTermsClient: 60,
@@ -157,6 +178,12 @@ const ProjectsPage = () => {
         paymentTermsLease: 30,
         depositAmount: 0,
         notes: ''
+      };
+      const settings = storageService.getSettings();
+      const recalculated = recalculateProjectCost(initialProject, fleet, trailers, settings);
+      setFormData({
+        ...initialProject,
+        ...recalculated
       });
     }
     setShowModal(true);
@@ -164,99 +191,43 @@ const ProjectsPage = () => {
 
   const handleVehicleChangeInModal = (vId) => {
     const selectedVeh = fleet.find(v => v.id === vId);
-    if (selectedVeh) {
-      const workingDays = formData.workingDaysMonth || 22;
-      const vLease = selectedVeh.monthlyLease ? +(selectedVeh.monthlyLease / workingDays).toFixed(2) : 0;
-      setFormData(prev => ({
-        ...prev,
-        vehicleId: vId,
-        vehicleLeaseDaily: vLease,
-        managementType: selectedVeh.ownershipType === 'terzi' ? 'T' : prev.managementType,
-        paymentTermsLease: selectedVeh.leasePaymentTerms !== undefined ? selectedVeh.leasePaymentTerms : prev.paymentTermsLease,
-        leasePaymentTiming: selectedVeh.leasePaymentTiming || normalizeLeaseTiming(selectedVeh)
-      }));
-    }
+    const newTiming = selectedVeh ? (selectedVeh.leasePaymentTiming || normalizeLeaseTiming(selectedVeh)) : formData.leasePaymentTiming;
+    const newTerms = selectedVeh && selectedVeh.leasePaymentTerms !== undefined ? selectedVeh.leasePaymentTerms : formData.paymentTermsLease;
+    const isTerzi = selectedVeh?.ownershipType === 'terzi';
+    const newMgmt = isTerzi ? 'T' : formData.managementType;
+    const updated = applyAutoRecalculation({
+      vehicleId: vId,
+      managementType: newMgmt,
+      leasePaymentTiming: newTiming,
+      paymentTermsLease: newTerms
+    });
+    setFormData(updated);
+  };
+
+  const handleTrailerChangeInModal = (tId) => {
+    const updated = applyAutoRecalculation({ trailerId: tId });
+    setFormData(updated);
+  };
+
+  const handleKmChange = (km) => {
+    const updated = applyAutoRecalculation({ kmDaily: km });
+    setFormData(updated);
+  };
+
+  const handleWorkingDaysChange = (days) => {
+    const updated = applyAutoRecalculation({ workingDaysMonth: days });
+    setFormData(updated);
+  };
+
+  const handleManagementTypeChange = (type) => {
+    const updated = applyAutoRecalculation({ managementType: type });
+    setFormData(updated);
   };
 
   // Assistente di Calcolo Automatico dei costi della commessa da parametri fisici
   const handleAutoCalculateCosts = () => {
-    const vehicle = fleet.find(v => v.id === formData.vehicleId);
-    const trailer = trailers.find(t => t.id === formData.trailerId);
-    const settings = storageService.getSettings();
-
-    const km = Number(formData.kmDaily) || 0;
-    const workingDays = Number(formData.workingDaysMonth) || 22;
-
-    // 1. Carburante / Energia
-    let fuelDaily = 0;
-    if (vehicle) {
-      const fuelType = settings.fuelTypes.find(f => f.id === vehicle.fuelTypeId);
-      const price = fuelType ? fuelType.price : 1.10;
-      if (vehicle.fuelTypeId === 'elettrico') {
-        fuelDaily = +( (vehicle.avgConsumption || 1.2) * km * price ).toFixed(2);
-      } else {
-        fuelDaily = +( ((vehicle.avgConsumption || 30) / 100) * km * price ).toFixed(2);
-      }
-    }
-
-    // 2. Pedaggi (stima 70% autostrada a 0.12 €/km)
-    const tollsDaily = +(km * 0.70 * 0.12).toFixed(2);
-
-    // 3. Gomme con durate differenziate FOUR (80k semirimorchi, 50k trattori BEV, 80k motrici BEV)
-    const tireCalc = calculateTireCostPerKm(vehicle, trailer, {
-      costPerTire: settings.tireParameters?.costPerTire || 450,
-      lifeTrailer: settings.tireParameters?.lifeKmTrailer || 80000,
-      lifeTractorElectric: settings.tireParameters?.lifeKmTractorElectric || 50000,
-      lifeRigidElectric: settings.tireParameters?.lifeKmRigidElectric || 80000,
-      lifeTractorBiolng: settings.tireParameters?.lifeKmTractorBiolng || 85000
-    });
-    const tiresDaily = +(km * tireCalc.totalRate).toFixed(2);
-
-    // 4. Autista
-    let driverDaily = 220;
-    if (vehicle) {
-      if (vehicle.category === 'motrice') driverDaily = 180;
-      if (vehicle.category === 'furgone') driverDaily = 140;
-    }
-
-    // 5. Noleggi ripartiti
-    const vLease = vehicle && workingDays > 0 ? +(vehicle.monthlyLease / workingDays).toFixed(2) : formData.vehicleLeaseDaily;
-    const tLease = trailer && workingDays > 0 ? +(trailer.monthlyLease / workingDays).toFixed(2) : 0;
-
-    // 6. Margine partner terzista (10% se Terzi)
-    const partnerDaily = formData.managementType === 'T'
-      ? +((driverDaily + fuelDaily + tollsDaily + tiresDaily) * 0.10).toFixed(2)
-      : 0;
-
-    setFormData(prev => ({
-      ...prev,
-      fuelCostDaily: fuelDaily,
-      tollsDaily: tollsDaily,
-      tiresDaily: tiresDaily,
-      driverCostDaily: driverDaily,
-      vehicleLeaseDaily: vLease,
-      trailerLeaseDaily: tLease,
-      partnerMarginDaily: partnerDaily
-    }));
-  };
-
-  const handleTrailerChangeInModal = (tId) => {
-    const selectedTrailer = trailers.find(t => t.id === tId);
-    if (selectedTrailer) {
-      const workingDays = formData.workingDaysMonth || 22;
-      const tLease = selectedTrailer.monthlyLease ? +(selectedTrailer.monthlyLease / workingDays).toFixed(2) : 0;
-      setFormData(prev => ({
-        ...prev,
-        trailerId: tId,
-        trailerLeaseDaily: tLease
-      }));
-    } else {
-      setFormData(prev => ({
-        ...prev,
-        trailerId: '',
-        trailerLeaseDaily: 0
-      }));
-    }
+    const updated = applyAutoRecalculation({});
+    setFormData(updated);
   };
 
   const handleSaveProject = (e) => {
@@ -499,6 +470,7 @@ const ProjectsPage = () => {
                   const isNegative = metrics.monthlyMol < 0;
                   const isLowMargin = !isNegative && metrics.molPercent < 15;
                   const assignedVeh = fleet.find(v => v.id === project.vehicleId);
+                  const assignedTrailer = trailers.find(t => t.id === project.trailerId);
 
                   return (
                     <tr
@@ -542,11 +514,42 @@ const ProjectsPage = () => {
                       </td>
 
                       <td className="py-3.5 px-4">
-                        <div className="text-slate-800 font-medium truncate max-w-[180px]" title={assignedVeh?.name}>
-                          {assignedVeh ? assignedVeh.name : 'Mezzo non assegnato'}
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="text-slate-800 font-semibold truncate max-w-[150px]" title={assignedVeh?.name}>
+                            {assignedVeh ? assignedVeh.name : 'Mezzo non assegnato'}
+                          </span>
+                          {assignedVeh?.plate && (
+                            <span className="font-mono font-bold text-[10px] bg-slate-900 text-amber-300 px-1.5 py-0.5 rounded shadow-sm border border-slate-700 tracking-wider">
+                              {assignedVeh.plate}
+                            </span>
+                          )}
                         </div>
-                        <div className="text-[10px] text-slate-400">
-                          {project.workingDaysMonth || 22} gg/m • {project.kmDaily || 200} km/gg
+                        {assignedTrailer && (
+                          <div className="flex items-center gap-1.5 flex-wrap text-[11px] text-slate-600 mt-1">
+                            <span className="truncate max-w-[130px] font-medium" title={assignedTrailer.name}>
+                              {assignedTrailer.name}
+                            </span>
+                            {assignedTrailer.plate && (
+                              <span className="font-mono text-[9px] bg-slate-100 text-slate-800 font-bold px-1.5 py-0.2 rounded border border-slate-300">
+                                {assignedTrailer.plate}
+                              </span>
+                            )}
+                          </div>
+                        )}
+                        <div className="flex items-center gap-2 mt-1 text-[10px] text-slate-400 flex-wrap">
+                          <span>{project.workingDaysMonth || 22} gg/m</span>
+                          <span>•</span>
+                          <span>{project.kmDaily || 200} km/gg</span>
+                          {project.porterageDaily > 0 && (
+                            <span className="bg-purple-100 text-purple-800 font-bold px-1.5 py-0.2 rounded">
+                              Facchinaggio {formatEUR(project.porterageDaily)}/gg
+                            </span>
+                          )}
+                          {project.managementType === 'T' && (
+                            <span className="bg-blue-100 text-blue-800 font-bold px-1.5 py-0.2 rounded">
+                              Vettore {formatEUR(project.partnerMarginDaily)}/gg
+                            </span>
+                          )}
                         </div>
                       </td>
 
@@ -701,7 +704,7 @@ const ProjectsPage = () => {
                         <option value="">-- Seleziona dalla Flotta --</option>
                         {fleet.map(v => (
                           <option key={v.id} value={v.id}>
-                            {v.name} ({formatEUR(v.monthlyLease)}/m)
+                            {v.name} {v.plate ? `[${v.plate}]` : ''} ({formatEUR(v.monthlyLease)}/m)
                           </option>
                         ))}
                       </select>
@@ -717,7 +720,7 @@ const ProjectsPage = () => {
                         <option value="">-- Nessun Semirimorchio --</option>
                         {trailers.map(t => (
                           <option key={t.id} value={t.id}>
-                            {t.name} ({formatEUR(t.monthlyLease)}/m)
+                            {t.name} {t.plate ? `[${t.plate}]` : ''} ({formatEUR(t.monthlyLease)}/m)
                           </option>
                         ))}
                       </select>
@@ -727,11 +730,11 @@ const ProjectsPage = () => {
                       <label className="block font-semibold text-slate-700 mb-1">Gestione</label>
                       <select
                         value={formData.managementType}
-                        onChange={(e) => setFormData({ ...formData, managementType: e.target.value })}
+                        onChange={(e) => handleManagementTypeChange(e.target.value)}
                         className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 bg-white font-bold"
                       >
                         <option value="D">Diretta FOUR (D)</option>
-                        <option value="T">Terzi / Padroncino Mas Logistica (T)</option>
+                        <option value="T">Fornitore / Terzi (T)</option>
                       </select>
                     </div>
                   </div>
@@ -768,8 +771,8 @@ const ProjectsPage = () => {
                       min="1"
                       max="31"
                       value={formData.workingDaysMonth}
-                      onChange={(e) => setFormData({ ...formData, workingDaysMonth: parseInt(e.target.value) || 22 })}
-                      className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500"
+                      onChange={(e) => handleWorkingDaysChange(parseInt(e.target.value) || 22)}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 font-bold"
                     />
                   </div>
 
@@ -778,110 +781,215 @@ const ProjectsPage = () => {
                     <input
                       type="number"
                       value={formData.kmDaily}
-                      onChange={(e) => setFormData({ ...formData, kmDaily: parseFloat(e.target.value) || 0 })}
-                      className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500"
+                      onChange={(e) => handleKmChange(parseFloat(e.target.value) || 0)}
+                      className="w-full px-3 py-2 border border-emerald-400 bg-emerald-50/40 rounded-xl focus:ring-2 focus:ring-emerald-500 font-bold"
                     />
                   </div>
                 </div>
 
-                {/* Costi Giornalieri */}
-                <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-2">
-                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 pb-1 border-b border-slate-200/60">
-                    <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wider">
-                      Dettaglio Costi Giornalieri (€ / Giorno)
-                    </span>
+                {/* Dettaglio Costi Giornalieri */}
+                <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-3">
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 pb-2 border-b border-slate-200">
+                    <div>
+                      <span className="text-[11px] font-bold text-slate-800 uppercase tracking-wider block">
+                        Dettaglio Costi Giornalieri (€ / Giorno)
+                      </span>
+                      <span className="text-[10px] text-emerald-700 font-medium">
+                        ⚡ Ricalcolo dinamico attivo: la variazione dei km aggiorna carburante/Bio-LNG, pedaggi e gomme
+                      </span>
+                    </div>
                     <button
                       type="button"
                       onClick={handleAutoCalculateCosts}
-                      className="inline-flex items-center space-x-1.5 px-2.5 py-1 bg-emerald-100 hover:bg-emerald-200 text-emerald-800 rounded-lg text-[11px] font-bold transition border border-emerald-300"
-                      title="Calcola automaticamente Carburante, Pedaggi, Gomme e Noleggi usando i km e le caratteristiche del mezzo selezionato"
+                      className="inline-flex items-center space-x-1.5 px-2.5 py-1 bg-emerald-100 hover:bg-emerald-200 text-emerald-800 rounded-lg text-[11px] font-bold transition border border-emerald-300 self-start sm:self-auto"
+                      title="Forza ricalcolo di tutti i parametri di costo da anagrafica mezzo e km"
                     >
                       <TrendingUp className="w-3.5 h-3.5 text-emerald-700" />
-                      <span>Calcola Automaticamente da Mezzo & Km</span>
+                      <span>Ricalcola da Parametri Fisici</span>
                     </button>
                   </div>
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                    <div>
-                      <label className="block text-slate-600 mb-0.5">Autista (€/gg)</label>
-                      <input
-                        type="number"
-                        step="5"
-                        value={formData.driverCostDaily}
-                        onChange={(e) => setFormData({ ...formData, driverCostDaily: parseFloat(e.target.value) || 0 })}
-                        className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg"
-                      />
+
+                  {formData.managementType === 'T' ? (
+                    /* Modalità Fornitore / Terzista ("T") */
+                    <div className="space-y-3">
+                      <div className="p-3 bg-blue-50/80 rounded-xl border border-blue-200 text-xs space-y-1">
+                        <div className="font-bold text-blue-900 flex items-center gap-1.5">
+                          <CheckCircle2 className="w-4 h-4 text-blue-700" />
+                          <span>Struttura Economica Commessa Fornitore Terzo (Gestione T)</span>
+                        </div>
+                        <p className="text-[11px] text-blue-800">
+                          I costi diretti di autista, trattore, carburante, pedaggi autostradali e pneumatici sono a carico del vettore terzo (inclusi nel corrispettivo). FOUR sostiene solo il corrispettivo riconosciuto al fornitore, l'eventuale quota del semirimorchio FOUR e il facchinaggio.
+                        </p>
+                      </div>
+
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                        <div className="md:col-span-2">
+                          <label className="block font-bold text-slate-800 mb-0.5">
+                            Corrispettivo Vettore / Fornitore Terzo (€/gg) *
+                          </label>
+                          <input
+                            type="number"
+                            step="5"
+                            value={formData.partnerMarginDaily}
+                            onChange={(e) => setFormData({ ...formData, partnerMarginDaily: parseFloat(e.target.value) || 0 })}
+                            className="w-full px-2.5 py-2 border border-blue-400 bg-white rounded-lg font-black text-blue-900 text-sm focus:ring-2 focus:ring-blue-500"
+                            placeholder="Es. 620"
+                          />
+                          <p className="text-[10px] text-slate-500 mt-0.5">Compensi al vettore terzo incaricato</p>
+                        </div>
+
+                        <div>
+                          <label className="block font-bold text-slate-800 mb-0.5">
+                            Quota Semirimorchio FOUR (€/gg)
+                          </label>
+                          <input
+                            type="number"
+                            step="1"
+                            value={formData.trailerLeaseDaily}
+                            onChange={(e) => setFormData({ ...formData, trailerLeaseDaily: parseFloat(e.target.value) || 0 })}
+                            className="w-full px-2.5 py-2 border border-slate-300 rounded-lg font-bold text-slate-800"
+                          />
+                          <p className="text-[10px] text-slate-500 mt-0.5">Semirimorchio messo a disposizione da FOUR</p>
+                        </div>
+
+                        <div>
+                          <label className="block font-bold text-purple-900 mb-0.5">
+                            Facchinaggio (€/gg)
+                          </label>
+                          <input
+                            type="number"
+                            step="5"
+                            value={formData.porterageDaily || 0}
+                            onChange={(e) => setFormData({ ...formData, porterageDaily: parseFloat(e.target.value) || 0 })}
+                            className="w-full px-2.5 py-2 border border-purple-300 bg-purple-50/50 rounded-lg font-bold text-purple-900"
+                            placeholder="0"
+                          />
+                          <p className="text-[10px] text-slate-500 mt-0.5">Costo facchini per carico/scarico</p>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 pt-2 border-t border-slate-200">
+                        <div>
+                          <label className="block text-slate-500 mb-0.5">Altre Spese FOUR (€/gg)</label>
+                          <input
+                            type="number"
+                            step="1"
+                            value={formData.otherCostsDaily || 0}
+                            onChange={(e) => setFormData({ ...formData, otherCostsDaily: parseFloat(e.target.value) || 0 })}
+                            className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-slate-700"
+                          />
+                        </div>
+                        <div className="md:col-span-3">
+                          <label className="block font-bold text-emerald-900 mb-0.5">Ricavo Giornaliero Riconosciuto da Cliente (€/gg) *</label>
+                          <input
+                            type="number"
+                            step="10"
+                            value={formData.revenueDaily}
+                            onChange={(e) => setFormData({ ...formData, revenueDaily: parseFloat(e.target.value) || 0 })}
+                            className="w-full px-3 py-1.5 border border-emerald-500 rounded-lg font-black text-emerald-800 bg-emerald-50 text-sm"
+                          />
+                        </div>
+                      </div>
                     </div>
-                    <div>
-                      <label className="block text-slate-600 mb-0.5">Energia / Carburante</label>
-                      <input
-                        type="number"
-                        step="1"
-                        value={formData.fuelCostDaily}
-                        onChange={(e) => setFormData({ ...formData, fuelCostDaily: parseFloat(e.target.value) || 0 })}
-                        className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg"
-                      />
+                  ) : (
+                    /* Modalità Gestione Diretta FOUR ("D") */
+                    <div className="space-y-3">
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                        <div>
+                          <label className="block text-slate-700 font-semibold mb-0.5">Autista (€/gg)</label>
+                          <input
+                            type="number"
+                            step="5"
+                            value={formData.driverCostDaily}
+                            onChange={(e) => setFormData({ ...formData, driverCostDaily: parseFloat(e.target.value) || 0 })}
+                            className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg font-semibold"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-slate-700 font-semibold mb-0.5">Carburante / Bio-LNG / BEV</label>
+                          <input
+                            type="number"
+                            step="0.5"
+                            value={formData.fuelCostDaily}
+                            onChange={(e) => setFormData({ ...formData, fuelCostDaily: parseFloat(e.target.value) || 0 })}
+                            className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg font-semibold"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-slate-700 font-semibold mb-0.5">Autostrada / Pedaggi</label>
+                          <input
+                            type="number"
+                            step="0.5"
+                            value={formData.tollsDaily}
+                            onChange={(e) => setFormData({ ...formData, tollsDaily: parseFloat(e.target.value) || 0 })}
+                            className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg font-semibold"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-slate-700 font-semibold mb-0.5">Pneumatici (€/gg)</label>
+                          <input
+                            type="number"
+                            step="0.5"
+                            value={formData.tiresDaily}
+                            onChange={(e) => setFormData({ ...formData, tiresDaily: parseFloat(e.target.value) || 0 })}
+                            className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg font-semibold"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-slate-700 font-semibold mb-0.5">Noleggio Mezzo (€/gg)</label>
+                          <input
+                            type="number"
+                            step="1"
+                            value={formData.vehicleLeaseDaily}
+                            onChange={(e) => setFormData({ ...formData, vehicleLeaseDaily: parseFloat(e.target.value) || 0 })}
+                            className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg font-semibold"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-slate-700 font-semibold mb-0.5">Noleggio Rimorchio (€/gg)</label>
+                          <input
+                            type="number"
+                            step="1"
+                            value={formData.trailerLeaseDaily}
+                            onChange={(e) => setFormData({ ...formData, trailerLeaseDaily: parseFloat(e.target.value) || 0 })}
+                            className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg font-semibold"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-purple-900 font-bold mb-0.5">Facchinaggio (€/gg)</label>
+                          <input
+                            type="number"
+                            step="5"
+                            value={formData.porterageDaily || 0}
+                            onChange={(e) => setFormData({ ...formData, porterageDaily: parseFloat(e.target.value) || 0 })}
+                            className="w-full px-2.5 py-1.5 border border-purple-300 bg-purple-50/50 rounded-lg font-bold text-purple-900"
+                            placeholder="0"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-slate-600 mb-0.5">Partner / Varie (€/gg)</label>
+                          <input
+                            type="number"
+                            step="1"
+                            value={formData.partnerMarginDaily}
+                            onChange={(e) => setFormData({ ...formData, partnerMarginDaily: parseFloat(e.target.value) || 0 })}
+                            className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="pt-2 border-t border-slate-200">
+                        <label className="block font-bold text-slate-900 mb-0.5">Ricavo Giornaliero (€/gg) *</label>
+                        <input
+                          type="number"
+                          step="10"
+                          value={formData.revenueDaily}
+                          onChange={(e) => setFormData({ ...formData, revenueDaily: parseFloat(e.target.value) || 0 })}
+                          className="w-full px-3 py-2 border border-emerald-500 rounded-lg font-black text-emerald-800 bg-emerald-50 text-sm"
+                        />
+                      </div>
                     </div>
-                    <div>
-                      <label className="block text-slate-600 mb-0.5">Autostrada / Pedaggi</label>
-                      <input
-                        type="number"
-                        step="1"
-                        value={formData.tollsDaily}
-                        onChange={(e) => setFormData({ ...formData, tollsDaily: parseFloat(e.target.value) || 0 })}
-                        className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-slate-600 mb-0.5">Gomme / Manutenzione</label>
-                      <input
-                        type="number"
-                        step="1"
-                        value={formData.tiresDaily}
-                        onChange={(e) => setFormData({ ...formData, tiresDaily: parseFloat(e.target.value) || 0 })}
-                        className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-slate-600 mb-0.5">Noleggio Mezzo (€/gg)</label>
-                      <input
-                        type="number"
-                        step="1"
-                        value={formData.vehicleLeaseDaily}
-                        onChange={(e) => setFormData({ ...formData, vehicleLeaseDaily: parseFloat(e.target.value) || 0 })}
-                        className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-slate-600 mb-0.5">Noleggio Rimorchio (€/gg)</label>
-                      <input
-                        type="number"
-                        step="1"
-                        value={formData.trailerLeaseDaily}
-                        onChange={(e) => setFormData({ ...formData, trailerLeaseDaily: parseFloat(e.target.value) || 0 })}
-                        className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-slate-600 mb-0.5">Margine Terzista / Varie</label>
-                      <input
-                        type="number"
-                        step="1"
-                        value={formData.partnerMarginDaily}
-                        onChange={(e) => setFormData({ ...formData, partnerMarginDaily: parseFloat(e.target.value) || 0 })}
-                        className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg"
-                      />
-                    </div>
-                    <div>
-                      <label className="block font-bold text-slate-900 mb-0.5">Ricavo Giornaliero (€/gg)</label>
-                      <input
-                        type="number"
-                        step="10"
-                        value={formData.revenueDaily}
-                        onChange={(e) => setFormData({ ...formData, revenueDaily: parseFloat(e.target.value) || 0 })}
-                        className="w-full px-2.5 py-1.5 border border-emerald-500 rounded-lg font-black text-emerald-800 bg-emerald-50"
-                      />
-                    </div>
-                  </div>
+                  )}
                 </div>
 
                 {/* SEZIONE SPECIALE: TERMINI DI PAGAMENTO (DSO & DPO) */}
