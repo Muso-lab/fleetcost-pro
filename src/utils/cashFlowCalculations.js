@@ -98,6 +98,22 @@ export const isProjectActiveInMonth = (project, monthIndex, targetYear = 2026, o
     }
   }
 
+  // 3. Storico consuntivo anno precedente (es. 2025 quando le commesse sono allineate al budget 2026)
+  if (targetYear < startYear) {
+    // Mesi di avvio scaglionati storici nel 2025 per la flotta FOUR
+    const historicalStartMonths = {
+      'CAM-BO-02': 1, // Febbraio 2025
+      'CHR-01': 1,    // Febbraio 2025
+      'DEC-RM-01': 2, // Marzo 2025
+      'KN-03': 2,     // Marzo 2025
+      'TIG-03': 4     // Maggio 2025
+    };
+    const minMonth = historicalStartMonths[project.code] !== undefined ? historicalStartMonths[project.code] : 0;
+    if (monthIndex >= minMonth) {
+      return true;
+    }
+  }
+
   return false;
 };
 
