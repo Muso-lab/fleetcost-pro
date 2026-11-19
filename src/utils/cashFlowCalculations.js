@@ -191,6 +191,10 @@ export const calculateAnnualBudgetAndCashFlow = (projects, options = {}) => {
       tires: 0,
       vehicleLease: 0,
       trailerLease: 0,
+      refrigeration: 0,
+      telematics: 0,
+      washing: 0,
+      extraCosts: 0,
       partnerMargin: 0,
       porterage: 0,
       otherCosts: 0
@@ -244,15 +248,31 @@ export const calculateAnnualBudgetAndCashFlow = (projects, options = {}) => {
 
   // Elaborazione progetti
   projects.forEach(project => {
-    const pTermsClient = (project.paymentTermsClient || 60) + stressTestClientDays;
-    const pTermsSuppliers = project.paymentTermsSuppliers || 30;
+    const pTermsClient = (project.paymentTermsClient !== undefined ? Number(project.paymentTermsClient) : 60) + stressTestClientDays;
+    const pTermsSuppliers = project.paymentTermsSuppliers !== undefined ? Number(project.paymentTermsSuppliers) : 30;
+    const pTermsDriver = project.paymentTermsDriver !== undefined ? Number(project.paymentTermsDriver) : 16;
+    const pTermsFuel = project.paymentTermsFuel !== undefined ? Number(project.paymentTermsFuel) : 30;
+    const pTermsTolls = project.paymentTermsTolls !== undefined ? Number(project.paymentTermsTolls) : 15;
+    const pTermsTires = project.paymentTermsTires !== undefined ? Number(project.paymentTermsTires) : 30;
+    const pTermsFridge = project.paymentTermsRefrigeration !== undefined ? Number(project.paymentTermsRefrigeration) : 30;
+    const pTermsTelematics = project.paymentTermsTelematics !== undefined ? Number(project.paymentTermsTelematics) : 30;
+    const pTermsWashing = project.paymentTermsWashing !== undefined ? Number(project.paymentTermsWashing) : 30;
+    const pTermsExtra = project.paymentTermsExtra !== undefined ? Number(project.paymentTermsExtra) : 30;
+
     const leaseTimingKey = normalizeLeaseTiming(project);
     const leaseTiming = LEASE_PAYMENT_TIMINGS[leaseTimingKey];
 
     // DSO mesi clienti (es. 60 gg -> m + 2)
     const clientDelayMonths = Math.max(1, Math.round(pTermsClient / 30));
-    // DPO fornitori generici (gomme, ecc.)
+    // DPO ritardi in mesi per singola componente
+    const driverDelayMonths = pTermsDriver <= 0 ? 0 : Math.max(1, Math.round(pTermsDriver / 30));
+    const fuelDelayMonths = Math.max(0, Math.round(pTermsFuel / 30));
     const supplierDelayMonths = Math.max(0, Math.round(pTermsSuppliers / 30));
+    const tiresDelayMonths = Math.max(0, Math.round(pTermsTires / 30));
+    const fridgeDelayMonths = Math.max(0, Math.round(pTermsFridge / 30));
+    const telematicsDelayMonths = Math.max(0, Math.round(pTermsTelematics / 30));
+    const washingDelayMonths = Math.max(0, Math.round(pTermsWashing / 30));
+    const extraDelayMonths = Math.max(0, Math.round(pTermsExtra / 30));
 
     // Caparra iniziale start-up
     if (project.depositAmount && project.depositAmount > 0 && project.startDate) {
@@ -270,6 +290,41 @@ export const calculateAnnualBudgetAndCashFlow = (projects, options = {}) => {
       }
     }
 
+    // Eventuale costo extra Una Tantum in uscita nell'anno di avvio
+    const extraOneTimeAmount = (project.extraCostFrequency === 'one_time' && Number(project.extraCostAmount) > 0)
+      ? Number(project.extraCostAmount)
+      : 0;
+    if (extraOneTimeAmount > 0 && project.startDate) {
+      const start = new Date(project.startDate);
+      if (start.getFullYear() === year) {
+        const payM = start.getMonth() + extraDelayMonths;
+        if (payM >= 0 && payM < totalMonthsHorizon) {
+          cashOutflows[payM] += extraOneTimeAmount;
+          cashOutflowBreakdown[payM].suppliersOther += extraOneTimeAmount;
+          const bw = payM * 2 + 1;
+          if (bw < totalBiweeklyHorizon) {
+            biweeklyCashOutflows[bw] += extraOneTimeAmount;
+            biweeklyOutflowBreakdown[bw].otherSuppliers += extraOneTimeAmount;
+          }
+        }
+      }
+    }
+
+    // Helper locale per imputare un'uscita con proprio ritardo
+    const pushSupplierOutflow = (monthIdx, delayM, amount) => {
+      if (!amount || amount <= 0) return;
+      const targetM = monthIdx + delayM;
+      if (targetM < totalMonthsHorizon) {
+        cashOutflows[targetM] += amount;
+        cashOutflowBreakdown[targetM].suppliersOther += amount;
+      }
+      const targetBw = targetM * 2 + 1;
+      if (targetBw < totalBiweeklyHorizon) {
+        biweeklyCashOutflows[targetBw] += amount;
+        biweeklyOutflowBreakdown[targetBw].otherSuppliers += amount;
+      }
+    };
+
     // Itera sui 12 mesi dell'anno corrente
     for (let m = 0; m < 12; m++) {
       if (isProjectActiveInMonth(project, m, year, { rolloverPreviousYearBudget })) {
@@ -277,20 +332,25 @@ export const calculateAnnualBudgetAndCashFlow = (projects, options = {}) => {
         const workingDays = project.workingDaysMonth || 22;
 
         const driverC = (Number(project.driverCostDaily) || 0) * workingDays;
-        const fuelGrossC = (Number(project.fuelCostDaily) || 0) * workingDays;
+        const fuelGrossC = project.energyPayer === 'client' ? 0 : (Number(project.fuelCostDaily) || 0) * workingDays;
         const tollsC = (Number(project.tollsDaily) || 0) * workingDays;
         const tiresC = (Number(project.tiresDaily) || 0) * workingDays;
         const vLeaseC = (Number(project.vehicleLeaseDaily) || 0) * workingDays;
         const tLeaseC = (Number(project.trailerLeaseDaily) || 0) * workingDays;
         const totalLeaseC = vLeaseC + tLeaseC;
+        const fridgeC = (Number(project.refrigerationCostDaily) || 0) * workingDays;
+        const telematicsC = (Number(project.telematicsCostDaily) || 0) * workingDays;
+        const washingC = (Number(project.washingCostDaily) || 0) * workingDays;
+        const extraC = (Number(project.extraCostDaily) || 0) * workingDays;
         const partC = (Number(project.partnerMarginDaily) || 0) * workingDays;
         const porterageC = (Number(project.porterageDaily) || 0) * workingDays;
         const otherC = (Number(project.otherCostsDaily) || 0) * workingDays;
 
         // Calcolo credito accise per questa commessa
-        // Se il veicolo usa gasolio o ha flag accise oppure non è full electric
+        // Se energia a carico del cliente o veicolo full electric, nessun recupero accise
         let acciseCreditMonthly = 0;
-        const isEligibleFuel = project.acciseRecoveryEligible !== false &&
+        const isEligibleFuel = project.energyPayer !== 'client' &&
+          project.acciseRecoveryEligible !== false &&
           (project.fuelType === 'gasolio' || project.fuelTypeId === 'gasolio' ||
            (fuelGrossC > 0 && project.vehicleCategory !== 'motrice_bev' && project.fuelTypeId !== 'elettrico'));
 
@@ -303,7 +363,8 @@ export const calculateAnnualBudgetAndCashFlow = (projects, options = {}) => {
         }
 
         const fuelNetC = Math.max(0, fuelGrossC - acciseCreditMonthly);
-        const costPnl = driverC + (acciseRecoveryEnabled ? fuelNetC : fuelGrossC) + tollsC + tiresC + totalLeaseC + partC + porterageC + otherC;
+        const costPnl = driverC + (acciseRecoveryEnabled ? fuelNetC : fuelGrossC) + tollsC + tiresC +
+          totalLeaseC + fridgeC + telematicsC + washingC + extraC + partC + porterageC + otherC;
         const molPnl = rev - costPnl;
 
         // 1. P&L Competenza Mensile
@@ -323,6 +384,10 @@ export const calculateAnnualBudgetAndCashFlow = (projects, options = {}) => {
         monthlyPnl[m].costBreakdown.tires += tiresC;
         monthlyPnl[m].costBreakdown.vehicleLease += vLeaseC;
         monthlyPnl[m].costBreakdown.trailerLease += tLeaseC;
+        monthlyPnl[m].costBreakdown.refrigeration += fridgeC;
+        monthlyPnl[m].costBreakdown.telematics += telematicsC;
+        monthlyPnl[m].costBreakdown.washing += washingC;
+        monthlyPnl[m].costBreakdown.extraCosts += extraC;
         monthlyPnl[m].costBreakdown.partnerMargin += partC;
         monthlyPnl[m].costBreakdown.porterage += porterageC;
         monthlyPnl[m].costBreakdown.otherCosts += otherC;
@@ -371,7 +436,6 @@ export const calculateAnnualBudgetAndCashFlow = (projects, options = {}) => {
         }
 
         // Continuità dei flussi di cassa per anno a regime (es. 2027 da dati 2026)
-        // Incasso a Gennaio e Febbraio delle fatture emesse a Novembre e Dicembre dell'anno precedente
         if (rolloverPreviousYearBudget && m === 0) {
           if (clientDelayMonths >= 2) {
             cashInflows[0] += rev;
@@ -393,20 +457,24 @@ export const calculateAnnualBudgetAndCashFlow = (projects, options = {}) => {
 
         // 3. CASH FLOW USCITE - REGOLE DI TESORERIA REALI FOUR
 
-        // A. AUTISTI: Pagati nel Mese Successivo (M2)
-        // Mensile: esce a m + 1
-        const driverMonth = m + 1;
+        // A. PERSONALE (Autisti + Facchinaggio): Pagato il giorno 16 del Mese Successivo (T1)
+        const personnelCashC = driverC + porterageC;
+        const driverMonth = m + driverDelayMonths;
         if (driverMonth < totalMonthsHorizon) {
           cashOutflows[driverMonth] += driverC;
           cashOutflowBreakdown[driverMonth].drivers += driverC;
+          if (porterageC > 0) {
+            cashOutflows[driverMonth] += porterageC;
+            cashOutflowBreakdown[driverMonth].suppliersOther += porterageC;
+          }
         }
         // Quindicinale:
         // - Stipendio Netto (~65%) pagato il 10 del mese (1ª Quindicina 1-15)
         // - Contributi INPS / F24 (~35%) pagati il 16 del mese (2ª Quindicina 16-31)
         const driverNetSalary = driverC * 0.65;
-        const driverInpsF24 = driverC * 0.35;
-        const biweeklyDriverNet = (m + 1) * 2 + 0; // 1ª quindicina giorno 10
-        const biweeklyDriverF24 = (m + 1) * 2 + 1; // 2ª quindicina giorno 16
+        const driverInpsF24 = (driverC * 0.35) + porterageC;
+        const biweeklyDriverNet = driverMonth * 2 + 0;
+        const biweeklyDriverF24 = driverMonth * 2 + 1;
         if (biweeklyDriverNet < totalBiweeklyHorizon) {
           biweeklyCashOutflows[biweeklyDriverNet] += driverNetSalary;
           biweeklyOutflowBreakdown[biweeklyDriverNet].driversNet += driverNetSalary;
@@ -416,19 +484,15 @@ export const calculateAnnualBudgetAndCashFlow = (projects, options = {}) => {
           biweeklyOutflowBreakdown[biweeklyDriverF24].driversInpsF24 += driverInpsF24;
         }
 
-        // B. CARBURANTE / LNG: Fatturazione Quindicinale a 30 gg data fattura
-        // 1ª Quindicina (1-15 M1) fattura il 15 M1 -> pagata il 15 M2 (1ª Quindicina M2)
-        // 2ª Quindicina (16-31 M1) fattura il 30 M1 -> pagata il 30 M2 (2ª Quindicina M2)
-        // -> Mensile: il 100% dell'LNG consumato nel mese m esce al mese m + 1!
-        const fuelPayMonth = m + 1;
+        // B. CARBURANTE / ENERGIA / LNG: Pagamento secondo termine energia (default 30 gg, quindicinale M+1)
+        const fuelPayMonth = m + fuelDelayMonths;
         if (fuelPayMonth < totalMonthsHorizon) {
           cashOutflows[fuelPayMonth] += fuelGrossC;
           cashOutflowBreakdown[fuelPayMonth].lngFuel += fuelGrossC;
         }
-        // Quindicinale: 50% esce a giorno 15 M2, 50% a giorno 30 M2
         const halfFuel = fuelGrossC / 2;
-        const biweeklyFuelQ1 = (m + 1) * 2 + 0; // 15 M2
-        const biweeklyFuelQ2 = (m + 1) * 2 + 1; // 30 M2
+        const biweeklyFuelQ1 = fuelPayMonth * 2 + 0;
+        const biweeklyFuelQ2 = fuelPayMonth * 2 + 1;
         if (biweeklyFuelQ1 < totalBiweeklyHorizon) {
           biweeklyCashOutflows[biweeklyFuelQ1] += halfFuel;
           biweeklyOutflowBreakdown[biweeklyFuelQ1].lngFuel += halfFuel;
@@ -438,37 +502,41 @@ export const calculateAnnualBudgetAndCashFlow = (projects, options = {}) => {
           biweeklyOutflowBreakdown[biweeklyFuelQ2].lngFuel += halfFuel;
         }
 
-        // C. TELEPASS / PEDAGGI: Fatturazione Quindicinale a 15 gg data fattura
-        // 1ª Quindicina (1-15 M1) fattura il 15 M1 -> pagata a 15 gg = 30 M1 (Fine Mese 1)!
-        // 2ª Quindicina (16-31 M1) fattura il 30 M1 -> pagata a 15 gg = 15 M2 (Metà Mese 2)!
-        // -> Mensile: 50% esce al mese m, 50% esce al mese m + 1!
-        const halfTolls = tollsC / 2;
-        if (m < totalMonthsHorizon) {
-          cashOutflows[m] += halfTolls;
-          cashOutflowBreakdown[m].tollsTelepass += halfTolls;
-        }
-        if (m + 1 < totalMonthsHorizon) {
-          cashOutflows[m + 1] += halfTolls;
-          cashOutflowBreakdown[m + 1].tollsTelepass += halfTolls;
-        }
-        // Quindicinale:
-        // - 50% esce nella 2ª Quindicina del mese m (giorno 30)
-        // - 50% esce nella 1ª Quindicina del mese m+1 (giorno 15)
-        const biweeklyTollsM1Q2 = m * 2 + 1;
-        const biweeklyTollsM2Q1 = (m + 1) * 2 + 0;
-        if (biweeklyTollsM1Q2 < totalBiweeklyHorizon) {
-          biweeklyCashOutflows[biweeklyTollsM1Q2] += halfTolls;
-          biweeklyOutflowBreakdown[biweeklyTollsM1Q2].tollsTelepass += halfTolls;
-        }
-        if (biweeklyTollsM2Q1 < totalBiweeklyHorizon) {
-          biweeklyCashOutflows[biweeklyTollsM2Q1] += halfTolls;
-          biweeklyOutflowBreakdown[biweeklyTollsM2Q1].tollsTelepass += halfTolls;
+        // C. TELEPASS / PEDAGGI: Se <= 15 gg fatturazione quindicinale a 15 gg (50% M1, 50% M2); altrimenti a termine personalizzato
+        if (pTermsTolls <= 15) {
+          const halfTolls = tollsC / 2;
+          if (m < totalMonthsHorizon) {
+            cashOutflows[m] += halfTolls;
+            cashOutflowBreakdown[m].tollsTelepass += halfTolls;
+          }
+          if (m + 1 < totalMonthsHorizon) {
+            cashOutflows[m + 1] += halfTolls;
+            cashOutflowBreakdown[m + 1].tollsTelepass += halfTolls;
+          }
+          const biweeklyTollsM1Q2 = m * 2 + 1;
+          const biweeklyTollsM2Q1 = (m + 1) * 2 + 0;
+          if (biweeklyTollsM1Q2 < totalBiweeklyHorizon) {
+            biweeklyCashOutflows[biweeklyTollsM1Q2] += halfTolls;
+            biweeklyOutflowBreakdown[biweeklyTollsM1Q2].tollsTelepass += halfTolls;
+          }
+          if (biweeklyTollsM2Q1 < totalBiweeklyHorizon) {
+            biweeklyCashOutflows[biweeklyTollsM2Q1] += halfTolls;
+            biweeklyOutflowBreakdown[biweeklyTollsM2Q1].tollsTelepass += halfTolls;
+          }
+        } else {
+          const tollsPayM = m + Math.max(0, Math.round(pTermsTolls / 30));
+          if (tollsPayM < totalMonthsHorizon) {
+            cashOutflows[tollsPayM] += tollsC;
+            cashOutflowBreakdown[tollsPayM].tollsTelepass += tollsC;
+          }
+          const biweeklyTollsP = tollsPayM * 2 + 1;
+          if (biweeklyTollsP < totalBiweeklyHorizon) {
+            biweeklyCashOutflows[biweeklyTollsP] += tollsC;
+            biweeklyOutflowBreakdown[biweeklyTollsP].tollsTelepass += tollsC;
+          }
         }
 
-        // D. NOLEGGI MEZZI & RIMORCHI: 3 Opzioni
-        // - M1_D10: 10 M1 (Anticipato / Inizio Mese) -> mese m, 1ª quindicina
-        // - M1_D30: 30 M1 (Fine Mese) -> mese m, 2ª quindicina
-        // - M2_D20: 20 M2 (Mese Successivo) -> mese m + 1, 2ª quindicina
+        // D. NOLEGGI MEZZI & RIMORCHI: 3 Opzioni contrattuali (M1_D10, M1_D30, M2_D20)
         const leaseMonth = m + leaseTiming.monthOffset;
         if (leaseMonth < totalMonthsHorizon) {
           cashOutflows[leaseMonth] += totalLeaseC;
@@ -477,28 +545,22 @@ export const calculateAnnualBudgetAndCashFlow = (projects, options = {}) => {
           else if (leaseTimingKey === 'M1_D30') cashOutflowBreakdown[leaseMonth].leasesM1D30 += totalLeaseC;
           else cashOutflowBreakdown[leaseMonth].leasesM2D20 += totalLeaseC;
         }
-        // Quindicinale:
-        // M1_D10: q = 0 (giorno 10)
-        // M1_D30: q = 1 (giorno 30)
-        // M2_D20: q = 1 (giorno 20)
         const biweeklyLeasePeriod = leaseMonth * 2 + (leaseTiming.quindicina - 1);
         if (biweeklyLeasePeriod < totalBiweeklyHorizon) {
           biweeklyCashOutflows[biweeklyLeasePeriod] += totalLeaseC;
           biweeklyOutflowBreakdown[biweeklyLeasePeriod].leases += totalLeaseC;
         }
 
-        // E. ALTRI FORNITORI, GOMME, FACCHINAGGIO & TERZISTI: Pagati a DPO
-        const otherSuppliersC = tiresC + partC + porterageC + otherC;
-        const otherSuppliersMonth = m + supplierDelayMonths;
-        if (otherSuppliersMonth < totalMonthsHorizon) {
-          cashOutflows[otherSuppliersMonth] += otherSuppliersC;
-          cashOutflowBreakdown[otherSuppliersMonth].suppliersOther += otherSuppliersC;
+        // E. VOCI SPECIFICHE CON SCADENZA PROPRIA (default 30 gg, modificabile per voce)
+        pushSupplierOutflow(m, tiresDelayMonths, tiresC);
+        pushSupplierOutflow(m, fridgeDelayMonths, fridgeC);
+        pushSupplierOutflow(m, telematicsDelayMonths, telematicsC);
+        pushSupplierOutflow(m, washingDelayMonths, washingC);
+        if (project.extraCostFrequency !== 'one_time') {
+          pushSupplierOutflow(m, extraDelayMonths, extraC);
         }
-        const biweeklyOtherSuppliersPeriod = otherSuppliersMonth * 2 + 1; // Fine mese
-        if (biweeklyOtherSuppliersPeriod < totalBiweeklyHorizon) {
-          biweeklyCashOutflows[biweeklyOtherSuppliersPeriod] += otherSuppliersC;
-          biweeklyOutflowBreakdown[biweeklyOtherSuppliersPeriod].otherSuppliers += otherSuppliersC;
-        }
+        pushSupplierOutflow(m, supplierDelayMonths, partC + otherC);
+        void personnelCashC;
       }
     }
   });
@@ -729,43 +791,313 @@ export const calculateAnnualBudgetAndCashFlow = (projects, options = {}) => {
 };
 
 /**
- * Calcola metriche economiche e finanziarie per una singola commessa
+ * Verifica se un semirimorchio dispone di gruppo frigorifero
+ */
+export const isRefrigeratedTrailer = (trailer) => {
+  if (!trailer) return false;
+  const cat = (trailer.category || '').toLowerCase();
+  const label = (trailer.categoryLabel || '').toLowerCase();
+  const name = (trailer.name || '').toLowerCase();
+  return cat === 'refrigerato' || cat === 'refrigerato_azoto' || cat.includes('frigo') || label.includes('frigo') || name.includes('frigo');
+};
+
+/**
+ * Calcola il costo giornaliero autista in base alla categoria del mezzo (Patente CE / C / B)
+ * e alla configurazione del turno (1_diurno, 1_notturno, 2_turni).
+ * NOTA 3.2.D: Nel doppio autista (2_turni), uno viaggia di giorno e uno di notte -> somma diurno + notturno.
+ */
+export const calculateDriverDailyCost = (vehicle, driverShiftType = '1_diurno', settings = {}) => {
+  const licenseTypes = settings?.licenseTypes || [];
+  const getLicCost = (id, fallback) => {
+    const found = licenseTypes.find(l => l.id === id);
+    return found ? Number(found.dailyCost) : fallback;
+  };
+
+  const category = (vehicle?.category || '').toLowerCase() || (
+    vehicle?.licenseTypeId?.startsWith('c_') ? 'motrice' :
+    vehicle?.licenseTypeId?.startsWith('b') ? 'furgone' : 'trattore'
+  );
+
+  let dayCost = getLicCost('ce_diurno', 220);
+  let nightCost = getLicCost('ce_notturno', 260);
+
+  if (category === 'furgone') {
+    dayCost = getLicCost('b', 140);
+    nightCost = getLicCost('b_notturno', 170);
+  } else if (category === 'motrice') {
+    dayCost = getLicCost('c_diurno', 180);
+    nightCost = getLicCost('c_notturno', 220);
+  }
+
+  if (driverShiftType === '2_turni') {
+    return +(dayCost + nightCost).toFixed(2);
+  }
+  if (driverShiftType === '1_notturno') {
+    return +nightCost.toFixed(2);
+  }
+  return +dayCost.toFixed(2);
+};
+
+/**
+ * Calcola il costo giornaliero del gruppo frigorifero (Azoto Liquido vs Gasolio)
+ */
+export const calculateRefrigerationDailyCost = (project = {}, trailer = null, settings = {}) => {
+  const refParams = settings?.refrigerationParams || {};
+  const azotoDef = refParams.azoto || { unitCost: 0.13, hourlyConsumption: 30 };
+  const gasolioDef = refParams.gasolio || { unitCost: 1.80, hourlyConsumption: 3.0 };
+
+  const isFrigoTrailer = isRefrigeratedTrailer(trailer);
+  const enabled = project.refrigerationEnabled !== undefined
+    ? Boolean(project.refrigerationEnabled)
+    : isFrigoTrailer;
+
+  const defaultTech = trailer?.category === 'refrigerato_azoto' || (trailer?.tractionType || '').toLowerCase().includes('azoto')
+    ? 'azoto'
+    : 'gasolio';
+  const tech = project.refrigerationTech || defaultTech;
+  const techDefaults = tech === 'azoto' ? azotoDef : gasolioDef;
+
+  if (!enabled) {
+    return {
+      enabled: false,
+      tech,
+      unitCost: Number(techDefaults.unitCost),
+      hourlyConsumption: Number(techDefaults.hourlyConsumption),
+      hourlyCost: +(Number(techDefaults.unitCost) * Number(techDefaults.hourlyConsumption)).toFixed(2),
+      hoursPerDay: Number(project.refrigerationHoursDaily) || 0,
+      dailyCost: 0
+    };
+  }
+
+  const unitCost = project.refrigerationUnitCost !== undefined && project.refrigerationUnitCost !== ''
+    ? Number(project.refrigerationUnitCost)
+    : Number(techDefaults.unitCost);
+  const hourlyConsumption = project.refrigerationHourlyConsumption !== undefined && project.refrigerationHourlyConsumption !== ''
+    ? Number(project.refrigerationHourlyConsumption)
+    : Number(techDefaults.hourlyConsumption);
+  const hoursPerDay = project.refrigerationHoursDaily !== undefined && project.refrigerationHoursDaily !== ''
+    ? Number(project.refrigerationHoursDaily)
+    : 8;
+
+  const hourlyCost = +(unitCost * hourlyConsumption).toFixed(2);
+  const dailyCost = +(hourlyCost * hoursPerDay).toFixed(2);
+
+  return {
+    enabled: true,
+    tech,
+    unitCost,
+    hourlyConsumption,
+    hourlyCost,
+    hoursPerDay,
+    dailyCost
+  };
+};
+
+/**
+ * Calcola i costi accessori (Telematica, Lavaggio, Costi Extra) e la loro ripartizione giornaliera/mensile
+ */
+export const calculateAccessoriesDailyCost = (project = {}, vehicle = null, trailer = null, settings = {}) => {
+  const workingDays = Number(project.workingDaysMonth) || 22;
+  const operatingMonths = Number(project.operatingMonths) || 12;
+  const mgmt = project.managementType || 'D';
+  const accParams = settings?.accessoryParams || {};
+  const telDef = accParams.telematics || { tractorMonthly: 14, trailerMonthly: 13, rigidMonthly: 12, vanMonthly: 12 };
+  const washDef = accParams.washing || { costPerWash: 80, washesPerMonth: 2 };
+
+  // A. Telematica: Trattore 14 €/m, Semirimorchio 13 €/m, Motrice 12 €/m
+  const telematicsEnabled = project.telematicsEnabled !== undefined ? Boolean(project.telematicsEnabled) : true;
+  let autoTelematicsMonthly = 0;
+  if (telematicsEnabled) {
+    if (mgmt === 'D' && vehicle) {
+      const cat = (vehicle.category || '').toLowerCase();
+      if (cat === 'trattore') autoTelematicsMonthly += Number(telDef.tractorMonthly ?? 14);
+      else if (cat === 'motrice') autoTelematicsMonthly += Number(telDef.rigidMonthly ?? 12);
+      else autoTelematicsMonthly += Number(telDef.vanMonthly ?? 12);
+    }
+    if (trailer) {
+      autoTelematicsMonthly += Number(telDef.trailerMonthly ?? 13);
+    }
+  }
+
+  const telematicsMonthly = telematicsEnabled
+    ? (project.telematicsAuto === false && project.telematicsMonthly !== undefined && project.telematicsMonthly !== ''
+        ? Number(project.telematicsMonthly)
+        : +autoTelematicsMonthly.toFixed(2))
+    : 0;
+  const telematicsDaily = workingDays > 0 ? +(telematicsMonthly / workingDays).toFixed(2) : 0;
+
+  // B. Lavaggio: es. 80 € x 2 lavaggi/mese = 160 €/mese
+  const washingEnabled = project.washingEnabled !== undefined
+    ? Boolean(project.washingEnabled)
+    : (mgmt === 'D');
+  const washUnitCost = project.washingUnitCost !== undefined && project.washingUnitCost !== ''
+    ? Number(project.washingUnitCost)
+    : Number(washDef.costPerWash ?? 80);
+  const washesPerMonth = project.washingCountPerMonth !== undefined && project.washingCountPerMonth !== ''
+    ? Number(project.washingCountPerMonth)
+    : Number(washDef.washesPerMonth ?? 2);
+  const washingMonthly = washingEnabled ? +(washUnitCost * washesPerMonth).toFixed(2) : 0;
+  const washingDaily = (washingEnabled && workingDays > 0) ? +(washingMonthly / workingDays).toFixed(2) : 0;
+
+  // C. Costi Extra (Descrizione, Importo, Frequenza: daily | monthly | one_time)
+  const extraAmount = Number(project.extraCostAmount) || 0;
+  const extraFreq = project.extraCostFrequency || 'monthly';
+  let extraDaily = 0;
+  let extraMonthly = 0;
+  let extraOneTimeCash = 0;
+  if (extraAmount > 0) {
+    if (extraFreq === 'daily') {
+      extraDaily = +extraAmount.toFixed(2);
+      extraMonthly = +(extraDaily * workingDays).toFixed(2);
+    } else if (extraFreq === 'one_time') {
+      const totalDays = workingDays * operatingMonths;
+      extraDaily = totalDays > 0 ? +(extraAmount / totalDays).toFixed(2) : 0;
+      extraMonthly = operatingMonths > 0 ? +(extraAmount / operatingMonths).toFixed(2) : 0;
+      extraOneTimeCash = extraAmount;
+    } else {
+      extraMonthly = +extraAmount.toFixed(2);
+      extraDaily = workingDays > 0 ? +(extraAmount / workingDays).toFixed(2) : 0;
+    }
+  }
+
+  return {
+    telematicsEnabled,
+    telematicsAutoMonthly: +autoTelematicsMonthly.toFixed(2),
+    telematicsMonthly,
+    telematicsDaily,
+    washingEnabled,
+    washUnitCost,
+    washesPerMonth,
+    washingMonthly,
+    washingDaily,
+    extraAmount,
+    extraFreq,
+    extraDaily,
+    extraMonthly,
+    extraOneTimeCash
+  };
+};
+
+/**
+ * Calcola metriche economiche e finanziarie ponderate per una singola commessa
+ * (Fabbisogno finanziario reale calcolato per componente e relativa scadenza di pagamento)
  */
 export const calculateSingleProjectMetrics = (project) => {
-  const workingDays = project.workingDaysMonth || 22;
-  const operatingMonths = project.operatingMonths || 12;
+  const workingDays = Number(project.workingDaysMonth) || 22;
+  const operatingMonths = Number(project.operatingMonths) || 12;
 
   const driverCost = Number(project.driverCostDaily) || 0;
-  const fuelCost = Number(project.fuelCostDaily) || 0;
+  const fuelCost = project.energyPayer === 'client' ? 0 : (Number(project.fuelCostDaily) || 0);
   const tollsCost = Number(project.tollsDaily) || 0;
   const tiresCost = Number(project.tiresDaily) || 0;
+  const refrigerationCost = Number(project.refrigerationCostDaily) || 0;
+  const telematicsCost = Number(project.telematicsCostDaily) || 0;
+  const washingCost = Number(project.washingCostDaily) || 0;
+  const extraCost = Number(project.extraCostDaily) || 0;
   const otherCost = Number(project.otherCostsDaily) || 0;
   const partnerMargin = Number(project.partnerMarginDaily) || 0;
   const porterageCost = Number(project.porterageDaily) || 0;
   const vehicleLease = Number(project.vehicleLeaseDaily) || 0;
   const trailerLease = Number(project.trailerLeaseDaily) || 0;
 
-  const totalCostDaily = driverCost + fuelCost + tollsCost + tiresCost + otherCost +
-    partnerMargin + porterageCost + vehicleLease + trailerLease;
+  const totalCostDaily = +(
+    driverCost +
+    fuelCost +
+    tollsCost +
+    tiresCost +
+    refrigerationCost +
+    telematicsCost +
+    washingCost +
+    extraCost +
+    otherCost +
+    partnerMargin +
+    porterageCost +
+    vehicleLease +
+    trailerLease
+  ).toFixed(2);
 
   const revenueDaily = Number(project.revenueDaily) || 0;
-  const molDaily = revenueDaily - totalCostDaily;
+  const molDaily = +(revenueDaily - totalCostDaily).toFixed(2);
   const molPercent = revenueDaily > 0 ? (molDaily / revenueDaily) * 100 : 0;
 
-  const monthlyCost = totalCostDaily * workingDays;
-  const monthlyRevenue = revenueDaily * workingDays;
-  const monthlyMol = molDaily * workingDays;
+  const monthlyCost = +(totalCostDaily * workingDays).toFixed(2);
+  const monthlyRevenue = +(revenueDaily * workingDays).toFixed(2);
+  const monthlyMol = +(monthlyRevenue - monthlyCost).toFixed(2);
 
-  const totalProjectRevenue = monthlyRevenue * operatingMonths;
-  const totalProjectCost = monthlyCost * operatingMonths;
-  const totalProjectMol = monthlyMol * operatingMonths;
+  const totalProjectRevenue = +(monthlyRevenue * operatingMonths).toFixed(2);
+  const totalProjectCost = +(monthlyCost * operatingMonths).toFixed(2);
+  const totalProjectMol = +(monthlyMol * operatingMonths).toFixed(2);
 
-  // Working capital gap
-  const clientTerms = project.paymentTermsClient || 60;
-  const supplierTerms = project.paymentTermsSuppliers || 30;
-  const gapDays = Math.max(0, clientTerms - supplierTerms);
-  const gapMonths = gapDays / 30;
-  const estimatedWorkingCapitalGap = (monthlyCost * gapMonths) + (Number(project.depositAmount) || 0);
+  // Calcolo Fabbisogno Finanziario Reale Ponderato per Voce di Costo e Scadenza
+  const clientDso = project.paymentTermsClient !== undefined ? Number(project.paymentTermsClient) : 60;
+  const supplierTerms = project.paymentTermsSuppliers !== undefined ? Number(project.paymentTermsSuppliers) : 30;
+  const driverTerms = project.paymentTermsDriver !== undefined ? Number(project.paymentTermsDriver) : 16; // giorno 16 mese successivo T1
+  const fuelTerms = project.paymentTermsFuel !== undefined ? Number(project.paymentTermsFuel) : 30;
+  const tollsTerms = project.paymentTermsTolls !== undefined ? Number(project.paymentTermsTolls) : 15;
+  const tiresTerms = project.paymentTermsTires !== undefined ? Number(project.paymentTermsTires) : 30;
+  const fridgeTerms = project.paymentTermsRefrigeration !== undefined ? Number(project.paymentTermsRefrigeration) : 30;
+  const telematicsTerms = project.paymentTermsTelematics !== undefined ? Number(project.paymentTermsTelematics) : 30;
+  const washingTerms = project.paymentTermsWashing !== undefined ? Number(project.paymentTermsWashing) : 30;
+  const extraTerms = project.paymentTermsExtra !== undefined ? Number(project.paymentTermsExtra) : 30;
+
+  const leaseTimingKey = normalizeLeaseTiming(project);
+  // Offset rispetto a fine mese operativo T0:
+  // M1_D10 -> giorno 10 di T0 (-20 gg rispetto a fine T0) -> anticipo extra +20 gg
+  // M1_D30 -> giorno 30 di T0 (0 gg) -> gap = DSO
+  // M2_D20 -> giorno 20 di T1 (+20 gg dopo fine T0) -> gap = DSO - 20 gg
+  const leaseOffsetFromEndOfMonth = leaseTimingKey === 'M1_D10' ? -20 : leaseTimingKey === 'M1_D30' ? 0 : 20;
+
+  const leaseGapDays = Math.max(0, clientDso - leaseOffsetFromEndOfMonth);
+  const driverGapDays = Math.max(0, clientDso - driverTerms);
+  const fuelGapDays = Math.max(0, clientDso - fuelTerms);
+  const tollsGapDays = Math.max(0, clientDso - tollsTerms);
+  const tiresGapDays = Math.max(0, clientDso - tiresTerms);
+  const fridgeGapDays = Math.max(0, clientDso - fridgeTerms);
+  const telematicsGapDays = Math.max(0, clientDso - telematicsTerms);
+  const washingGapDays = Math.max(0, clientDso - washingTerms);
+  const extraGapDays = Math.max(0, clientDso - extraTerms);
+  const supplierGapDays = Math.max(0, clientDso - supplierTerms);
+
+  const leaseMonthly = (vehicleLease + trailerLease) * workingDays;
+  const personnelMonthly = (driverCost + porterageCost) * workingDays;
+  const fuelMonthly = fuelCost * workingDays;
+  const tollsMonthly = tollsCost * workingDays;
+  const tiresMonthly = tiresCost * workingDays;
+  const fridgeMonthly = refrigerationCost * workingDays;
+  const telematicsMonthly = telematicsCost * workingDays;
+  const washingMonthly = washingCost * workingDays;
+  const extraMonthly = extraCost * workingDays;
+  const partnerOtherMonthly = (partnerMargin + otherCost) * workingDays;
+
+  const needLease = leaseMonthly * (leaseGapDays / 30);
+  const needPersonnel = personnelMonthly * (driverGapDays / 30);
+  const needFuel = fuelMonthly * (fuelGapDays / 30);
+  const needTolls = tollsMonthly * (tollsGapDays / 30);
+  const needTires = tiresMonthly * (tiresGapDays / 30);
+  const needFridge = fridgeMonthly * (fridgeGapDays / 30);
+  const needTelematics = telematicsMonthly * (telematicsGapDays / 30);
+  const needWashing = washingMonthly * (washingGapDays / 30);
+  const needExtra = extraMonthly * (extraGapDays / 30);
+  const needSuppliers = partnerOtherMonthly * (supplierGapDays / 30);
+
+  const recurringWorkingCapitalNeed =
+    needLease +
+    needPersonnel +
+    needFuel +
+    needTolls +
+    needTires +
+    needFridge +
+    needTelematics +
+    needWashing +
+    needExtra +
+    needSuppliers;
+
+  const deposit = Number(project.depositAmount) || 0;
+  const estimatedWorkingCapitalGap = +(recurringWorkingCapitalNeed + deposit).toFixed(2);
+  const gapDays = monthlyCost > 0
+    ? Math.round((recurringWorkingCapitalNeed / monthlyCost) * 30)
+    : Math.max(0, clientDso - supplierTerms);
+  const gapMonths = +(gapDays / 30).toFixed(2);
 
   return {
     totalCostDaily,
@@ -780,7 +1112,18 @@ export const calculateSingleProjectMetrics = (project) => {
     totalProjectMol,
     gapDays,
     gapMonths,
-    estimatedWorkingCapitalGap
+    weightedDpoDays: clientDso - gapDays,
+    estimatedWorkingCapitalGap,
+    workingCapitalBreakdown: {
+      leases: +needLease.toFixed(2),
+      leaseGapDays,
+      personnel: +needPersonnel.toFixed(2),
+      driverGapDays,
+      fuelAndFridge: +(needFuel + needFridge).toFixed(2),
+      accessoriesAndTolls: +(needTolls + needTires + needTelematics + needWashing + needExtra).toFixed(2),
+      suppliers: +needSuppliers.toFixed(2),
+      deposit: +deposit.toFixed(2)
+    }
   };
 };
 
@@ -852,11 +1195,14 @@ export const calculateTireCostPerKm = (vehicle, trailer, options = {}) => {
 };
 
 /**
- * RICALCOLO DINAMICO COMMESSA: Sincronizza i costi al variare di:
- * - Canone e parametri del mezzo associato (es. da 7.000€ a 5.200€ -> 208€/gg su 25gg)
- * - Chilometraggio (consumo Bio-LNG/elettrico, pedaggi autostradali, pneumatici)
- * - Modalità di gestione (Diretta "D" vs Terzi/Fornitore "T")
- * - Facchinaggio e canone semirimorchio
+ * RICALCOLO DINAMICO COMMESSA: Sincronizza tutti i costi operativi e finanziari al variare di:
+ * - Canone e tipologia mezzo associato (Patente CE / C / B -> ricalcolo automatico costo autista)
+ * - Configurazione turno autista (1 Diurno, 1 Notturno, Doppio Autista Diurno + Notturno)
+ * - Fornitura energia (A carico FOUR vs A carico Cliente = 0 €)
+ * - Chilometraggio (carburante/Bio-LNG/BEV, pedaggi, pneumatici)
+ * - Refrigerazione (Azoto liquido / Gasolio * ore funzionamento)
+ * - Costi accessori (Telematica 14/13/12 €/m, Lavaggio, Costi extra)
+ * - Fabbisogno finanziario ponderato per scadenze effettive
  */
 export const recalculateProjectCost = (project, fleet = [], trailers = [], settings = {}) => {
   const vehicle = fleet.find(v => v.id === project.vehicleId);
@@ -876,21 +1222,31 @@ export const recalculateProjectCost = (project, fleet = [], trailers = [], setti
   let tiresDaily = 0;
   let vehicleLeaseDaily = 0;
   let trailerLeaseDaily = 0;
+  let refrigerationCostDaily = 0;
+  let telematicsCostDaily = 0;
+  let washingCostDaily = 0;
+  let extraCostDaily = 0;
   let partnerMarginDaily = Number(project.partnerMarginDaily) || 0;
   let porterageDaily = Number(project.porterageDaily) || 0;
   let otherCostsDaily = Number(project.otherCostsDaily) || 0;
 
+  const refCalc = calculateRefrigerationDailyCost(project, trailer, settings);
+  const accCalc = calculateAccessoriesDailyCost(project, vehicle, trailer, settings);
+
+  // Refrigerazione e Costi Extra / Telematica rimorchio si applicano anche su T se FOUR fornisce il rimorchio
+  refrigerationCostDaily = refCalc.dailyCost;
+  telematicsCostDaily = accCalc.telematicsDaily;
+  extraCostDaily = accCalc.extraDaily;
+
   if (managementType === 'T') {
     // MODALITÀ FORNITORE / TERZISTA ("T"):
-    // Corrispettivo fornitore (partnerMarginDaily) + Quota semirimorchio FOUR + Facchinaggio
-    // I costi diretti di autista, trattore, carburante, pedaggi e gomme sono a carico del vettore!
     driverCostDaily = Number(project.overrideDriverCostDaily || 0);
     fuelCostDaily = Number(project.overrideFuelCostDaily || 0);
     tollsDaily = Number(project.overrideTollsDaily || 0);
     tiresDaily = Number(project.overrideTiresDaily || 0);
     vehicleLeaseDaily = Number(project.overrideVehicleLeaseDaily || 0);
+    washingCostDaily = project.washingEnabled === true ? accCalc.washingDaily : 0;
 
-    // Semirimorchio FOUR messo a disposizione: quota di ammortamento/canone giornaliero
     if (trailer && workingDays > 0) {
       trailerLeaseDaily = +(trailer.monthlyLease / workingDays).toFixed(2);
     } else {
@@ -898,22 +1254,24 @@ export const recalculateProjectCost = (project, fleet = [], trailers = [], setti
     }
   } else {
     // GESTIONE DIRETTA FOUR ("D"):
-    // 1. Quota giornaliera veicolo da canone mensile anagrafica: canone / giorni lavorativi
+    // 1. Quota giornaliera veicolo da canone mensile anagrafica
     if (vehicle && workingDays > 0) {
       vehicleLeaseDaily = +(vehicle.monthlyLease / workingDays).toFixed(2);
     } else {
       vehicleLeaseDaily = Number(project.vehicleLeaseDaily) || 0;
     }
 
-    // 2. Quota giornaliera semirimorchio da canone mensile: canone / giorni lavorativi
+    // 2. Quota giornaliera semirimorchio da canone mensile
     if (trailer && workingDays > 0) {
       trailerLeaseDaily = +(trailer.monthlyLease / workingDays).toFixed(2);
     } else {
       trailerLeaseDaily = Number(project.trailerLeaseDaily) || 0;
     }
 
-    // 3. Ricalcolo dinamico Carburante al variare dei Km
-    if (vehicle && km > 0) {
+    // 3. Carburante / Energia (NOTA 1.2: se a carico del Cliente -> sempre 0 €)
+    if (project.energyPayer === 'client') {
+      fuelCostDaily = 0;
+    } else if (vehicle && km > 0) {
       const fuelType = fuelTypes.find(f => f.id === vehicle.fuelTypeId);
       const fuelPrice = fuelType ? fuelType.price : (vehicle.fuelTypeId === 'biolng' ? 1.18 : 0.36);
 
@@ -921,7 +1279,6 @@ export const recalculateProjectCost = (project, fleet = [], trailers = [], setti
         const consumptionKwhKm = vehicle.avgConsumption || 1.18;
         fuelCostDaily = +(km * consumptionKwhKm * fuelPrice).toFixed(2);
       } else if (vehicle.fuelTypeId === 'biolng') {
-        // Se c'è una resa (es. 4.2 km/kg per trattore Volvo Bio-LNG)
         if (vehicle.yieldKmPerUnit && vehicle.yieldKmPerUnit > 0) {
           fuelCostDaily = +((km / vehicle.yieldKmPerUnit) * fuelPrice).toFixed(2);
         } else {
@@ -936,7 +1293,7 @@ export const recalculateProjectCost = (project, fleet = [], trailers = [], setti
       fuelCostDaily = Number(project.fuelCostDaily) || 0;
     }
 
-    // 4. Ricalcolo dinamico Pedaggi Autostrada al variare dei Km (70% autostrada)
+    // 4. Pedaggi Autostrada al variare dei Km
     if (km > 0) {
       const hPercent = project.highwayPercent !== undefined ? project.highwayPercent : 70;
       const tollRate = standardCosts.tollRateHighwayKm || 0.12;
@@ -945,7 +1302,7 @@ export const recalculateProjectCost = (project, fleet = [], trailers = [], setti
       tollsDaily = Number(project.tollsDaily) || 0;
     }
 
-    // 5. Ricalcolo dinamico Pneumatici al variare dei Km (50k BEV / 80k rimorchio)
+    // 5. Pneumatici al variare dei Km
     if (km > 0) {
       const tireCalc = calculateTireCostPerKm(vehicle, trailer, tireParameters);
       tiresDaily = +(km * tireCalc.totalRate).toFixed(2);
@@ -953,32 +1310,22 @@ export const recalculateProjectCost = (project, fleet = [], trailers = [], setti
       tiresDaily = Number(project.tiresDaily) || 0;
     }
 
-    // 6. Autista dipendente CCNL
-    driverCostDaily = Number(project.driverCostDaily) || 220;
+    // 6. Lavaggio
+    washingCostDaily = accCalc.washingDaily;
+
+    // 7. Autista dipendente CCNL (NOTA 1.3 & NOTA 3.2.D)
+    const driverShiftType = project.driverShiftType || (
+      vehicle?.licenseTypeId === 'ce_doppio' || vehicle?.licenseTypeId === 'c_doppio' ? '2_turni' :
+      (vehicle?.licenseTypeId || '').includes('notturno') ? '1_notturno' : '1_diurno'
+    );
+    if (project.driverManualOverride && project.driverCostDaily !== undefined) {
+      driverCostDaily = Number(project.driverCostDaily) || 0;
+    } else {
+      driverCostDaily = calculateDriverDailyCost(vehicle, driverShiftType, settings);
+    }
   }
 
-  // Costo totale giornaliero
-  const totalCostDaily = +(
-    driverCostDaily +
-    fuelCostDaily +
-    tollsDaily +
-    tiresDaily +
-    vehicleLeaseDaily +
-    trailerLeaseDaily +
-    partnerMarginDaily +
-    porterageDaily +
-    otherCostsDaily
-  ).toFixed(2);
-
-  const revenueDaily = Number(project.revenueDaily) || 0;
-  const molDaily = +(revenueDaily - totalCostDaily).toFixed(2);
-
-  const monthlyCost = +(totalCostDaily * workingDays).toFixed(2);
-  const monthlyRevenue = +(revenueDaily * workingDays).toFixed(2);
-  const monthlyMol = +(monthlyRevenue - monthlyCost).toFixed(2);
-  const molPercent = monthlyRevenue > 0 ? +((monthlyMol / monthlyRevenue) * 100).toFixed(2) : 0;
-
-  return {
+  const enrichedProject = {
     ...project,
     driverCostDaily,
     fuelCostDaily,
@@ -986,15 +1333,36 @@ export const recalculateProjectCost = (project, fleet = [], trailers = [], setti
     tiresDaily,
     vehicleLeaseDaily,
     trailerLeaseDaily,
+    refrigerationEnabled: refCalc.enabled,
+    refrigerationTech: refCalc.tech,
+    refrigerationUnitCost: refCalc.unitCost,
+    refrigerationHourlyConsumption: refCalc.hourlyConsumption,
+    refrigerationHoursDaily: refCalc.hoursPerDay,
+    refrigerationCostDaily,
+    telematicsEnabled: accCalc.telematicsEnabled,
+    telematicsMonthly: accCalc.telematicsMonthly,
+    telematicsCostDaily,
+    washingEnabled: accCalc.washingEnabled,
+    washingUnitCost: accCalc.washUnitCost,
+    washingCountPerMonth: accCalc.washesPerMonth,
+    washingCostDaily,
+    extraCostDaily,
     partnerMarginDaily,
     porterageDaily,
-    otherCostsDaily,
-    totalCostDaily,
-    revenueDaily,
-    molDaily,
-    monthlyCost,
-    monthlyRevenue,
-    monthlyMol,
-    molPercent
+    otherCostsDaily
+  };
+
+  const metrics = calculateSingleProjectMetrics(enrichedProject);
+
+  return {
+    ...enrichedProject,
+    totalCostDaily: metrics.totalCostDaily,
+    revenueDaily: metrics.revenueDaily,
+    molDaily: metrics.molDaily,
+    monthlyCost: metrics.monthlyCost,
+    monthlyRevenue: metrics.monthlyRevenue,
+    monthlyMol: metrics.monthlyMol,
+    molPercent: +metrics.molPercent.toFixed(2),
+    cashAdvanceRequired: metrics.estimatedWorkingCapitalGap
   };
 };

@@ -21,7 +21,10 @@ import {
   HelpCircle,
   Truck,
   Sparkles,
-  ExternalLink
+  ExternalLink,
+  Snowflake,
+  Droplets,
+  Wifi
 } from 'lucide-react';
 
 const SettingsPage = () => {
@@ -97,6 +100,48 @@ const SettingsPage = () => {
       ownershipDefaults: {
         ...settings.ownershipDefaults,
         [key]: parseFloat(value) || 0
+      }
+    });
+  };
+
+  const handleRefParamChange = (tech, field, value) => {
+    const num = parseFloat(value) || 0;
+    const prevTech = settings.refrigerationParams?.[tech] || (tech === 'azoto' ? { unitCost: 0.13, hourlyConsumption: 30 } : { unitCost: 1.80, hourlyConsumption: 3.0 });
+    const nextTech = { ...prevTech, [field]: num };
+    nextTech.hourlyCost = +(Number(nextTech.unitCost) * Number(nextTech.hourlyConsumption)).toFixed(2);
+    setSettings({
+      ...settings,
+      refrigerationParams: {
+        ...(settings.refrigerationParams || {}),
+        [tech]: nextTech
+      }
+    });
+  };
+
+  const handleTelParamChange = (field, value) => {
+    const num = parseFloat(value) || 0;
+    setSettings({
+      ...settings,
+      accessoryParams: {
+        ...(settings.accessoryParams || {}),
+        telematics: {
+          ...(settings.accessoryParams?.telematics || { tractorMonthly: 14, trailerMonthly: 13, rigidMonthly: 12, vanMonthly: 12 }),
+          [field]: num
+        }
+      }
+    });
+  };
+
+  const handleWashParamChange = (field, value) => {
+    const num = parseFloat(value) || 0;
+    const prevWash = settings.accessoryParams?.washing || { costPerWash: 80, washesPerMonth: 2 };
+    const nextWash = { ...prevWash, [field]: num };
+    nextWash.monthlyTotal = +(Number(nextWash.costPerWash) * Number(nextWash.washesPerMonth)).toFixed(2);
+    setSettings({
+      ...settings,
+      accessoryParams: {
+        ...(settings.accessoryParams || {}),
+        washing: nextWash
       }
     });
   };
@@ -830,6 +875,184 @@ const SettingsPage = () => {
                   </div>
                 </div>
               ))}
+            </div>
+          </div>
+        </div>
+
+        {/* 3.5 PARAMETRI REFRIGERAZIONE SEMIRIMORCHI FRIGO & COSTI ACCESSORI STANDARD */}
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-4">
+          <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+            <div className="flex items-center space-x-2">
+              <Snowflake className="w-5 h-5 text-cyan-600" />
+              <div>
+                <h2 className="text-sm font-bold text-slate-900">
+                  Parametri Refrigerazione Semirimorchi Frigo &amp; Costi Accessori Standard (Telematica e Lavaggi)
+                </h2>
+                <p className="text-[11px] text-slate-500">
+                  Valori predefiniti modificabili per Preventivi e Commesse FOUR (scadenza pagamento predefinita: 30 gg)
+                </p>
+              </div>
+            </div>
+            <span className="text-xs font-bold px-2.5 py-1 rounded-full bg-cyan-50 text-cyan-800 border border-cyan-200">
+              Nota 3 Integrazioni
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 text-xs">
+            {/* Refrigerazione Frigo */}
+            <div className="p-4 bg-cyan-50/50 rounded-xl border border-cyan-200 space-y-3">
+              <div className="flex items-center space-x-2 font-bold text-cyan-950">
+                <Snowflake className="w-4 h-4 text-cyan-700" />
+                <span>Gruppi Frigoriferi (Azoto Liquido vs Gasolio)</span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {/* Azoto Liquido */}
+                <div className="p-3 bg-white rounded-xl border border-cyan-200/80 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-cyan-900">Azoto Liquido</span>
+                    <span className="text-[11px] font-black text-cyan-700">
+                      {formatEUR((settings.refrigerationParams?.azoto?.unitCost ?? 0.13) * (settings.refrigerationParams?.azoto?.hourlyConsumption ?? 30))}/h
+                    </span>
+                  </div>
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <label className="text-[11px] text-slate-600">Costo unitario (€/kg)</label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={settings.refrigerationParams?.azoto?.unitCost ?? 0.13}
+                        onChange={(e) => handleRefParamChange('azoto', 'unitCost', e.target.value)}
+                        className="w-20 px-2 py-1 border border-slate-300 rounded text-right font-bold"
+                      />
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <label className="text-[11px] text-slate-600">Consumo orario (kg/h)</label>
+                      <input
+                        type="number"
+                        step="1"
+                        value={settings.refrigerationParams?.azoto?.hourlyConsumption ?? 30}
+                        onChange={(e) => handleRefParamChange('azoto', 'hourlyConsumption', e.target.value)}
+                        className="w-20 px-2 py-1 border border-slate-300 rounded text-right font-bold"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Gasolio Frigo */}
+                <div className="p-3 bg-white rounded-xl border border-cyan-200/80 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-slate-800">Gasolio Frigo</span>
+                    <span className="text-[11px] font-black text-amber-700">
+                      {formatEUR((settings.refrigerationParams?.gasolio?.unitCost ?? 1.80) * (settings.refrigerationParams?.gasolio?.hourlyConsumption ?? 3.0))}/h
+                    </span>
+                  </div>
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <label className="text-[11px] text-slate-600">Costo unitario (€/L)</label>
+                      <input
+                        type="number"
+                        step="0.05"
+                        value={settings.refrigerationParams?.gasolio?.unitCost ?? 1.80}
+                        onChange={(e) => handleRefParamChange('gasolio', 'unitCost', e.target.value)}
+                        className="w-20 px-2 py-1 border border-slate-300 rounded text-right font-bold"
+                      />
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <label className="text-[11px] text-slate-600">Consumo orario (L/h)</label>
+                      <input
+                        type="number"
+                        step="0.5"
+                        value={settings.refrigerationParams?.gasolio?.hourlyConsumption ?? 3.0}
+                        onChange={(e) => handleRefParamChange('gasolio', 'hourlyConsumption', e.target.value)}
+                        className="w-20 px-2 py-1 border border-slate-300 rounded text-right font-bold"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Telematica & Lavaggi */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {/* Telematica */}
+              <div className="p-4 bg-indigo-50/50 rounded-xl border border-indigo-200 space-y-2.5">
+                <div className="flex items-center space-x-2 font-bold text-indigo-950">
+                  <Wifi className="w-4 h-4 text-indigo-700" />
+                  <span>Telematica Mensile (€/mese)</span>
+                </div>
+                <div className="space-y-1.5 bg-white p-3 rounded-xl border border-indigo-200/80">
+                  <div className="flex items-center justify-between">
+                    <label className="text-[11px] text-slate-600">Trattori stradali</label>
+                    <input
+                      type="number"
+                      step="1"
+                      value={settings.accessoryParams?.telematics?.tractorMonthly ?? 14}
+                      onChange={(e) => handleTelParamChange('tractorMonthly', e.target.value)}
+                      className="w-20 px-2 py-1 border border-slate-300 rounded text-right font-bold"
+                    />
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <label className="text-[11px] text-slate-600">Semirimorchi (trailer)</label>
+                    <input
+                      type="number"
+                      step="1"
+                      value={settings.accessoryParams?.telematics?.trailerMonthly ?? 13}
+                      onChange={(e) => handleTelParamChange('trailerMonthly', e.target.value)}
+                      className="w-20 px-2 py-1 border border-slate-300 rounded text-right font-bold"
+                    />
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <label className="text-[11px] text-slate-600">Motrici</label>
+                    <input
+                      type="number"
+                      step="1"
+                      value={settings.accessoryParams?.telematics?.rigidMonthly ?? 12}
+                      onChange={(e) => handleTelParamChange('rigidMonthly', e.target.value)}
+                      className="w-20 px-2 py-1 border border-slate-300 rounded text-right font-bold"
+                    />
+                  </div>
+                  <div className="pt-1 border-t border-slate-100 text-[10px] font-bold text-indigo-800 flex justify-between">
+                    <span>Trattore + Rimorchio:</span>
+                    <span>{formatEUR((settings.accessoryParams?.telematics?.tractorMonthly ?? 14) + (settings.accessoryParams?.telematics?.trailerMonthly ?? 13))}/mese</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Lavaggi */}
+              <div className="p-4 bg-blue-50/50 rounded-xl border border-blue-200 space-y-2.5">
+                <div className="flex items-center space-x-2 font-bold text-blue-950">
+                  <Droplets className="w-4 h-4 text-blue-700" />
+                  <span>Lavaggio Automezzi</span>
+                </div>
+                <div className="space-y-1.5 bg-white p-3 rounded-xl border border-blue-200/80">
+                  <div className="flex items-center justify-between">
+                    <label className="text-[11px] text-slate-600">Costo singolo lavaggio (€)</label>
+                    <input
+                      type="number"
+                      step="5"
+                      value={settings.accessoryParams?.washing?.costPerWash ?? 80}
+                      onChange={(e) => handleWashParamChange('costPerWash', e.target.value)}
+                      className="w-20 px-2 py-1 border border-slate-300 rounded text-right font-bold"
+                    />
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <label className="text-[11px] text-slate-600">Frequenza (lavaggi/mese)</label>
+                    <input
+                      type="number"
+                      step="1"
+                      min="0"
+                      value={settings.accessoryParams?.washing?.washesPerMonth ?? 2}
+                      onChange={(e) => handleWashParamChange('washesPerMonth', e.target.value)}
+                      className="w-20 px-2 py-1 border border-slate-300 rounded text-right font-bold"
+                    />
+                  </div>
+                  <div className="pt-1 border-t border-slate-100 text-[10px] font-bold text-blue-900 flex justify-between">
+                    <span>Costo mensile totale:</span>
+                    <span>{formatEUR((settings.accessoryParams?.washing?.costPerWash ?? 80) * (settings.accessoryParams?.washing?.washesPerMonth ?? 2))}/mese</span>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </div>

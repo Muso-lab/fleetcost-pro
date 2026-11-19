@@ -7,9 +7,10 @@ import {
   calculateSingleProjectMetrics,
   LEASE_PAYMENT_TIMINGS,
   normalizeLeaseTiming,
-  calculateTireCostPerKm,
   recalculateProjectCost,
-  getContractValidity
+  getContractValidity,
+  isRefrigeratedTrailer,
+  calculateDriverDailyCost
 } from '../utils/cashFlowCalculations';
 import {
   Briefcase,
@@ -31,7 +32,13 @@ import {
   DollarSign,
   Calendar,
   AlertCircle,
-  RotateCw
+  RotateCw,
+  Zap,
+  Snowflake,
+  Droplets,
+  Wifi,
+  ChevronDown,
+  ChevronUp
 } from 'lucide-react';
 
 const ProjectsPage = () => {
@@ -39,6 +46,7 @@ const ProjectsPage = () => {
   const [projects, setProjects] = useState([]);
   const [fleet, setFleet] = useState([]);
   const [trailers, setTrailers] = useState([]);
+  const [settings, setSettings] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [clientFilter, setClientFilter] = useState('all');
   const [managementFilter, setManagementFilter] = useState('all');
@@ -46,6 +54,7 @@ const ProjectsPage = () => {
   const [contractFilter, setContractFilter] = useState('all');
   const [showModal, setShowModal] = useState(false);
   const [showNextYearModal, setShowNextYearModal] = useState(false);
+  const [showPerItemTerms, setShowPerItemTerms] = useState(false);
   const [editingProject, setEditingProject] = useState(null);
 
   // Form State per Nuovo/Modifica Progetto
@@ -61,10 +70,31 @@ const ProjectsPage = () => {
     managementType: 'D', // D = Diretta, T = Terzi
     vehicleId: '',
     trailerId: '',
+    driverShiftType: '1_diurno', // 1_diurno | 1_notturno | 2_turni
+    driverManualOverride: false,
     driverCostDaily: 220,
+    energyPayer: 'four', // four | client
     fuelCostDaily: 40,
     tollsDaily: 35,
     tiresDaily: 12,
+    refrigerationEnabled: false,
+    refrigerationTech: 'gasolio',
+    refrigerationUnitCost: 1.80,
+    refrigerationHourlyConsumption: 3.0,
+    refrigerationHoursDaily: 8,
+    refrigerationCostDaily: 0,
+    telematicsEnabled: true,
+    telematicsAuto: true,
+    telematicsMonthly: 27,
+    telematicsCostDaily: 1.23,
+    washingEnabled: true,
+    washingUnitCost: 80,
+    washingCountPerMonth: 2,
+    washingCostDaily: 7.27,
+    extraCostDescription: '',
+    extraCostAmount: 0,
+    extraCostFrequency: 'monthly',
+    extraCostDaily: 0,
     otherCostsDaily: 0,
     partnerMarginDaily: 0,
     porterageDaily: 0,
@@ -72,8 +102,18 @@ const ProjectsPage = () => {
     trailerLeaseDaily: 35,
     revenueDaily: 750,
     paymentTermsClient: 60, // DSO: incasso clienti gg
-    paymentTermsSuppliers: 30, // DPO: fornitori gg
+    paymentTermsSuppliers: 30, // DPO: fornitori / terzisti gg
     paymentTermsLease: 30,
+    leasePaymentTiming: 'M1_D10',
+    paymentTermsDriver: 16,
+    paymentTermsFuel: 30,
+    paymentTermsTolls: 15,
+    paymentTermsTires: 30,
+    paymentTermsRefrigeration: 30,
+    paymentTermsTelematics: 30,
+    paymentTermsWashing: 30,
+    paymentTermsExtra: 30,
+    acciseRecoveryEligible: true,
     depositAmount: 0,
     notes: ''
   });
@@ -90,9 +130,11 @@ const ProjectsPage = () => {
     const p = storageService.getProjects();
     const f = storageService.getFleet();
     const t = storageService.getTrailers();
+    const s = storageService.getSettings();
     setProjects(p);
     setFleet(f);
     setTrailers(t);
+    setSettings(s);
   };
 
   const handleOpenCreateWithVehicle = (vehicleId) => {
@@ -102,10 +144,15 @@ const ProjectsPage = () => {
   };
 
   // Funzione unificata di ricalcolo automatico e reattivo
-  const applyAutoRecalculation = (partialData) => {
-    const merged = { ...formData, ...partialData };
-    const settings = storageService.getSettings();
-    const recalculated = recalculateProjectCost(merged, fleet, trailers, settings);
+  const applyAutoRecalculation = (partialData, options = {}) => {
+    const baseData = options.baseData || formData;
+    const merged = {
+      ...baseData,
+      ...partialData,
+      ...(options.forceRecalculateDriver ? { driverManualOverride: false } : {})
+    };
+    const curSettings = settings || storageService.getSettings();
+    const recalculated = recalculateProjectCost(merged, fleet, trailers, curSettings);
     return {
       ...merged,
       driverCostDaily: recalculated.driverCostDaily,
@@ -114,6 +161,20 @@ const ProjectsPage = () => {
       tiresDaily: recalculated.tiresDaily,
       vehicleLeaseDaily: recalculated.vehicleLeaseDaily,
       trailerLeaseDaily: recalculated.trailerLeaseDaily,
+      refrigerationEnabled: recalculated.refrigerationEnabled,
+      refrigerationTech: recalculated.refrigerationTech,
+      refrigerationUnitCost: recalculated.refrigerationUnitCost,
+      refrigerationHourlyConsumption: recalculated.refrigerationHourlyConsumption,
+      refrigerationHoursDaily: recalculated.refrigerationHoursDaily,
+      refrigerationCostDaily: recalculated.refrigerationCostDaily,
+      telematicsEnabled: recalculated.telematicsEnabled,
+      telematicsMonthly: recalculated.telematicsMonthly,
+      telematicsCostDaily: recalculated.telematicsCostDaily,
+      washingEnabled: recalculated.washingEnabled,
+      washingUnitCost: recalculated.washingUnitCost,
+      washingCountPerMonth: recalculated.washingCountPerMonth,
+      washingCostDaily: recalculated.washingCostDaily,
+      extraCostDaily: recalculated.extraCostDaily,
       partnerMarginDaily: recalculated.partnerMarginDaily,
       porterageDaily: recalculated.porterageDaily,
       otherCostsDaily: recalculated.otherCostsDaily
@@ -121,8 +182,18 @@ const ProjectsPage = () => {
   };
 
   const handleOpenModal = (project = null, preselectedVehicle = null) => {
+    const curSettings = settings || storageService.getSettings();
     if (project) {
       setEditingProject(project);
+      const projVeh = fleet.find(v => v.id === project.vehicleId);
+      const projTrl = trailers.find(t => t.id === project.trailerId);
+      const refDef = curSettings?.refrigerationParams || {};
+      const defaultTech = projTrl?.category === 'refrigerato_azoto' ? 'azoto' : 'gasolio';
+      const tech = project.refrigerationTech || defaultTech;
+      const techParams = refDef[tech] || (tech === 'azoto' ? { unitCost: 0.13, hourlyConsumption: 30 } : { unitCost: 1.80, hourlyConsumption: 3.0 });
+      const telDef = curSettings?.accessoryParams?.telematics || { tractorMonthly: 14, trailerMonthly: 13, rigidMonthly: 12 };
+      const washDef = curSettings?.accessoryParams?.washing || { costPerWash: 80, washesPerMonth: 2 };
+
       setFormData({
         code: project.code || '',
         name: project.name || '',
@@ -135,19 +206,62 @@ const ProjectsPage = () => {
         managementType: project.managementType || 'D',
         vehicleId: project.vehicleId || '',
         trailerId: project.trailerId || '',
+        driverShiftType: project.driverShiftType || (
+          (projVeh?.licenseTypeId || '').includes('doppio') ? '2_turni' :
+          (projVeh?.licenseTypeId || '').includes('notturno') ? '1_notturno' : '1_diurno'
+        ),
+        driverManualOverride: Boolean(project.driverManualOverride),
         driverCostDaily: project.driverCostDaily || 0,
-        fuelCostDaily: project.fuelCostDaily || 0,
+        energyPayer: project.energyPayer || 'four',
+        fuelCostDaily: project.energyPayer === 'client' ? 0 : (project.fuelCostDaily || 0),
         tollsDaily: project.tollsDaily || 0,
         tiresDaily: project.tiresDaily || 0,
+        refrigerationEnabled: project.refrigerationEnabled !== undefined
+          ? Boolean(project.refrigerationEnabled)
+          : (Number(project.refrigerationCostDaily) > 0),
+        refrigerationTech: tech,
+        refrigerationUnitCost: project.refrigerationUnitCost ?? techParams.unitCost,
+        refrigerationHourlyConsumption: project.refrigerationHourlyConsumption ?? techParams.hourlyConsumption,
+        refrigerationHoursDaily: project.refrigerationHoursDaily ?? 8,
+        refrigerationCostDaily: project.refrigerationCostDaily || 0,
+        telematicsEnabled: project.telematicsEnabled !== undefined
+          ? Boolean(project.telematicsEnabled)
+          : (Number(project.telematicsCostDaily) > 0),
+        telematicsAuto: project.telematicsAuto !== undefined ? Boolean(project.telematicsAuto) : true,
+        telematicsMonthly: project.telematicsMonthly ?? (
+          (project.managementType !== 'T' && projVeh ? (projVeh.category === 'trattore' ? telDef.tractorMonthly : telDef.rigidMonthly) : 0) +
+          (projTrl ? telDef.trailerMonthly : 0)
+        ),
+        telematicsCostDaily: project.telematicsCostDaily || 0,
+        washingEnabled: project.washingEnabled !== undefined
+          ? Boolean(project.washingEnabled)
+          : (Number(project.washingCostDaily) > 0),
+        washingUnitCost: project.washingUnitCost ?? washDef.costPerWash,
+        washingCountPerMonth: project.washingCountPerMonth ?? washDef.washesPerMonth,
+        washingCostDaily: project.washingCostDaily || 0,
+        extraCostDescription: project.extraCostDescription || '',
+        extraCostAmount: project.extraCostAmount || 0,
+        extraCostFrequency: project.extraCostFrequency || 'monthly',
+        extraCostDaily: project.extraCostDaily || 0,
         otherCostsDaily: project.otherCostsDaily || 0,
         partnerMarginDaily: project.partnerMarginDaily || 0,
         porterageDaily: project.porterageDaily || 0,
         vehicleLeaseDaily: project.vehicleLeaseDaily || 0,
         trailerLeaseDaily: project.trailerLeaseDaily || 0,
         revenueDaily: project.revenueDaily || 0,
-        paymentTermsClient: project.paymentTermsClient || 60,
-        paymentTermsSuppliers: project.paymentTermsSuppliers || 30,
-        paymentTermsLease: project.paymentTermsLease || 30,
+        paymentTermsClient: project.paymentTermsClient ?? 60,
+        paymentTermsSuppliers: project.paymentTermsSuppliers ?? 30,
+        paymentTermsLease: project.paymentTermsLease ?? 30,
+        leasePaymentTiming: project.leasePaymentTiming || normalizeLeaseTiming(project),
+        paymentTermsDriver: project.paymentTermsDriver ?? 16,
+        paymentTermsFuel: project.paymentTermsFuel ?? 30,
+        paymentTermsTolls: project.paymentTermsTolls ?? 15,
+        paymentTermsTires: project.paymentTermsTires ?? 30,
+        paymentTermsRefrigeration: project.paymentTermsRefrigeration ?? 30,
+        paymentTermsTelematics: project.paymentTermsTelematics ?? 30,
+        paymentTermsWashing: project.paymentTermsWashing ?? 30,
+        paymentTermsExtra: project.paymentTermsExtra ?? 30,
+        acciseRecoveryEligible: project.acciseRecoveryEligible !== false,
         depositAmount: project.depositAmount || 0,
         notes: project.notes || ''
       });
@@ -155,6 +269,13 @@ const ProjectsPage = () => {
       setEditingProject(null);
       const defaultVeh = preselectedVehicle || fleet[0];
       const workingDays = 22;
+      const defaultShift = (defaultVeh?.licenseTypeId || '').includes('doppio') ? '2_turni'
+        : (defaultVeh?.licenseTypeId || '').includes('notturno') ? '1_notturno' : '1_diurno';
+      const telDef = curSettings?.accessoryParams?.telematics || { tractorMonthly: 14, trailerMonthly: 13, rigidMonthly: 12 };
+      const washDef = curSettings?.accessoryParams?.washing || { costPerWash: 80, washesPerMonth: 2 };
+      const payDef = curSettings?.paymentTermsDefaults || {};
+      const gasolioRef = curSettings?.refrigerationParams?.gasolio || { unitCost: 1.80, hourlyConsumption: 3.0 };
+
       const initialProject = {
         code: 'PRJ-' + Math.floor(100 + Math.random() * 900),
         name: defaultVeh ? `Servizio con ${defaultVeh.name}` : '',
@@ -167,10 +288,31 @@ const ProjectsPage = () => {
         managementType: defaultVeh?.ownershipType === 'terzi' ? 'T' : 'D',
         vehicleId: defaultVeh ? defaultVeh.id : '',
         trailerId: '',
-        driverCostDaily: 220,
+        driverShiftType: defaultShift,
+        driverManualOverride: false,
+        driverCostDaily: calculateDriverDailyCost(defaultVeh, defaultShift, curSettings),
+        energyPayer: 'four',
         fuelCostDaily: 35,
         tollsDaily: 30,
         tiresDaily: 12,
+        refrigerationEnabled: false,
+        refrigerationTech: 'gasolio',
+        refrigerationUnitCost: gasolioRef.unitCost,
+        refrigerationHourlyConsumption: gasolioRef.hourlyConsumption,
+        refrigerationHoursDaily: 8,
+        refrigerationCostDaily: 0,
+        telematicsEnabled: true,
+        telematicsAuto: true,
+        telematicsMonthly: defaultVeh?.category === 'trattore' ? telDef.tractorMonthly : telDef.rigidMonthly,
+        telematicsCostDaily: 0,
+        washingEnabled: defaultVeh?.ownershipType !== 'terzi',
+        washingUnitCost: washDef.costPerWash,
+        washingCountPerMonth: washDef.washesPerMonth,
+        washingCostDaily: 0,
+        extraCostDescription: '',
+        extraCostAmount: 0,
+        extraCostFrequency: 'monthly',
+        extraCostDaily: 0,
         otherCostsDaily: 0,
         partnerMarginDaily: defaultVeh?.ownershipType === 'terzi' ? 600 : 0,
         porterageDaily: 0,
@@ -178,18 +320,28 @@ const ProjectsPage = () => {
         trailerLeaseDaily: 0,
         revenueDaily: 750,
         paymentTermsClient: 60,
-        paymentTermsSuppliers: 30,
-        paymentTermsLease: 30,
+        paymentTermsSuppliers: payDef.suppliersPaymentTermsDays ?? 30,
+        paymentTermsLease: defaultVeh?.leasePaymentTerms ?? 0,
+        leasePaymentTiming: defaultVeh?.leasePaymentTiming || 'M1_D10',
+        paymentTermsDriver: payDef.driverPaymentDayNextMonth ?? 16,
+        paymentTermsFuel: payDef.fuelPaymentTermsDays ?? 30,
+        paymentTermsTolls: 15,
+        paymentTermsTires: payDef.tiresPaymentTermsDays ?? 30,
+        paymentTermsRefrigeration: payDef.refrigerationPaymentTermsDays ?? 30,
+        paymentTermsTelematics: payDef.telematicsPaymentTermsDays ?? 30,
+        paymentTermsWashing: payDef.washingPaymentTermsDays ?? 30,
+        paymentTermsExtra: payDef.extraPaymentTermsDays ?? 30,
+        acciseRecoveryEligible: true,
         depositAmount: 0,
         notes: ''
       };
-      const settings = storageService.getSettings();
-      const recalculated = recalculateProjectCost(initialProject, fleet, trailers, settings);
+      const recalculated = recalculateProjectCost(initialProject, fleet, trailers, curSettings);
       setFormData({
         ...initialProject,
         ...recalculated
       });
     }
+    setShowPerItemTerms(false);
     setShowModal(true);
   };
 
@@ -203,13 +355,66 @@ const ProjectsPage = () => {
       vehicleId: vId,
       managementType: newMgmt,
       leasePaymentTiming: newTiming,
-      paymentTermsLease: newTerms
-    });
+      paymentTermsLease: newTerms,
+      telematicsAuto: true
+    }, { forceRecalculateDriver: true });
     setFormData(updated);
   };
 
   const handleTrailerChangeInModal = (tId) => {
-    const updated = applyAutoRecalculation({ trailerId: tId });
+    const selectedTrl = trailers.find(t => t.id === tId);
+    const curSettings = settings || storageService.getSettings();
+    const refParams = curSettings?.refrigerationParams || {};
+    const isFrigo = isRefrigeratedTrailer(selectedTrl);
+    const tech = (selectedTrl?.category === 'refrigerato_azoto' || (selectedTrl?.tractionType || '').toLowerCase().includes('azoto'))
+      ? 'azoto'
+      : 'gasolio';
+    const techDef = refParams[tech] || (tech === 'azoto' ? { unitCost: 0.13, hourlyConsumption: 30 } : { unitCost: 1.80, hourlyConsumption: 3.0 });
+
+    const partial = {
+      trailerId: tId,
+      telematicsAuto: true,
+      refrigerationEnabled: isFrigo,
+      refrigerationTech: tech,
+      refrigerationUnitCost: techDef.unitCost,
+      refrigerationHourlyConsumption: techDef.hourlyConsumption,
+      refrigerationHoursDaily: isFrigo ? (formData.refrigerationHoursDaily || 8) : 0
+    };
+    const updated = applyAutoRecalculation(partial);
+    setFormData(updated);
+  };
+
+  const handleDriverShiftChange = (shiftType) => {
+    const updated = applyAutoRecalculation({ driverShiftType: shiftType }, { forceRecalculateDriver: true });
+    setFormData(updated);
+  };
+
+  const handleEnergyPayerChange = (payer) => {
+    const updated = applyAutoRecalculation({ energyPayer: payer });
+    setFormData(updated);
+  };
+
+  const handleRefrigerationTechChange = (tech) => {
+    const curSettings = settings || storageService.getSettings();
+    const refParams = curSettings?.refrigerationParams || {};
+    const techDef = refParams[tech] || (tech === 'azoto' ? { unitCost: 0.13, hourlyConsumption: 30 } : { unitCost: 1.80, hourlyConsumption: 3.0 });
+    const updated = applyAutoRecalculation({
+      refrigerationEnabled: true,
+      refrigerationTech: tech,
+      refrigerationUnitCost: techDef.unitCost,
+      refrigerationHourlyConsumption: techDef.hourlyConsumption,
+      refrigerationHoursDaily: formData.refrigerationHoursDaily || 8
+    });
+    setFormData(updated);
+  };
+
+  const handleRefrigerationFieldChange = (partial) => {
+    const updated = applyAutoRecalculation(partial);
+    setFormData(updated);
+  };
+
+  const handleAccessoriesFieldChange = (partial) => {
+    const updated = applyAutoRecalculation(partial);
     setFormData(updated);
   };
 
@@ -224,13 +429,17 @@ const ProjectsPage = () => {
   };
 
   const handleManagementTypeChange = (type) => {
-    const updated = applyAutoRecalculation({ managementType: type });
+    const updated = applyAutoRecalculation({
+      managementType: type,
+      telematicsAuto: true,
+      washingEnabled: type === 'D' ? formData.washingEnabled : false
+    }, { forceRecalculateDriver: type === 'D' });
     setFormData(updated);
   };
 
   // Assistente di Calcolo Automatico dei costi della commessa da parametri fisici
   const handleAutoCalculateCosts = () => {
-    const updated = applyAutoRecalculation({});
+    const updated = applyAutoRecalculation({ telematicsAuto: true }, { forceRecalculateDriver: true });
     setFormData(updated);
   };
 
@@ -342,8 +551,11 @@ const ProjectsPage = () => {
     projects.forEach(p => {
       const v = getContractValidity(p);
       if (v.isExpired) expired++;
-      else if (v.isExpiringSoon) expiring++;
-      else active++;
+      else {
+        // Una commessa in scadenza è comunque attiva a budget fino a termine contratto
+        active++;
+        if (v.isExpiringSoon) expiring++;
+      }
     });
     return { active, expiring, expired };
   }, [projects]);
@@ -468,9 +680,13 @@ const ProjectsPage = () => {
             <div className="flex items-baseline justify-between mt-2">
               <span className="text-3xl font-black text-slate-900">{contractStats.active} <span className="text-sm font-semibold text-slate-400">/ {totalProjectsCount}</span></span>
               <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
-                contractStats.expired > 0 ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800'
+                contractStats.expired > 0 || contractStats.expiring > 0 ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800'
               }`}>
-                {contractStats.expired > 0 ? `${contractStats.expired} scadute` : '100% attive'}
+                {contractStats.expired > 0
+                  ? `${contractStats.expired} scadute`
+                  : contractStats.expiring > 0
+                    ? `${contractStats.expiring} in scad.`
+                    : '100% attive'}
               </span>
             </div>
             <p className="text-xs text-slate-500 mt-1">Servizi attivi per l'esercizio 2026</p>
@@ -705,10 +921,25 @@ const ProjectsPage = () => {
                             )}
                           </div>
                         )}
-                        <div className="flex items-center gap-2 mt-1 text-[10px] text-slate-400 flex-wrap">
+                        <div className="flex items-center gap-1.5 mt-1 text-[10px] text-slate-400 flex-wrap">
                           <span>{project.workingDaysMonth || 22} gg/m</span>
                           <span>•</span>
                           <span>{project.kmDaily || 200} km/gg</span>
+                          {project.energyPayer === 'client' && (
+                            <span className="bg-emerald-100 text-emerald-800 font-bold px-1.5 py-0.2 rounded">
+                              Energia Cliente (0 €)
+                            </span>
+                          )}
+                          {project.driverShiftType === '2_turni' && (
+                            <span className="bg-indigo-100 text-indigo-800 font-bold px-1.5 py-0.2 rounded">
+                              2 Turni (D+N)
+                            </span>
+                          )}
+                          {project.refrigerationCostDaily > 0 && (
+                            <span className="bg-cyan-100 text-cyan-800 font-bold px-1.5 py-0.2 rounded">
+                              Frigo {project.refrigerationTech === 'azoto' ? 'Azoto' : 'Gasolio'} {formatEUR(project.refrigerationCostDaily)}/gg
+                            </span>
+                          )}
                           {project.porterageDaily > 0 && (
                             <span className="bg-purple-100 text-purple-800 font-bold px-1.5 py-0.2 rounded">
                               Facchinaggio {formatEUR(project.porterageDaily)}/gg
@@ -747,13 +978,16 @@ const ProjectsPage = () => {
                         </span>
                       </td>
 
-                      <td className="py-3.5 px-4 text-center">
+                      <td className="py-3.5 px-4 text-center whitespace-nowrap">
                         <div className="inline-flex flex-col items-center">
                           <span className="text-[11px] font-bold text-slate-700">
-                            Inc: {project.paymentTermsClient || 60} gg
+                            Inc: {project.paymentTermsClient ?? 60} gg
                           </span>
                           <span className="text-[10px] text-slate-500">
-                            Pag: {project.paymentTermsSuppliers || 30} gg
+                            Nolo: {LEASE_PAYMENT_TIMINGS[normalizeLeaseTiming(project)]?.shortName}
+                          </span>
+                          <span className="text-[9px] text-slate-400">
+                            DPO medio: {metrics.weightedDpoDays} gg
                           </span>
                         </div>
                       </td>
@@ -859,7 +1093,7 @@ const ProjectsPage = () => {
                 <div className="p-4 bg-emerald-50/60 rounded-xl border border-emerald-200/60 space-y-3">
                   <span className="text-[11px] font-extrabold text-emerald-900 uppercase tracking-wider flex items-center">
                     <Truck className="w-4 h-4 mr-1.5 text-emerald-700" />
-                    Assegna Mezzo & Allestimento dalla Flotta
+                    Assegna Mezzo, Allestimento, Autista & Energia
                   </span>
 
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -907,6 +1141,43 @@ const ProjectsPage = () => {
                       </select>
                     </div>
                   </div>
+
+                  {formData.managementType !== 'T' && (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2 border-t border-emerald-200/70">
+                      <div>
+                        <label className="block font-semibold text-slate-700 mb-1">
+                          Configurazione Turno Autista (Ricalcolo auto per categoria mezzo)
+                        </label>
+                        <select
+                          value={formData.driverShiftType || '1_diurno'}
+                          onChange={(e) => handleDriverShiftChange(e.target.value)}
+                          className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 bg-white font-semibold"
+                        >
+                          <option value="1_diurno">1 Autista - Turno Diurno (CE 220€ / C 180€ / B 140€)</option>
+                          <option value="1_notturno">1 Autista - Turno Notturno (CE 260€ / C 220€ / B 170€)</option>
+                          <option value="2_turni">Doppio Autista H24 - Diurno + Notturno (CE 480€ / C 400€)</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="block font-semibold text-slate-700 mb-1">
+                          Fornitura Energia / Carburante
+                        </label>
+                        <select
+                          value={formData.energyPayer || 'four'}
+                          onChange={(e) => handleEnergyPayerChange(e.target.value)}
+                          className={`w-full px-3 py-2 border rounded-xl focus:ring-2 focus:ring-emerald-500 font-bold ${
+                            formData.energyPayer === 'client'
+                              ? 'border-emerald-500 bg-emerald-100 text-emerald-900'
+                              : 'border-slate-300 bg-white text-slate-800'
+                          }`}
+                        >
+                          <option value="four">A carico di FOUR (calcolo dinamico km x consumo)</option>
+                          <option value="client">A carico del Cliente / Ricarica in Hub (0,00 € per FOUR)</option>
+                        </select>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 {/* Parametri Operativi & Calendario */}
@@ -997,7 +1268,7 @@ const ProjectsPage = () => {
                         Dettaglio Costi Giornalieri (€ / Giorno)
                       </span>
                       <span className="text-[10px] text-emerald-700 font-medium">
-                        ⚡ Ricalcolo dinamico attivo: la variazione dei km aggiorna carburante/Bio-LNG, pedaggi e gomme
+                        ⚡ Ricalcolo dinamico attivo: autista per categoria mezzo, energia cliente/FOUR, frigo e accessori
                       </span>
                     </div>
                     <button
@@ -1020,7 +1291,7 @@ const ProjectsPage = () => {
                           <span>Struttura Economica Commessa Fornitore Terzo (Gestione T)</span>
                         </div>
                         <p className="text-[11px] text-blue-800">
-                          I costi diretti di autista, trattore, carburante, pedaggi autostradali e pneumatici sono a carico del vettore terzo (inclusi nel corrispettivo). FOUR sostiene solo il corrispettivo riconosciuto al fornitore, l'eventuale quota del semirimorchio FOUR e il facchinaggio.
+                          I costi diretti di autista, trattore, carburante, pedaggi e gomme sono a carico del vettore terzo. FOUR sostiene compenso fornitore, semirimorchio FOUR, eventuale refrigerazione/telematica e facchinaggio.
                         </p>
                       </div>
 
@@ -1098,23 +1369,38 @@ const ProjectsPage = () => {
                     <div className="space-y-3">
                       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                         <div>
-                          <label className="block text-slate-700 font-semibold mb-0.5">Autista (€/gg)</label>
+                          <label className="block text-slate-700 font-semibold mb-0.5 flex items-center justify-between">
+                            <span>Autista (€/gg)</span>
+                            {formData.driverManualOverride && (
+                              <span className="text-[9px] px-1 bg-amber-100 text-amber-800 rounded">Manuale</span>
+                            )}
+                          </label>
                           <input
                             type="number"
                             step="5"
                             value={formData.driverCostDaily}
-                            onChange={(e) => setFormData({ ...formData, driverCostDaily: parseFloat(e.target.value) || 0 })}
+                            onChange={(e) => setFormData({ ...formData, driverCostDaily: parseFloat(e.target.value) || 0, driverManualOverride: true })}
                             className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg font-semibold"
                           />
                         </div>
                         <div>
-                          <label className="block text-slate-700 font-semibold mb-0.5">Carburante / Bio-LNG / BEV</label>
+                          <label className="block text-slate-700 font-semibold mb-0.5 flex items-center justify-between">
+                            <span>Energia / Bio-LNG</span>
+                            {formData.energyPayer === 'client' && (
+                              <span className="text-[9px] px-1 bg-emerald-100 text-emerald-800 rounded font-bold">Cliente 0€</span>
+                            )}
+                          </label>
                           <input
                             type="number"
                             step="0.5"
-                            value={formData.fuelCostDaily}
+                            disabled={formData.energyPayer === 'client'}
+                            value={formData.energyPayer === 'client' ? 0 : formData.fuelCostDaily}
                             onChange={(e) => setFormData({ ...formData, fuelCostDaily: parseFloat(e.target.value) || 0 })}
-                            className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg font-semibold"
+                            className={`w-full px-2.5 py-1.5 border rounded-lg font-semibold ${
+                              formData.energyPayer === 'client'
+                                ? 'border-emerald-300 bg-emerald-50 text-emerald-700 cursor-not-allowed'
+                                : 'border-slate-300 bg-white'
+                            }`}
                           />
                         </div>
                         <div>
@@ -1179,34 +1465,230 @@ const ProjectsPage = () => {
                           />
                         </div>
                       </div>
+                    </div>
+                  )}
 
-                      <div className="pt-2 border-t border-slate-200">
-                        <label className="block font-bold text-slate-900 mb-0.5">Ricavo Giornaliero (€/gg) *</label>
+                  {/* NOTA 3.1: REFRIGERAZIONE SEMIRIMORCHIO FRIGO */}
+                  <div className="p-3 bg-cyan-50/70 rounded-xl border border-cyan-200 space-y-2.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <label className="flex items-center space-x-2 cursor-pointer font-bold text-cyan-950">
                         <input
-                          type="number"
-                          step="10"
-                          value={formData.revenueDaily}
-                          onChange={(e) => setFormData({ ...formData, revenueDaily: parseFloat(e.target.value) || 0 })}
-                          className="w-full px-3 py-2 border border-emerald-500 rounded-lg font-black text-emerald-800 bg-emerald-50 text-sm"
+                          type="checkbox"
+                          checked={Boolean(formData.refrigerationEnabled)}
+                          onChange={(e) => handleRefrigerationFieldChange({ refrigerationEnabled: e.target.checked })}
+                          className="rounded text-cyan-600 focus:ring-cyan-500"
                         />
+                        <Snowflake className="w-4 h-4 text-cyan-700" />
+                        <span>Costi Refrigerazione Gruppo Frigorifero</span>
+                      </label>
+                      <span className="text-[11px] font-black text-cyan-900">
+                        {formData.refrigerationEnabled
+                          ? `Incidenza: ${formatEUR(formData.refrigerationCostDaily || 0)}/gg (${formatEUR((Number(formData.refrigerationUnitCost) || 0) * (Number(formData.refrigerationHourlyConsumption) || 0))}/h)`
+                          : 'Disattivato'}
+                      </span>
+                    </div>
+
+                    {formData.refrigerationEnabled && (
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5 pt-1">
+                        <div>
+                          <label className="block text-[10px] font-bold text-cyan-900 mb-0.5">Tecnologia Frigo</label>
+                          <select
+                            value={formData.refrigerationTech || 'gasolio'}
+                            onChange={(e) => handleRefrigerationTechChange(e.target.value)}
+                            className="w-full px-2 py-1.5 border border-cyan-300 rounded-lg bg-white font-bold text-[11px]"
+                          >
+                            <option value="azoto">Azoto Liquido (0,13 €/kg • 30 kg/h = 3,90 €/h)</option>
+                            <option value="gasolio">Gasolio Frigo (1,80 €/L • 3 L/h = 5,40 €/h)</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-bold text-cyan-900 mb-0.5">
+                            Costo Unitario (€/{formData.refrigerationTech === 'azoto' ? 'kg' : 'L'})
+                          </label>
+                          <input
+                            type="number"
+                            step="0.01"
+                            value={formData.refrigerationUnitCost ?? 1.80}
+                            onChange={(e) => handleRefrigerationFieldChange({ refrigerationUnitCost: parseFloat(e.target.value) || 0 })}
+                            className="w-full px-2 py-1.5 border border-cyan-300 rounded-lg bg-white font-bold"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-bold text-cyan-900 mb-0.5">
+                            Consumo Orario ({formData.refrigerationTech === 'azoto' ? 'kg/h' : 'L/h'})
+                          </label>
+                          <input
+                            type="number"
+                            step="0.5"
+                            value={formData.refrigerationHourlyConsumption ?? 3}
+                            onChange={(e) => handleRefrigerationFieldChange({ refrigerationHourlyConsumption: parseFloat(e.target.value) || 0 })}
+                            className="w-full px-2 py-1.5 border border-cyan-300 rounded-lg bg-white font-bold"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-bold text-cyan-900 mb-0.5">Ore Frigo / Viaggio (h)</label>
+                          <input
+                            type="number"
+                            step="0.5"
+                            min="0"
+                            value={formData.refrigerationHoursDaily ?? 8}
+                            onChange={(e) => handleRefrigerationFieldChange({ refrigerationHoursDaily: parseFloat(e.target.value) || 0 })}
+                            className="w-full px-2 py-1.5 border border-cyan-400 rounded-lg bg-white font-black text-cyan-950"
+                          />
+                        </div>
                       </div>
+                    )}
+                  </div>
+
+                  {/* NOTA 3.2: COSTI ACCESSORI (TELEMATICA, LAVAGGIO, COSTI EXTRA) */}
+                  <div className="p-3 bg-indigo-50/50 rounded-xl border border-indigo-200 space-y-2.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-extrabold text-indigo-950 uppercase tracking-wider flex items-center">
+                        <Wifi className="w-4 h-4 mr-1.5 text-indigo-700" />
+                        Costi Accessori (Telematica, Lavaggio, Extra)
+                      </span>
+                      <span className="text-[11px] font-bold text-indigo-900">
+                        Tot. Accessori: {formatEUR((Number(formData.telematicsCostDaily) || 0) + (Number(formData.washingCostDaily) || 0) + (Number(formData.extraCostDaily) || 0))}/gg
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
+                      {/* A. Telematica */}
+                      <div className="p-2.5 bg-white rounded-lg border border-indigo-200/80 space-y-1.5">
+                        <div className="flex items-center justify-between">
+                          <label className="flex items-center space-x-1.5 cursor-pointer font-bold text-slate-800">
+                            <input
+                              type="checkbox"
+                              checked={Boolean(formData.telematicsEnabled)}
+                              onChange={(e) => handleAccessoriesFieldChange({ telematicsEnabled: e.target.checked })}
+                              className="rounded text-indigo-600"
+                            />
+                            <span>A. Telematica (€/m)</span>
+                          </label>
+                          <span className="font-bold text-indigo-700">{formatEUR(formData.telematicsCostDaily || 0)}/gg</span>
+                        </div>
+                        <div className="flex items-center space-x-1.5">
+                          <input
+                            type="number"
+                            step="1"
+                            disabled={!formData.telematicsEnabled}
+                            value={formData.telematicsMonthly ?? 0}
+                            onChange={(e) => handleAccessoriesFieldChange({ telematicsAuto: false, telematicsMonthly: parseFloat(e.target.value) || 0 })}
+                            className="w-full px-2 py-1 border border-slate-300 rounded font-bold text-xs"
+                          />
+                          <span className="text-[10px] text-slate-500 whitespace-nowrap">€/mese</span>
+                        </div>
+                        <p className="text-[9px] text-slate-500">Auto: Trattore 14€ • Trailer 13€ • Motrice 12€</p>
+                      </div>
+
+                      {/* B. Lavaggio */}
+                      <div className="p-2.5 bg-white rounded-lg border border-indigo-200/80 space-y-1.5">
+                        <div className="flex items-center justify-between">
+                          <label className="flex items-center space-x-1.5 cursor-pointer font-bold text-slate-800">
+                            <input
+                              type="checkbox"
+                              checked={Boolean(formData.washingEnabled)}
+                              onChange={(e) => handleAccessoriesFieldChange({ washingEnabled: e.target.checked })}
+                              className="rounded text-indigo-600"
+                            />
+                            <Droplets className="w-3.5 h-3.5 text-blue-600" />
+                            <span>B. Lavaggio</span>
+                          </label>
+                          <span className="font-bold text-indigo-700">{formatEUR(formData.washingCostDaily || 0)}/gg</span>
+                        </div>
+                        <div className="grid grid-cols-2 gap-1.5">
+                          <div>
+                            <input
+                              type="number"
+                              step="5"
+                              disabled={!formData.washingEnabled}
+                              value={formData.washingUnitCost ?? 80}
+                              onChange={(e) => handleAccessoriesFieldChange({ washingUnitCost: parseFloat(e.target.value) || 0 })}
+                              className="w-full px-2 py-1 border border-slate-300 rounded font-bold text-xs"
+                              title="Costo singolo lavaggio (€)"
+                            />
+                            <span className="text-[9px] text-slate-400">€/lavaggio</span>
+                          </div>
+                          <div>
+                            <input
+                              type="number"
+                              step="1"
+                              min="0"
+                              disabled={!formData.washingEnabled}
+                              value={formData.washingCountPerMonth ?? 2}
+                              onChange={(e) => handleAccessoriesFieldChange({ washingCountPerMonth: parseInt(e.target.value) || 0 })}
+                              className="w-full px-2 py-1 border border-slate-300 rounded font-bold text-xs"
+                              title="Lavaggi al mese"
+                            />
+                            <span className="text-[9px] text-slate-400">lav./mese</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* C. Costi Extra */}
+                      <div className="p-2.5 bg-white rounded-lg border border-indigo-200/80 space-y-1.5">
+                        <div className="flex items-center justify-between">
+                          <span className="font-bold text-slate-800">C. Costi Extra</span>
+                          <span className="font-bold text-indigo-700">{formatEUR(formData.extraCostDaily || 0)}/gg</span>
+                        </div>
+                        <input
+                          type="text"
+                          placeholder="Descrizione (es. ZTL, Sosta...)"
+                          value={formData.extraCostDescription || ''}
+                          onChange={(e) => setFormData({ ...formData, extraCostDescription: e.target.value })}
+                          className="w-full px-2 py-1 border border-slate-300 rounded text-[11px]"
+                        />
+                        <div className="grid grid-cols-2 gap-1.5">
+                          <input
+                            type="number"
+                            step="5"
+                            min="0"
+                            placeholder="€"
+                            value={formData.extraCostAmount ?? 0}
+                            onChange={(e) => handleAccessoriesFieldChange({ extraCostAmount: parseFloat(e.target.value) || 0 })}
+                            className="w-full px-2 py-1 border border-slate-300 rounded font-bold text-xs"
+                          />
+                          <select
+                            value={formData.extraCostFrequency || 'monthly'}
+                            onChange={(e) => handleAccessoriesFieldChange({ extraCostFrequency: e.target.value })}
+                            className="w-full px-1.5 py-1 border border-slate-300 rounded bg-white text-[10px] font-semibold"
+                          >
+                            <option value="daily">Al gg/viaggio</option>
+                            <option value="monthly">Mensile</option>
+                            <option value="one_time">Una tantum</option>
+                          </select>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {formData.managementType !== 'T' && (
+                    <div className="pt-2 border-t border-slate-200">
+                      <label className="block font-bold text-slate-900 mb-0.5">Ricavo Giornaliero (€/gg) *</label>
+                      <input
+                        type="number"
+                        step="10"
+                        value={formData.revenueDaily}
+                        onChange={(e) => setFormData({ ...formData, revenueDaily: parseFloat(e.target.value) || 0 })}
+                        className="w-full px-3 py-2 border border-emerald-500 rounded-lg font-black text-emerald-800 bg-emerald-50 text-sm"
+                      />
                     </div>
                   )}
                 </div>
 
-                {/* SEZIONE SPECIALE: TERMINI DI PAGAMENTO (DSO & DPO) */}
+                {/* SEZIONE SPECIALE: TERMINI DI PAGAMENTO (DSO & DPO PONDERATO PER COMPONENTE) */}
                 <div className="p-4 bg-amber-50/70 rounded-xl border border-amber-200/80 space-y-3">
-                  <div className="flex items-center justify-between">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
                     <span className="text-[11px] font-extrabold text-amber-950 uppercase tracking-wider flex items-center">
                       <Clock className="w-4 h-4 mr-1.5 text-amber-700" />
-                      Termini di Pagamento & Condizioni Finanziarie (Cash Flow)
+                      Termini di Pagamento & Fabbisogno Finanziario Reale
                     </span>
-                    <span className="text-[10px] text-amber-800 font-semibold">
-                      Gap Giorni: {liveModalMetrics.gapDays} gg
+                    <span className="text-[10px] text-amber-900 font-bold bg-amber-200/60 px-2 py-0.5 rounded-full">
+                      Gap Ponderato: {liveModalMetrics.gapDays} gg • DPO Medio: {liveModalMetrics.weightedDpoDays} gg
                     </span>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
                     <div>
                       <label className="block font-semibold text-slate-700 mb-1">
                         Incasso Cliente (DSO) *
@@ -1225,21 +1707,6 @@ const ProjectsPage = () => {
 
                     <div>
                       <label className="block font-semibold text-slate-700 mb-1">
-                        Pagamento Terzisti/Fornitori
-                      </label>
-                      <select
-                        value={formData.paymentTermsSuppliers}
-                        onChange={(e) => setFormData({ ...formData, paymentTermsSuppliers: parseInt(e.target.value) })}
-                        className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-amber-500 bg-white font-bold"
-                      >
-                        <option value="15">15 giorni (Tipico Mas)</option>
-                        <option value="30">30 giorni d.f.f.m.</option>
-                        <option value="60">60 giorni d.f.f.m.</option>
-                      </select>
-                    </div>
-
-                    <div>
-                      <label className="block font-semibold text-slate-700 mb-1">
                         Scadenza Addebito Nolo
                       </label>
                       <select
@@ -1251,13 +1718,56 @@ const ProjectsPage = () => {
                         }}
                         className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-amber-500 bg-white font-bold text-xs"
                       >
-                        <option value="M1_D10">Giorno 10 M1 (Anticipato / Inizio Mese)</option>
+                        <option value="M1_D10">Giorno 10 M1 (Anticipato / +20gg anticipo)</option>
                         <option value="M1_D30">Giorno 30 M1 (Fine Mese)</option>
-                        <option value="M2_D20">Giorno 20 M2 (Mese Successivo / +20 gg dffm)</option>
+                        <option value="M2_D20">Giorno 20 M2 (Mese Succ. / +20 gg dffm)</option>
                       </select>
-                      <p className="text-[10px] text-slate-500 mt-1">
-                        {LEASE_PAYMENT_TIMINGS[formData.leasePaymentTiming || normalizeLeaseTiming(formData)]?.description}
-                      </p>
+                    </div>
+
+                    <div>
+                      <label className="block font-semibold text-slate-700 mb-1">
+                        Personale (Giorno Mese T1)
+                      </label>
+                      <select
+                        value={formData.paymentTermsDriver ?? 16}
+                        onChange={(e) => setFormData({ ...formData, paymentTermsDriver: parseInt(e.target.value) })}
+                        className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-amber-500 bg-white font-bold"
+                      >
+                        <option value="10">Giorno 10 M+1</option>
+                        <option value="16">Giorno 16 M+1 (Standard FOUR)</option>
+                        <option value="30">30 gg d.f.f.m.</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block font-semibold text-slate-700 mb-1">
+                        Energia / Bio-LNG (gg)
+                      </label>
+                      <select
+                        value={formData.paymentTermsFuel ?? 30}
+                        onChange={(e) => setFormData({ ...formData, paymentTermsFuel: parseInt(e.target.value) })}
+                        className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-amber-500 bg-white font-bold"
+                      >
+                        <option value="0">Immediato / Fine mese (0 gg)</option>
+                        <option value="15">15 giorni</option>
+                        <option value="30">30 giorni (Standard)</option>
+                        <option value="60">60 giorni d.f.f.m.</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block font-semibold text-slate-700 mb-1">
+                        Terzisti / Fornitori
+                      </label>
+                      <select
+                        value={formData.paymentTermsSuppliers ?? 30}
+                        onChange={(e) => setFormData({ ...formData, paymentTermsSuppliers: parseInt(e.target.value) })}
+                        className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-amber-500 bg-white font-bold"
+                      >
+                        <option value="15">15 giorni</option>
+                        <option value="30">30 giorni d.f.f.m.</option>
+                        <option value="60">60 giorni d.f.f.m.</option>
+                      </select>
                     </div>
 
                     <div>
@@ -1269,15 +1779,12 @@ const ProjectsPage = () => {
                         onChange={(e) => setFormData({ ...formData, acciseRecoveryEligible: e.target.value === 'yes' })}
                         className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-amber-500 bg-white font-bold text-xs"
                       >
-                        <option value="yes">Attivo (Trattori & Mezzi &gt; 7.5t)</option>
-                        <option value="no">Escluso per questa commessa</option>
+                        <option value="yes">Attivo (Mezzi &gt; 7.5t)</option>
+                        <option value="no">Escluso</option>
                       </select>
-                      <p className="text-[10px] text-slate-500 mt-1">
-                        Credito d'imposta trimestrale art. 24-ter TUA a Q+1
-                      </p>
                     </div>
 
-                    <div>
+                    <div className="sm:col-span-2">
                       <label className="block font-semibold text-slate-700 mb-1">
                         Caparra / Cauzione Iniziale (€)
                       </label>
@@ -1291,13 +1798,79 @@ const ProjectsPage = () => {
                     </div>
                   </div>
 
-                  <div className="p-2.5 bg-white/80 rounded-lg border border-amber-200 text-xs flex justify-between items-center">
-                    <span className="text-amber-900 font-medium">
-                      Fabbisogno Cassa Circolante Stimato (Rate di anticipo prima dell'incasso):
-                    </span>
-                    <span className="font-extrabold text-amber-800 text-sm">
-                      {formatEUR(liveModalMetrics.estimatedWorkingCapitalGap)}
-                    </span>
+                  {/* Toggle termini di pagamento per singola voce */}
+                  <div className="pt-1">
+                    <button
+                      type="button"
+                      onClick={() => setShowPerItemTerms(!showPerItemTerms)}
+                      className="inline-flex items-center space-x-1.5 text-[11px] font-bold text-amber-900 hover:text-amber-950"
+                    >
+                      {showPerItemTerms ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                      <span>Personalizza Termini di Pagamento per Singola Voce (Default 30 gg)</span>
+                    </button>
+
+                    {showPerItemTerms && (
+                      <div className="grid grid-cols-2 md:grid-cols-3 gap-2.5 mt-2 p-3 bg-white/80 rounded-xl border border-amber-200">
+                        {[
+                          { key: 'paymentTermsRefrigeration', label: 'Refrigerazione Frigo', def: 30 },
+                          { key: 'paymentTermsTelematics', label: 'Telematica', def: 30 },
+                          { key: 'paymentTermsWashing', label: 'Lavaggio Mezzi', def: 30 },
+                          { key: 'paymentTermsExtra', label: 'Costi Extra', def: 30 },
+                          { key: 'paymentTermsTolls', label: 'Pedaggi / Telepass', def: 15 },
+                          { key: 'paymentTermsTires', label: 'Pneumatici', def: 30 }
+                        ].map(item => (
+                          <div key={item.key}>
+                            <label className="block text-[10px] font-bold text-slate-600 mb-0.5">{item.label}</label>
+                            <select
+                              value={formData[item.key] ?? item.def}
+                              onChange={(e) => setFormData({ ...formData, [item.key]: parseInt(e.target.value) })}
+                              className="w-full px-2 py-1.5 border border-slate-300 rounded-lg bg-white text-[11px] font-semibold"
+                            >
+                              <option value="0">0 gg (Fine mese)</option>
+                              <option value="15">15 gg (Quindicinale)</option>
+                              <option value="30">30 gg d.f.f.m.</option>
+                              <option value="60">60 gg d.f.f.m.</option>
+                            </select>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Dettaglio Fabbisogno Ponderato */}
+                  <div className="p-3 bg-white/90 rounded-lg border border-amber-200 space-y-2 text-xs">
+                    <div className="flex justify-between items-center">
+                      <span className="text-amber-900 font-bold">
+                        Fabbisogno Cassa Circolante Ponderato (Esborsi reali vs Incasso):
+                      </span>
+                      <span className="font-extrabold text-amber-800 text-sm">
+                        {formatEUR(liveModalMetrics.estimatedWorkingCapitalGap)}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1.5 border-t border-amber-100 text-[10px] text-slate-600">
+                      <div>
+                        <span className="block text-slate-400">Noleggi ({liveModalMetrics.workingCapitalBreakdown?.leaseGapDays} gg)</span>
+                        <strong className="text-slate-800">{formatEUR(liveModalMetrics.workingCapitalBreakdown?.leases || 0)}</strong>
+                      </div>
+                      <div>
+                        <span className="block text-slate-400">Personale ({liveModalMetrics.workingCapitalBreakdown?.driverGapDays} gg)</span>
+                        <strong className="text-slate-800">{formatEUR(liveModalMetrics.workingCapitalBreakdown?.personnel || 0)}</strong>
+                      </div>
+                      <div>
+                        <span className="block text-slate-400">Energia & Frigo</span>
+                        <strong className="text-slate-800">{formatEUR(liveModalMetrics.workingCapitalBreakdown?.fuelAndFridge || 0)}</strong>
+                      </div>
+                      <div>
+                        <span className="block text-slate-400">Accessori / Terzi / Cap.</span>
+                        <strong className="text-slate-800">
+                          {formatEUR(
+                            (liveModalMetrics.workingCapitalBreakdown?.accessoriesAndTolls || 0) +
+                            (liveModalMetrics.workingCapitalBreakdown?.suppliers || 0) +
+                            (liveModalMetrics.workingCapitalBreakdown?.deposit || 0)
+                          )}
+                        </strong>
+                      </div>
+                    </div>
                   </div>
                 </div>
 

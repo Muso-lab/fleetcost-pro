@@ -14,7 +14,7 @@ const STORAGE_KEYS = {
 };
 
 const FLEET_DATA_VERSION_KEY = 'fleetcost_data_version_2026';
-const CURRENT_DATA_VERSION = 'v2026_four_fleet_satellitari_official_v6';
+const CURRENT_DATA_VERSION = 'v2026_four_protected_user_data_v7';
 
 class StorageService {
   constructor() {
@@ -22,10 +22,9 @@ class StorageService {
   }
 
   initDefaults(forceReset = false) {
-    const currentVer = localStorage.getItem(FLEET_DATA_VERSION_KEY);
-    const needsMigration = forceReset || currentVer !== CURRENT_DATA_VERSION;
-
-    if (needsMigration) {
+    // NOTA 2.5: Protezione assoluta dei dati utente.
+    // Solo un reset esplicito (forceReset === true) può sovrascrivere i dati esistenti in localStorage.
+    if (forceReset) {
       localStorage.setItem(STORAGE_KEYS.FLEET, JSON.stringify(DEFAULT_FLEET));
       localStorage.setItem(STORAGE_KEYS.TRAILERS, JSON.stringify(DEFAULT_TRAILERS));
       localStorage.setItem(STORAGE_KEYS.PROJECTS, JSON.stringify(DEFAULT_PROJECTS));
@@ -35,20 +34,94 @@ class StorageService {
       return;
     }
 
-    if (!localStorage.getItem(STORAGE_KEYS.FLEET)) {
+    // Inizializzazione non distruttiva: popola una chiave ESCLUSIVAMENTE se è assente in localStorage.
+    if (localStorage.getItem(STORAGE_KEYS.FLEET) === null) {
       localStorage.setItem(STORAGE_KEYS.FLEET, JSON.stringify(DEFAULT_FLEET));
     }
-    if (!localStorage.getItem(STORAGE_KEYS.TRAILERS)) {
+    if (localStorage.getItem(STORAGE_KEYS.TRAILERS) === null) {
       localStorage.setItem(STORAGE_KEYS.TRAILERS, JSON.stringify(DEFAULT_TRAILERS));
     }
-    if (!localStorage.getItem(STORAGE_KEYS.PROJECTS)) {
+    if (localStorage.getItem(STORAGE_KEYS.PROJECTS) === null) {
       localStorage.setItem(STORAGE_KEYS.PROJECTS, JSON.stringify(DEFAULT_PROJECTS));
     }
-    if (!localStorage.getItem(STORAGE_KEYS.SETTINGS)) {
+    if (localStorage.getItem(STORAGE_KEYS.SETTINGS) === null) {
       localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(DEFAULT_SETTINGS));
+    } else {
+      // Migrazione non distruttiva delle impostazioni: mantiene quelle utente e aggiunge solo eventuali nuove chiavi
+      this.mergeDefaultSettings();
     }
-    if (!localStorage.getItem(STORAGE_KEYS.SIMULATIONS)) {
+    if (localStorage.getItem(STORAGE_KEYS.SIMULATIONS) === null) {
       localStorage.setItem(STORAGE_KEYS.SIMULATIONS, JSON.stringify([]));
+    }
+
+    localStorage.setItem(FLEET_DATA_VERSION_KEY, CURRENT_DATA_VERSION);
+  }
+
+  mergeDefaultSettings() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEYS.SETTINGS);
+      if (!raw) return DEFAULT_SETTINGS;
+      const parsed = JSON.parse(raw);
+
+      // Merge delle patenti esistenti aggiungendo eventuali nuove categorie (es. c_doppio)
+      const existingLicenses = Array.isArray(parsed.licenseTypes) ? parsed.licenseTypes : [];
+      const existingIds = new Set(existingLicenses.map(l => l.id));
+      const mergedLicenses = [
+        ...existingLicenses,
+        ...(DEFAULT_SETTINGS.licenseTypes || []).filter(l => !existingIds.has(l.id))
+      ];
+
+      const merged = {
+        ...DEFAULT_SETTINGS,
+        ...parsed,
+        standardCosts: { ...DEFAULT_SETTINGS.standardCosts, ...(parsed.standardCosts || {}) },
+        tireParameters: { ...DEFAULT_SETTINGS.tireParameters, ...(parsed.tireParameters || {}) },
+        ownershipDefaults: { ...DEFAULT_SETTINGS.ownershipDefaults, ...(parsed.ownershipDefaults || {}) },
+        financialDefaults: { ...DEFAULT_SETTINGS.financialDefaults, ...(parsed.financialDefaults || {}) },
+        treasuryRules: {
+          ...DEFAULT_SETTINGS.treasuryRules,
+          ...(parsed.treasuryRules || {}),
+          acciseRecovery: {
+            ...(DEFAULT_SETTINGS.treasuryRules?.acciseRecovery || {}),
+            ...(parsed.treasuryRules?.acciseRecovery || {})
+          }
+        },
+        refrigerationParams: {
+          azoto: {
+            ...(DEFAULT_SETTINGS.refrigerationParams?.azoto || {}),
+            ...(parsed.refrigerationParams?.azoto || {})
+          },
+          gasolio: {
+            ...(DEFAULT_SETTINGS.refrigerationParams?.gasolio || {}),
+            ...(parsed.refrigerationParams?.gasolio || {})
+          }
+        },
+        accessoryParams: {
+          telematics: {
+            ...(DEFAULT_SETTINGS.accessoryParams?.telematics || {}),
+            ...(parsed.accessoryParams?.telematics || {})
+          },
+          washing: {
+            ...(DEFAULT_SETTINGS.accessoryParams?.washing || {}),
+            ...(parsed.accessoryParams?.washing || {})
+          },
+          extra: {
+            ...(DEFAULT_SETTINGS.accessoryParams?.extra || {}),
+            ...(parsed.accessoryParams?.extra || {})
+          }
+        },
+        paymentTermsDefaults: {
+          ...(DEFAULT_SETTINGS.paymentTermsDefaults || {}),
+          ...(parsed.paymentTermsDefaults || {})
+        },
+        licenseTypes: mergedLicenses
+      };
+
+      localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(merged));
+      return merged;
+    } catch (e) {
+      console.error('Errore merge impostazioni:', e);
+      return DEFAULT_SETTINGS;
     }
   }
 
@@ -298,7 +371,12 @@ class StorageService {
   getSettings() {
     try {
       const data = localStorage.getItem(STORAGE_KEYS.SETTINGS);
-      return data ? JSON.parse(data) : DEFAULT_SETTINGS;
+      if (!data) return DEFAULT_SETTINGS;
+      const parsed = JSON.parse(data);
+      if (!parsed.refrigerationParams || !parsed.accessoryParams || !parsed.paymentTermsDefaults) {
+        return this.mergeDefaultSettings();
+      }
+      return parsed;
     } catch (e) {
       console.error('Errore lettura impostazioni:', e);
       return DEFAULT_SETTINGS;

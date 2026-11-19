@@ -230,12 +230,14 @@ export const MARKET_VEHICLE_BENCHMARKS = [
 ];
 
 export const DEFAULT_LICENSE_TYPES = [
-  { id: 'b', name: 'Patente B (Furgoni)', dailyCost: 140, monthlyCost: 3000 },
+  { id: 'b', name: 'Patente B - Diurno (Furgoni)', dailyCost: 140, monthlyCost: 3000 },
+  { id: 'b_notturno', name: 'Patente B - Notturno', dailyCost: 170, monthlyCost: 3740 },
   { id: 'c_diurno', name: 'Patente C - Diurno (Motrici)', dailyCost: 180, monthlyCost: 3800 },
   { id: 'c_notturno', name: 'Patente C - Notturno', dailyCost: 220, monthlyCost: 4500 },
+  { id: 'c_doppio', name: 'Patente C - 2 Turni / Doppio Autista (Diurno + Notturno)', dailyCost: 400, monthlyCost: 8800 },
   { id: 'ce_diurno', name: 'Patente CE - Diurno (Trattori/Bilici)', dailyCost: 220, monthlyCost: 4800 },
   { id: 'ce_notturno', name: 'Patente CE - Notturno', dailyCost: 260, monthlyCost: 5500 },
-  { id: 'ce_doppio', name: 'Patente CE - 2 Turni / Doppio Autista', dailyCost: 440, monthlyCost: 9240 },
+  { id: 'ce_doppio', name: 'Patente CE - 2 Turni / Doppio Autista (Diurno + Notturno)', dailyCost: 480, monthlyCost: 10560 },
   { id: 'fattorino', name: 'Fattorino / Secondo Operatore', dailyCost: 110, monthlyCost: 2300 }
 ];
 
@@ -1854,5 +1856,54 @@ export const DEFAULT_SETTINGS = {
       frequency: 'quarterly_plus_1', // Liquidazione/compensazione F24 a Q+1
       creditMonths: [4, 7, 10, 13] // Maggio (Q1), Agosto (Q2), Novembre (Q3), Febbraio M+1 (Q4)
     }
+  },
+  refrigerationParams: {
+    azoto: {
+      id: 'azoto',
+      name: 'Azoto Liquido Criogenico',
+      unit: 'kg',
+      unitCost: 0.13, // €/kg (modificabile)
+      hourlyConsumption: 30, // kg/h (modificabile)
+      hourlyCost: 3.90, // 0,13 * 30 = 3,90 €/h
+      paymentTermsDays: 30
+    },
+    gasolio: {
+      id: 'gasolio',
+      name: 'Gasolio Gruppo Frigorifero',
+      unit: 'litro',
+      unitCost: 1.80, // €/litro (modificabile)
+      hourlyConsumption: 3.0, // litri/h (modificabile)
+      hourlyCost: 5.40, // 1,80 * 3,0 = 5,40 €/h
+      paymentTermsDays: 30
+    }
+  },
+  accessoryParams: {
+    telematics: {
+      tractorMonthly: 14.00, // €/mese per trattori stradali
+      trailerMonthly: 13.00, // €/mese per semirimorchi (trailer)
+      rigidMonthly: 12.00, // €/mese per motrici
+      vanMonthly: 12.00, // €/mese per furgoni
+      paymentTermsDays: 30
+    },
+    washing: {
+      costPerWash: 80.00, // Costo per singolo lavaggio
+      washesPerMonth: 2, // Frequenza lavaggi/mese
+      monthlyTotal: 160.00, // 80 * 2 = 160 €/mese
+      paymentTermsDays: 30
+    },
+    extra: {
+      paymentTermsDays: 30
+    }
+  },
+  paymentTermsDefaults: {
+    driverPaymentDayNextMonth: 16, // Pagamento personale giorno 16 mese successivo T1
+    fuelPaymentTermsDays: 30,
+    tollsPaymentTermsDays: 30,
+    tiresPaymentTermsDays: 30,
+    refrigerationPaymentTermsDays: 30,
+    telematicsPaymentTermsDays: 30,
+    washingPaymentTermsDays: 30,
+    extraPaymentTermsDays: 30,
+    suppliersPaymentTermsDays: 30
   }
 };
