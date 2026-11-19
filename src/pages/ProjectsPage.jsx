@@ -10,7 +10,8 @@ import {
   recalculateProjectCost,
   getContractValidity,
   isRefrigeratedTrailer,
-  calculateDriverDailyCost
+  calculateDriverDailyCost,
+  calculateAccessoriesDailyCost
 } from '../utils/cashFlowCalculations';
 import {
   Briefcase,
@@ -105,6 +106,7 @@ const ProjectsPage = () => {
     paymentTermsSuppliers: 30, // DPO: fornitori / terzisti gg
     paymentTermsLease: 30,
     leasePaymentTiming: 'M1_D10',
+    trailerLeasePaymentTiming: 'M1_D30',
     paymentTermsDriver: 16,
     paymentTermsFuel: 30,
     paymentTermsTolls: 15,
@@ -253,6 +255,7 @@ const ProjectsPage = () => {
         paymentTermsSuppliers: project.paymentTermsSuppliers ?? 30,
         paymentTermsLease: project.paymentTermsLease ?? 30,
         leasePaymentTiming: project.leasePaymentTiming || normalizeLeaseTiming(project),
+        trailerLeasePaymentTiming: project.trailerLeasePaymentTiming || (projTrl ? normalizeLeaseTiming(projTrl) : (project.leasePaymentTiming || normalizeLeaseTiming(project))),
         paymentTermsDriver: project.paymentTermsDriver ?? 16,
         paymentTermsFuel: project.paymentTermsFuel ?? 30,
         paymentTermsTolls: project.paymentTermsTolls ?? 15,
@@ -323,6 +326,7 @@ const ProjectsPage = () => {
         paymentTermsSuppliers: payDef.suppliersPaymentTermsDays ?? 30,
         paymentTermsLease: defaultVeh?.leasePaymentTerms ?? 0,
         leasePaymentTiming: defaultVeh?.leasePaymentTiming || 'M1_D10',
+        trailerLeasePaymentTiming: defaultVeh?.leasePaymentTiming || 'M1_D30',
         paymentTermsDriver: payDef.driverPaymentDayNextMonth ?? 16,
         paymentTermsFuel: payDef.fuelPaymentTermsDays ?? 30,
         paymentTermsTolls: 15,
@@ -374,6 +378,7 @@ const ProjectsPage = () => {
     const partial = {
       trailerId: tId,
       telematicsAuto: true,
+      trailerLeasePaymentTiming: selectedTrl ? normalizeLeaseTiming(selectedTrl) : formData.leasePaymentTiming,
       refrigerationEnabled: isFrigo,
       refrigerationTech: tech,
       refrigerationUnitCost: techDef.unitCost,
@@ -543,6 +548,47 @@ const ProjectsPage = () => {
     setShowNextYearModal(false);
   };
 
+  // Integra Telematica e Lavaggi standard sulle commesse esistenti senza alterare ricavi, km, autista o energia
+  const handleApplyStandardAccessoriesToAll = () => {
+    if (!confirm('Attivare Telematica (14/13/12 €/m) e Lavaggi (80€ x 2/m sulle gestioni dirette) su tutte le commesse attive?\nRicavi, chilometri, autisti ed energia già configurati resteranno invariati.')) {
+      return;
+    }
+    const curSettings = settings || storageService.getSettings();
+    const updated = projects.map(p => {
+      const veh = fleet.find(v => v.id === p.vehicleId);
+      const trl = trailers.find(t => t.id === p.trailerId);
+      const isDirect = (p.managementType || 'D') === 'D';
+      const draft = {
+        ...p,
+        telematicsEnabled: true,
+        telematicsAuto: true,
+        washingEnabled: isDirect ? true : Boolean(p.washingEnabled)
+      };
+      const accCalc = calculateAccessoriesDailyCost(draft, veh, trl, curSettings);
+      const enriched = {
+        ...draft,
+        telematicsMonthly: accCalc.telematicsMonthly,
+        telematicsCostDaily: accCalc.telematicsDaily,
+        washingUnitCost: accCalc.washUnitCost,
+        washingCountPerMonth: accCalc.washesPerMonth,
+        washingCostDaily: accCalc.washingDaily
+      };
+      const metrics = calculateSingleProjectMetrics(enriched);
+      return {
+        ...enriched,
+        totalCostDaily: metrics.totalCostDaily,
+        molDaily: metrics.molDaily,
+        monthlyCost: metrics.monthlyCost,
+        monthlyRevenue: metrics.monthlyRevenue,
+        monthlyMol: metrics.monthlyMol,
+        molPercent: +metrics.molPercent.toFixed(2),
+        cashAdvanceRequired: metrics.estimatedWorkingCapitalGap
+      };
+    });
+    storageService.saveProjects(updated);
+    setProjects(updated);
+  };
+
   // Statistiche scadenze contrattuali
   const contractStats = useMemo(() => {
     let active = 0;
@@ -620,7 +666,15 @@ const ProjectsPage = () => {
               </div>
             </div>
           </div>
-          <div className="flex items-center space-x-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={handleApplyStandardAccessoriesToAll}
+              className="inline-flex items-center space-x-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-800 px-3 py-2.5 rounded-xl font-bold text-xs transition border border-indigo-200 shadow-sm"
+              title="Attiva Telematica (14/13/12 €/m) e Lavaggi (160 €/m) sulle commesse attive preservando ricavi, km e autisti"
+            >
+              <Wifi className="w-4 h-4 text-indigo-600" />
+              <span>Integra Telematica &amp; Lavaggi</span>
+            </button>
             <button
               onClick={() => setShowNextYearModal(true)}
               className="inline-flex items-center space-x-1.5 bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-700 hover:to-teal-800 text-white px-3.5 py-2.5 rounded-xl font-bold text-xs shadow-sm transition"
@@ -1707,7 +1761,7 @@ const ProjectsPage = () => {
 
                     <div>
                       <label className="block font-semibold text-slate-700 mb-1">
-                        Scadenza Addebito Nolo
+                        Scadenza Nolo Mezzo Motore
                       </label>
                       <select
                         value={formData.leasePaymentTiming || normalizeLeaseTiming(formData)}
@@ -1716,6 +1770,21 @@ const ProjectsPage = () => {
                           const terms = timingKey === 'M1_D10' ? 0 : timingKey === 'M1_D30' ? 30 : 60;
                           setFormData({ ...formData, leasePaymentTiming: timingKey, paymentTermsLease: terms });
                         }}
+                        className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-amber-500 bg-white font-bold text-xs"
+                      >
+                        <option value="M1_D10">Giorno 10 M1 (Anticipato / +20gg anticipo)</option>
+                        <option value="M1_D30">Giorno 30 M1 (Fine Mese)</option>
+                        <option value="M2_D20">Giorno 20 M2 (Mese Succ. / +20 gg dffm)</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block font-semibold text-slate-700 mb-1">
+                        Scadenza Nolo Semirimorchio
+                      </label>
+                      <select
+                        value={formData.trailerLeasePaymentTiming || formData.leasePaymentTiming || normalizeLeaseTiming(formData)}
+                        onChange={(e) => setFormData({ ...formData, trailerLeasePaymentTiming: e.target.value })}
                         className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-amber-500 bg-white font-bold text-xs"
                       >
                         <option value="M1_D10">Giorno 10 M1 (Anticipato / +20gg anticipo)</option>
@@ -1784,7 +1853,7 @@ const ProjectsPage = () => {
                       </select>
                     </div>
 
-                    <div className="sm:col-span-2">
+                    <div>
                       <label className="block font-semibold text-slate-700 mb-1">
                         Caparra / Cauzione Iniziale (€)
                       </label>

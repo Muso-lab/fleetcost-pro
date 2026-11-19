@@ -81,6 +81,7 @@ const SimulationPage = () => {
   const [paymentTermsClient, setPaymentTermsClient] = useState(60);
   const [paymentTermsSuppliers, setPaymentTermsSuppliers] = useState(30);
   const [leasePaymentTiming, setLeasePaymentTiming] = useState('M1_D10');
+  const [trailerLeasePaymentTiming, setTrailerLeasePaymentTiming] = useState('M1_D30');
   const [paymentTermsDriver, setPaymentTermsDriver] = useState(16);
   const [paymentTermsFuel, setPaymentTermsFuel] = useState(30);
   const [paymentTermsTolls, setPaymentTermsTolls] = useState(15);
@@ -181,6 +182,7 @@ const SimulationPage = () => {
       }
       setTelematicsAuto(true);
       updateTelematicsForCombo(vehicle, trailer, settings, true);
+      setTrailerLeasePaymentTiming(trailer ? normalizeLeaseTiming(trailer) : leasePaymentTiming);
 
       const isFrigo = isRefrigeratedTrailer(trailer);
       setRefrigerationEnabled(isFrigo);
@@ -305,6 +307,7 @@ const SimulationPage = () => {
       trailerLeaseDaily,
       revenueDaily: revenueDailyTarget,
       leasePaymentTiming,
+      trailerLeasePaymentTiming,
       paymentTermsClient,
       paymentTermsSuppliers,
       paymentTermsDriver,
@@ -426,6 +429,7 @@ const SimulationPage = () => {
       paymentTermsSuppliers,
       paymentTermsLease: leaseTerms,
       leasePaymentTiming: leaseTiming,
+      trailerLeasePaymentTiming,
       paymentTermsDriver,
       paymentTermsFuel,
       paymentTermsTolls,
@@ -932,16 +936,29 @@ const SimulationPage = () => {
                   </select>
                 </div>
 
-                <div className="col-span-2">
-                  <label className="block font-semibold text-slate-700 mb-1">Scadenza Addebito Canoni Noleggio</label>
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Scadenza Nolo Mezzo Motore</label>
                   <select
                     value={leasePaymentTiming}
                     onChange={(e) => setLeasePaymentTiming(e.target.value)}
                     className="w-full px-3 py-1.5 border border-slate-300 rounded-xl bg-white font-bold text-xs"
                   >
-                    <option value="M1_D10">Giorno 10 Mese 1 (Anticipato / +20gg anticipo)</option>
+                    <option value="M1_D10">Giorno 10 Mese 1 (Anticipato)</option>
                     <option value="M1_D30">Giorno 30 Mese 1 (Fine Mese)</option>
-                    <option value="M2_D20">Giorno 20 Mese 2 (Mese Successivo / +20gg dffm)</option>
+                    <option value="M2_D20">Giorno 20 Mese 2 (Mese Succ.)</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Scadenza Nolo Semirimorchio</label>
+                  <select
+                    value={trailerLeasePaymentTiming}
+                    onChange={(e) => setTrailerLeasePaymentTiming(e.target.value)}
+                    className="w-full px-3 py-1.5 border border-slate-300 rounded-xl bg-white font-bold text-xs"
+                  >
+                    <option value="M1_D10">Giorno 10 Mese 1 (Anticipato)</option>
+                    <option value="M1_D30">Giorno 30 Mese 1 (Fine Mese)</option>
+                    <option value="M2_D20">Giorno 20 Mese 2 (Mese Succ.)</option>
                   </select>
                 </div>
               </div>

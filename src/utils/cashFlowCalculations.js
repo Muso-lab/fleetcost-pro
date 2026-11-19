@@ -62,6 +62,19 @@ export const normalizeLeaseTiming = (projectOrVehicle) => {
 };
 
 /**
+ * Normalizza il timing di pagamento del noleggio semirimorchio
+ */
+export const normalizeTrailerLeaseTiming = (project, trailer = null) => {
+  if (project?.trailerLeasePaymentTiming && LEASE_PAYMENT_TIMINGS[project.trailerLeasePaymentTiming]) {
+    return project.trailerLeasePaymentTiming;
+  }
+  if (trailer) {
+    return normalizeLeaseTiming(trailer);
+  }
+  return normalizeLeaseTiming(project);
+};
+
+/**
  * Calcola se un progetto è attivo in un determinato mese dell'anno
  */
 export const isProjectActiveInMonth = (project, monthIndex, targetYear = 2026, options = {}) => {
@@ -261,6 +274,8 @@ export const calculateAnnualBudgetAndCashFlow = (projects, options = {}) => {
 
     const leaseTimingKey = normalizeLeaseTiming(project);
     const leaseTiming = LEASE_PAYMENT_TIMINGS[leaseTimingKey];
+    const trailerLeaseTimingKey = normalizeTrailerLeaseTiming(project);
+    const trailerLeaseTiming = LEASE_PAYMENT_TIMINGS[trailerLeaseTimingKey];
 
     // DSO mesi clienti (es. 60 gg -> m + 2)
     const clientDelayMonths = Math.max(1, Math.round(pTermsClient / 30));
@@ -536,20 +551,26 @@ export const calculateAnnualBudgetAndCashFlow = (projects, options = {}) => {
           }
         }
 
-        // D. NOLEGGI MEZZI & RIMORCHI: 3 Opzioni contrattuali (M1_D10, M1_D30, M2_D20)
-        const leaseMonth = m + leaseTiming.monthOffset;
-        if (leaseMonth < totalMonthsHorizon) {
-          cashOutflows[leaseMonth] += totalLeaseC;
-          cashOutflowBreakdown[leaseMonth].leasesTotal += totalLeaseC;
-          if (leaseTimingKey === 'M1_D10') cashOutflowBreakdown[leaseMonth].leasesM1D10 += totalLeaseC;
-          else if (leaseTimingKey === 'M1_D30') cashOutflowBreakdown[leaseMonth].leasesM1D30 += totalLeaseC;
-          else cashOutflowBreakdown[leaseMonth].leasesM2D20 += totalLeaseC;
-        }
-        const biweeklyLeasePeriod = leaseMonth * 2 + (leaseTiming.quindicina - 1);
-        if (biweeklyLeasePeriod < totalBiweeklyHorizon) {
-          biweeklyCashOutflows[biweeklyLeasePeriod] += totalLeaseC;
-          biweeklyOutflowBreakdown[biweeklyLeasePeriod].leases += totalLeaseC;
-        }
+        // D. NOLEGGI MEZZI & RIMORCHI: 3 Opzioni contrattuali differenziate (Mezzo Motore vs Semirimorchio)
+        const pushLeaseOutflow = (amount, timingObj, timingId) => {
+          if (!amount || amount <= 0) return;
+          const targetMonth = m + timingObj.monthOffset;
+          if (targetMonth < totalMonthsHorizon) {
+            cashOutflows[targetMonth] += amount;
+            cashOutflowBreakdown[targetMonth].leasesTotal += amount;
+            if (timingId === 'M1_D10') cashOutflowBreakdown[targetMonth].leasesM1D10 += amount;
+            else if (timingId === 'M1_D30') cashOutflowBreakdown[targetMonth].leasesM1D30 += amount;
+            else cashOutflowBreakdown[targetMonth].leasesM2D20 += amount;
+          }
+          const targetBiweekly = targetMonth * 2 + (timingObj.quindicina - 1);
+          if (targetBiweekly < totalBiweeklyHorizon) {
+            biweeklyCashOutflows[targetBiweekly] += amount;
+            biweeklyOutflowBreakdown[targetBiweekly].leases += amount;
+          }
+        };
+        pushLeaseOutflow(vLeaseC, leaseTiming, leaseTimingKey);
+        pushLeaseOutflow(tLeaseC, trailerLeaseTiming, trailerLeaseTimingKey);
+        void totalLeaseC;
 
         // E. VOCI SPECIFICHE CON SCADENZA PROPRIA (default 30 gg, modificabile per voce)
         pushSupplierOutflow(m, tiresDelayMonths, tiresC);
@@ -1041,13 +1062,15 @@ export const calculateSingleProjectMetrics = (project) => {
   const extraTerms = project.paymentTermsExtra !== undefined ? Number(project.paymentTermsExtra) : 30;
 
   const leaseTimingKey = normalizeLeaseTiming(project);
+  const trailerLeaseTimingKey = normalizeTrailerLeaseTiming(project);
   // Offset rispetto a fine mese operativo T0:
   // M1_D10 -> giorno 10 di T0 (-20 gg rispetto a fine T0) -> anticipo extra +20 gg
   // M1_D30 -> giorno 30 di T0 (0 gg) -> gap = DSO
   // M2_D20 -> giorno 20 di T1 (+20 gg dopo fine T0) -> gap = DSO - 20 gg
-  const leaseOffsetFromEndOfMonth = leaseTimingKey === 'M1_D10' ? -20 : leaseTimingKey === 'M1_D30' ? 0 : 20;
+  const getLeaseOffset = (key) => (key === 'M1_D10' ? -20 : key === 'M1_D30' ? 0 : 20);
+  const vLeaseGapDays = Math.max(0, clientDso - getLeaseOffset(leaseTimingKey));
+  const tLeaseGapDays = Math.max(0, clientDso - getLeaseOffset(trailerLeaseTimingKey));
 
-  const leaseGapDays = Math.max(0, clientDso - leaseOffsetFromEndOfMonth);
   const driverGapDays = Math.max(0, clientDso - driverTerms);
   const fuelGapDays = Math.max(0, clientDso - fuelTerms);
   const tollsGapDays = Math.max(0, clientDso - tollsTerms);
@@ -1058,7 +1081,9 @@ export const calculateSingleProjectMetrics = (project) => {
   const extraGapDays = Math.max(0, clientDso - extraTerms);
   const supplierGapDays = Math.max(0, clientDso - supplierTerms);
 
-  const leaseMonthly = (vehicleLease + trailerLease) * workingDays;
+  const vLeaseMonthly = vehicleLease * workingDays;
+  const tLeaseMonthly = trailerLease * workingDays;
+  const leaseMonthly = vLeaseMonthly + tLeaseMonthly;
   const personnelMonthly = (driverCost + porterageCost) * workingDays;
   const fuelMonthly = fuelCost * workingDays;
   const tollsMonthly = tollsCost * workingDays;
@@ -1069,7 +1094,8 @@ export const calculateSingleProjectMetrics = (project) => {
   const extraMonthly = extraCost * workingDays;
   const partnerOtherMonthly = (partnerMargin + otherCost) * workingDays;
 
-  const needLease = leaseMonthly * (leaseGapDays / 30);
+  const needLease = (vLeaseMonthly * (vLeaseGapDays / 30)) + (tLeaseMonthly * (tLeaseGapDays / 30));
+  const leaseGapDays = leaseMonthly > 0 ? Math.round((needLease / leaseMonthly) * 30) : vLeaseGapDays;
   const needPersonnel = personnelMonthly * (driverGapDays / 30);
   const needFuel = fuelMonthly * (fuelGapDays / 30);
   const needTolls = tollsMonthly * (tollsGapDays / 30);

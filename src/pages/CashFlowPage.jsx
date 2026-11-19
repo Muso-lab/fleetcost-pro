@@ -189,6 +189,10 @@ const CashFlowPage = () => {
       'Gomme (€)': m.costBreakdown.tires,
       'Noleggi Mezzi (€)': m.costBreakdown.vehicleLease,
       'Noleggi Rimorchi (€)': m.costBreakdown.trailerLease,
+      'Refrigerazione Frigo (€)': m.costBreakdown.refrigeration || 0,
+      'Telematica GPS (€)': m.costBreakdown.telematics || 0,
+      'Lavaggi (€)': m.costBreakdown.washing || 0,
+      'Costi Extra (€)': m.costBreakdown.extraCosts || 0,
       'Facchinaggio (€)': m.costBreakdown.porterage || 0,
       'Vettore Terzo / Partner (€)': m.costBreakdown.partnerMargin,
       'M.O.L. (€)': m.mol,
@@ -784,6 +788,7 @@ const CashFlowPage = () => {
                     <th className="py-3 px-4 text-right">Carburante Netto</th>
                     <th className="py-3 px-4 text-right">Credito Accise</th>
                     <th className="py-3 px-4 text-right">Canoni Noleggio</th>
+                    <th className="py-3 px-4 text-right">Frigo &amp; Accessori</th>
                     <th className="py-3 px-4 text-right">Costi Totali</th>
                     <th className="py-3 px-4 text-right">M.O.L. (€)</th>
                     <th className="py-3 px-4 text-right">M.O.L. (%)</th>
@@ -793,6 +798,7 @@ const CashFlowPage = () => {
                   {monthlyCashFlow.map((m) => {
                     const isNegMol = m.mol < 0;
                     const leaseTotal = m.costBreakdown.vehicleLease + m.costBreakdown.trailerLease;
+                    const accessoriesAndFridge = (m.costBreakdown.refrigeration || 0) + (m.costBreakdown.telematics || 0) + (m.costBreakdown.washing || 0) + (m.costBreakdown.extraCosts || 0);
 
                     return (
                       <tr key={m.monthIndex} className="hover:bg-slate-50 transition">
@@ -808,6 +814,7 @@ const CashFlowPage = () => {
                           {m.acciseCredit > 0 ? `-${formatEUR(m.acciseCredit)}` : '-'}
                         </td>
                         <td className="py-3 px-4 text-right text-slate-600">{formatEUR(leaseTotal)}</td>
+                        <td className="py-3 px-4 text-right text-slate-600">{accessoriesAndFridge > 0 ? formatEUR(accessoriesAndFridge) : '-'}</td>
                         <td className="py-3 px-4 text-right font-semibold text-slate-800">{formatEUR(m.cost)}</td>
                         <td className="py-3 px-4 text-right font-black">
                           <span className={isNegMol ? 'text-rose-600' : 'text-emerald-600'}>
@@ -830,7 +837,7 @@ const CashFlowPage = () => {
                     <td className="py-3.5 px-4">TOTALE ANNUO P&L</td>
                     <td className="py-3.5 px-4 text-center">-</td>
                     <td className="py-3.5 px-4 text-right text-emerald-400">{formatEUR(annualRevenue)}</td>
-                    <td colSpan="3" className="py-3.5 px-4 text-center text-slate-400">Costi Totali di Esercizio</td>
+                    <td colSpan="4" className="py-3.5 px-4 text-center text-slate-400">Costi Totali di Esercizio</td>
                     <td className="py-3.5 px-4 text-right text-rose-300">{formatEUR(annualCost)}</td>
                     <td className="py-3.5 px-4 text-right text-emerald-300 text-sm font-black">{formatEUR(annualMol)}</td>
                     <td className="py-3.5 px-4 text-right text-white font-black">{formatPercent(annualMolPercent)}</td>
