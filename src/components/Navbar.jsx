@@ -56,29 +56,20 @@ const Navbar = () => {
   };
 
   return (
-    <nav className="bg-slate-900 border-b border-blue-900/40 text-white shadow-xl sticky top-0 z-50">
+    <nav className="bg-[#0b2440] border-b border-[#164e87]/60 text-white shadow-lg sticky top-0 z-50">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex justify-between items-center h-16">
-          {/* Logo & Brand */}
-          <Link to="/" className="flex items-center space-x-3 group">
-            <div className="bg-white px-2 py-1 rounded-xl shadow-sm border border-slate-700/60 group-hover:border-cyan-400/60 transition flex items-center justify-center">
+          {/* Logo Brand Ufficiale FOUR - Pulito e senza scritte duplicate */}
+          <Link to="/" className="flex items-center group py-1" title="FOUR Sustainable Logistics • Home">
+            <div className="bg-white px-3 py-1.5 rounded-xl shadow-sm border border-slate-200/90 group-hover:border-cyan-400 transition flex items-center justify-center">
               <img
                 src={logoFour}
                 alt="FOUR Sustainable Logistics"
-                className="h-9 w-auto object-contain max-w-[130px]"
+                className="h-8 md:h-9 w-auto object-contain"
                 onError={(e) => {
                   e.currentTarget.src = './logo-four.png';
                 }}
               />
-            </div>
-            <div className="hidden sm:flex flex-col">
-              <div className="flex items-center space-x-2">
-                <span className="text-lg font-black tracking-wider text-white">FOUR</span>
-                <span className="px-1.5 py-0.5 bg-cyan-500/20 text-cyan-300 text-[10px] font-bold rounded uppercase border border-cyan-500/30">
-                  SUSTAINABLE LOGISTICS
-                </span>
-              </div>
-              <span className="text-[11px] text-slate-400 -mt-0.5 font-medium">Cost &amp; Cash Flow Manager</span>
             </div>
           </Link>
 
@@ -91,19 +82,14 @@ const Navbar = () => {
                 <Link
                   key={link.to}
                   to={link.to}
-                  className={`flex items-center space-x-1.5 px-2.5 lg:px-3 py-2 rounded-lg text-xs font-bold transition ${
+                  className={`flex items-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-bold transition ${
                     active
-                      ? 'bg-[#164e87] text-white shadow-md shadow-blue-950/50 border border-cyan-500/40'
-                      : link.isSpecial
-                      ? 'text-cyan-300 hover:text-white hover:bg-slate-800 bg-slate-800/60 border border-cyan-500/20'
-                      : 'text-slate-300 hover:text-white hover:bg-slate-800'
+                      ? 'bg-[#164e87] text-white shadow-md shadow-blue-950/40 border border-cyan-400/50'
+                      : 'text-slate-200 hover:text-white hover:bg-white/10'
                   }`}
                 >
-                  <Icon className={`w-4 h-4 ${active ? 'text-cyan-300' : link.isSpecial ? 'text-cyan-400' : 'text-slate-400'}`} />
+                  <Icon className={`w-4 h-4 ${active ? 'text-cyan-300' : 'text-slate-300'}`} />
                   <span>{link.label}</span>
-                  {link.isSpecial && !active && (
-                    <span className="w-2 h-2 rounded-full bg-cyan-400 inline-block animate-pulse"></span>
-                  )}
                 </Link>
               );
             })}
@@ -114,28 +100,33 @@ const Navbar = () => {
             <button
               onClick={handleExportBackup}
               title="Esporta Backup di Sicurezza dei Dati (JSON)"
-              className="px-2.5 py-1.5 text-xs font-semibold text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg transition flex items-center space-x-1.5 shadow-sm"
+              className="px-2.5 py-1.5 text-xs font-semibold text-slate-200 hover:text-white bg-white/10 hover:bg-white/15 border border-white/20 rounded-xl transition flex items-center space-x-1.5 shadow-sm"
             >
-              <Download className="w-3.5 h-3.5 text-cyan-400" />
+              <Download className="w-3.5 h-3.5 text-cyan-300" />
               <span>Backup</span>
             </button>
 
             {currentUser && (
-              <div className="flex items-center space-x-2 pl-2 border-l border-slate-800">
-                <div className="text-right hidden xl:block leading-tight">
-                  <span className="text-[11px] font-bold text-slate-200 block truncate max-w-[150px]">
-                    {currentUser.email}
-                  </span>
-                  <span className="text-[9px] text-emerald-400 font-bold flex items-center justify-end gap-1">
-                    <ShieldCheck className="w-2.5 h-2.5 inline" /> Protetto
-                  </span>
+              <div className="flex items-center space-x-2 pl-2 border-l border-white/15">
+                <div className="hidden xl:flex items-center space-x-2 bg-white/5 border border-white/10 px-2.5 py-1.5 rounded-xl">
+                  <div className="w-6 h-6 rounded-lg bg-[#164e87] text-white flex items-center justify-center font-bold text-[11px] shadow-sm">
+                    4
+                  </div>
+                  <div className="leading-tight text-right">
+                    <span className="text-[11px] font-bold text-white block">
+                      Amministrazione
+                    </span>
+                    <span className="text-[9px] text-emerald-300 font-semibold flex items-center justify-end gap-0.5">
+                      <ShieldCheck className="w-2.5 h-2.5 inline text-emerald-400" /> Riservato
+                    </span>
+                  </div>
                 </div>
                 <button
                   onClick={handleLogout}
                   title="Esci dalla sessione sicura (Logout)"
-                  className="px-2.5 py-1.5 text-xs font-bold text-rose-300 hover:text-white bg-rose-950/40 hover:bg-rose-900/60 border border-rose-800/50 rounded-lg transition flex items-center space-x-1"
+                  className="px-2.5 py-1.5 text-xs font-bold text-slate-200 hover:text-rose-200 hover:bg-rose-950/50 border border-white/15 hover:border-rose-700/60 rounded-xl transition flex items-center space-x-1"
                 >
-                  <LogOut className="w-3.5 h-3.5 text-rose-400" />
+                  <LogOut className="w-3.5 h-3.5 text-slate-300 hover:text-rose-300" />
                   <span>Esci</span>
                 </button>
               </div>
@@ -155,7 +146,7 @@ const Navbar = () => {
 
       {/* Mobile Drawer */}
       {isMenuOpen && (
-        <div className="md:hidden bg-slate-950 border-b border-slate-800 px-4 pt-2 pb-4 space-y-2">
+        <div className="md:hidden bg-[#081b30] border-b border-slate-800 px-4 pt-2 pb-4 space-y-2">
           {navLinks.map((link) => {
             const Icon = link.icon;
             const active = isActive(link.to);
@@ -165,7 +156,7 @@ const Navbar = () => {
                 to={link.to}
                 onClick={() => setIsMenuOpen(false)}
                 className={`flex items-center space-x-3 px-3 py-2.5 rounded-lg text-sm font-bold ${
-                  active ? 'bg-[#164e87] text-white border border-cyan-500/40' : 'text-slate-300 hover:bg-slate-800'
+                  active ? 'bg-[#164e87] text-white border border-cyan-500/40' : 'text-slate-300 hover:bg-white/10'
                 }`}
               >
                 <Icon className="w-5 h-5 text-cyan-400" />
