@@ -53,6 +53,7 @@ const CashFlowPage = () => {
   const [acciseEnabled, setAcciseEnabled] = useState(true); // Toggle Recupero Accise
   const [acciseRate, setAcciseRate] = useState(0.21418); // €/L rimborso
   const [activeTab, setActiveTab] = useState('cashflow'); // 'cashflow' | 'biweekly' | 'pnl'
+  const [showExpenseDetails, setShowExpenseDetails] = useState(false); // Toggle colonne di dettaglio uscite
 
   useEffect(() => {
     loadProjects();
@@ -125,6 +126,97 @@ const CashFlowPage = () => {
     totalAnnualLeases,
     cashScheduleDeadlines
   } = financialModel;
+
+  // Raggruppamento per Trimestri (Q1, Q2, Q3, Q4) con calcolo dei subtotali
+  const quartersData = useMemo(() => {
+    if (!monthlyCashFlow || monthlyCashFlow.length === 0) return [];
+
+    const configs = [
+      {
+        id: 'Q1',
+        title: '1° Trimestre (Q1)',
+        period: 'Gennaio – Marzo',
+        season: 'Inverno • Start-up & Regolarizzazione Flussi',
+        badgeClass: 'bg-sky-100 text-sky-800 border-sky-300',
+        headerClass: 'bg-gradient-to-r from-sky-50 via-blue-50/70 to-slate-50 border-l-4 border-sky-500 text-sky-950',
+        subtotalClass: 'bg-sky-50/90 text-sky-950 font-bold border-t border-b border-sky-200',
+        startIdx: 0,
+        endIdx: 3
+      },
+      {
+        id: 'Q2',
+        title: '2° Trimestre (Q2)',
+        period: 'Aprile – Giugno',
+        season: 'Primavera • Recupero Accise F24 (T1 a Maggio)',
+        badgeClass: 'bg-emerald-100 text-emerald-800 border-emerald-300',
+        headerClass: 'bg-gradient-to-r from-emerald-50 via-teal-50/70 to-slate-50 border-l-4 border-emerald-500 text-emerald-950',
+        subtotalClass: 'bg-emerald-50/90 text-emerald-950 font-bold border-t border-b border-emerald-200',
+        startIdx: 3,
+        endIdx: 6
+      },
+      {
+        id: 'Q3',
+        title: '3° Trimestre (Q3)',
+        period: 'Luglio – Settembre',
+        season: 'Estate • Picco Volumi & Recupero Accise (T2 ad Agosto)',
+        badgeClass: 'bg-amber-100 text-amber-800 border-amber-300',
+        headerClass: 'bg-gradient-to-r from-amber-50 via-yellow-50/70 to-slate-50 border-l-4 border-amber-500 text-amber-950',
+        subtotalClass: 'bg-amber-50/90 text-amber-950 font-bold border-t border-b border-amber-200',
+        startIdx: 6,
+        endIdx: 9
+      },
+      {
+        id: 'Q4',
+        title: '4° Trimestre (Q4)',
+        period: 'Ottobre – Dicembre',
+        season: 'Autunno • Chiusura Esercizio & Accise (T3 a Novembre)',
+        badgeClass: 'bg-indigo-100 text-indigo-800 border-indigo-300',
+        headerClass: 'bg-gradient-to-r from-indigo-50 via-purple-50/70 to-slate-50 border-l-4 border-indigo-500 text-indigo-950',
+        subtotalClass: 'bg-indigo-50/90 text-indigo-950 font-bold border-t border-b border-indigo-200',
+        startIdx: 9,
+        endIdx: 12
+      }
+    ];
+
+    return configs.map(q => {
+      const months = monthlyCashFlow.slice(q.startIdx, q.endIdx);
+      const openingCash = months[0]?.openingCash || 0;
+      const cashIn = months.reduce((acc, m) => acc + (m.inflowBreakdown.clientsRegular + m.inflowBreakdown.factoringAdvance), 0);
+      const acciseRefunds = months.reduce((acc, m) => acc + (m.inflowBreakdown.acciseRefunds || 0), 0);
+      const cashOut = months.reduce((acc, m) => acc + m.cashOut, 0);
+      const drivers = months.reduce((acc, m) => acc + m.outflowBreakdown.drivers, 0);
+      const lngFuel = months.reduce((acc, m) => acc + m.outflowBreakdown.lngFuel, 0);
+      const tollsTelepass = months.reduce((acc, m) => acc + m.outflowBreakdown.tollsTelepass, 0);
+      const leasesTotal = months.reduce((acc, m) => acc + m.outflowBreakdown.leasesTotal, 0);
+      const netCashFlow = months.reduce((acc, m) => acc + m.netCashFlow, 0);
+      const closingCash = months[months.length - 1]?.closingCash || 0;
+      const isDeficit = closingCash < 0;
+
+      // Metriche P&L per trimestre
+      const revenue = months.reduce((acc, m) => acc + (m.revenue || 0), 0);
+      const cost = months.reduce((acc, m) => acc + (m.cost || 0), 0);
+      const mol = months.reduce((acc, m) => acc + (m.mol || 0), 0);
+
+      return {
+        ...q,
+        months,
+        openingCash,
+        cashIn,
+        acciseRefunds,
+        cashOut,
+        drivers,
+        lngFuel,
+        tollsTelepass,
+        leasesTotal,
+        netCashFlow,
+        closingCash,
+        isDeficit,
+        revenue,
+        cost,
+        mol
+      };
+    });
+  }, [monthlyCashFlow]);
 
   // Dati per il grafico in base al tab selezionato (Mensile vs Quindicinale)
   const isBiweeklyView = activeTab === 'biweekly';
@@ -235,7 +327,7 @@ const CashFlowPage = () => {
   return (
     <div className="min-h-screen bg-slate-50 py-8 px-4 sm:px-6 lg:px-8">
       <div className="max-w-7xl mx-auto space-y-6">
-        {/* Header */}
+        {/* Header Principale */}
         <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
           <div>
             <div className="flex items-center space-x-2">
@@ -244,7 +336,7 @@ const CashFlowPage = () => {
               </span>
               <div>
                 <h1 className="text-2xl font-black text-slate-900 tracking-tight">
-                  Forecast, Budget & Cash Flow FOUR
+                  Forecast, Budget &amp; Cash Flow FOUR
                 </h1>
                 <p className="text-xs text-slate-500">
                   Modellazione di tesoreria con regole reali (Noleggi G10/G30/G20, LNG 30gg quindicinale, Telepass 15gg quindicinale e Recupero Accise)
@@ -252,35 +344,117 @@ const CashFlowPage = () => {
               </div>
             </div>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <select
-              value={portfolioScope}
-              onChange={(e) => setPortfolioScope(e.target.value)}
-              className="text-xs font-bold py-2 px-3 rounded-xl border border-slate-300 bg-white focus:ring-2 focus:ring-[#164e87] shadow-sm text-slate-800"
-              title="Scegli se analizzare solo lo Status Quo consolidato o includere le trattative e simulazioni"
-            >
-              <option value="consolidated">🌐 Tutto il Portfolio ({projects.length})</option>
-              <option value="activeOnly">🏢 Solo Status Quo (Contratti Attivi)</option>
-              <option value="potentialOnly">⚡ Solo Trattative &amp; Simulazioni</option>
-            </select>
+          <div className="flex items-center space-x-2 text-xs">
+            <span className="px-3 py-1.5 rounded-xl font-bold bg-slate-100 text-slate-700 border border-slate-200">
+              Esercizio {selectedYear}
+            </span>
+            <span className="px-3 py-1.5 rounded-xl font-bold bg-[#164e87]/10 text-[#164e87] border border-[#164e87]/20">
+              {portfolioScope === 'consolidated' ? 'Portfolio Globale' : portfolioScope === 'activeOnly' ? 'Solo Status Quo' : 'Solo Trattative'}
+            </span>
+          </div>
+        </div>
 
-            <select
-              value={selectedYear}
-              onChange={(e) => setSelectedYear(parseInt(e.target.value))}
-              className="text-xs font-bold py-2 px-3 rounded-xl border border-slate-300 bg-white focus:ring-2 focus:ring-emerald-500 shadow-sm"
-            >
-              <option value="2027">Anno Budget 2027 (Proiezione Anno Successivo)</option>
-              <option value="2026">Anno Budget 2026 (Corrente)</option>
-              <option value="2025">Anno Storico 2025</option>
-            </select>
+        {/* BARRA DI CONTROLLO STICKY (Sempre visibile a top-16 durante lo scroll) */}
+        <div className="sticky top-16 z-30 bg-white/95 backdrop-blur-md shadow-md border border-slate-200/90 rounded-2xl p-3 sm:p-4 transition-all">
+          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+            {/* Selettore Tab Principali */}
+            <div className="flex items-center space-x-1 p-1 bg-slate-100 rounded-xl overflow-x-auto">
+              <button
+                type="button"
+                onClick={() => setActiveTab('cashflow')}
+                className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition whitespace-nowrap ${
+                  activeTab === 'cashflow'
+                    ? 'bg-white text-slate-900 shadow-sm'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                Cash Flow Mensile (12 Mesi)
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab('biweekly')}
+                className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition whitespace-nowrap ${
+                  activeTab === 'biweekly'
+                    ? 'bg-white text-slate-900 shadow-sm'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                Quindicinale (24 Periodi)
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab('pnl')}
+                className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition whitespace-nowrap ${
+                  activeTab === 'pnl'
+                    ? 'bg-white text-slate-900 shadow-sm'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                Budget Economico P&amp;L
+              </button>
+            </div>
 
-            <button
-              onClick={handleExportExcel}
-              className="inline-flex items-center space-x-1.5 bg-slate-800 hover:bg-slate-900 text-white px-3.5 py-2 rounded-xl font-semibold text-xs transition shadow-sm"
-            >
-              <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
-              <span>Esporta Excel (.xlsx)</span>
-            </button>
+            {/* Controlli Portfolio, Anno, Dettagli ed Export */}
+            <div className="flex flex-wrap items-center gap-2">
+              <select
+                value={portfolioScope}
+                onChange={(e) => setPortfolioScope(e.target.value)}
+                className="text-xs font-bold py-1.5 px-2.5 rounded-xl border border-slate-300 bg-white focus:ring-2 focus:ring-[#164e87] shadow-sm text-slate-800"
+                title="Scegli se analizzare tutto il portfolio o solo contratti attivi o solo simulazioni"
+              >
+                <option value="consolidated">🌐 Tutto il Portfolio ({projects.length})</option>
+                <option value="activeOnly">🏢 Solo Status Quo ({projects.filter(p => !isPotentialProject(p)).length})</option>
+                <option value="potentialOnly">⚡ Solo Trattative ({projects.filter(p => isPotentialProject(p)).length})</option>
+              </select>
+
+              <select
+                value={selectedYear}
+                onChange={(e) => setSelectedYear(parseInt(e.target.value))}
+                className="text-xs font-bold py-1.5 px-2.5 rounded-xl border border-slate-300 bg-white focus:ring-2 focus:ring-emerald-500 shadow-sm"
+              >
+                <option value="2027">Budget 2027 (+12m)</option>
+                <option value="2026">Budget 2026 (Corrente)</option>
+                <option value="2025">Storico 2025</option>
+              </select>
+
+              {activeTab === 'cashflow' && (
+                <button
+                  type="button"
+                  onClick={() => setShowExpenseDetails(!showExpenseDetails)}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition border shadow-xs ${
+                    showExpenseDetails
+                      ? 'bg-[#164e87] text-white border-[#164e87]'
+                      : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-300'
+                  }`}
+                  title="Mostra o nascondi le colonne analitiche di spesa (Autisti, LNG, Telepass, Noleggi)"
+                >
+                  {showExpenseDetails ? '📋 Vista Sintetica' : '🔍 Dettaglio Spese'}
+                </button>
+              )}
+
+              {/* Indicatori sintetici live nello sticky */}
+              <div className="hidden xl:flex items-center space-x-2 text-xs bg-slate-50 px-2.5 py-1 rounded-xl border border-slate-200">
+                <span className="text-slate-500">Saldo Dic:</span>
+                <span className={`font-black ${finalCashBalance >= 0 ? 'text-emerald-700' : 'text-rose-600'}`}>
+                  {formatEUR(finalCashBalance)}
+                </span>
+                {peakFinancingRequired > 0 && (
+                  <>
+                    <span className="text-slate-300">|</span>
+                    <span className="text-amber-800 font-bold">Fido: {formatEUR(suggestedCreditLine)}</span>
+                  </>
+                )}
+              </div>
+
+              <button
+                type="button"
+                onClick={handleExportExcel}
+                className="inline-flex items-center space-x-1.5 bg-slate-800 hover:bg-slate-900 text-white px-3 py-1.5 rounded-xl font-bold text-xs transition shadow-sm"
+              >
+                <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
+                <span className="hidden sm:inline">Excel</span>
+              </button>
+            </div>
           </div>
         </div>
 
@@ -653,82 +827,186 @@ const CashFlowPage = () => {
 
           <div className="overflow-x-auto">
             {activeTab === 'cashflow' && (
-              /* TABELLA CASH FLOW MENSILE */
+              /* TABELLA CASH FLOW MENSILE CON SUDDIVISIONE IN TRIMESTRI (Q1-Q4) */
               <table className="min-w-full divide-y divide-slate-200 text-left text-xs">
-                <thead className="bg-slate-50 text-slate-700 font-bold uppercase tracking-wider">
+                <thead className="bg-[#0b2440] text-white font-extrabold uppercase tracking-wider text-[11px]">
                   <tr>
-                    <th className="py-3 px-4">Mese</th>
-                    <th className="py-3 px-4 text-right">Saldo Iniz.</th>
-                    <th className="py-3 px-4 text-right text-blue-700">(+) Incassi</th>
-                    <th className="py-3 px-4 text-right text-emerald-700">(+) Accise F24</th>
-                    <th className="py-3 px-4 text-right text-rose-700">(-) Uscite</th>
-                    <th className="py-3 px-4 text-right">Autisti</th>
-                    <th className="py-3 px-4 text-right">LNG Carb.</th>
-                    <th className="py-3 px-4 text-right">Telepass</th>
-                    <th className="py-3 px-4 text-right">Noleggi</th>
-                    <th className="py-3 px-4 text-right">Flusso Netto</th>
-                    <th className="py-3 px-4 text-right font-black">Saldo Finale</th>
-                    <th className="py-3 px-4 text-center">Stato Cassa</th>
+                    <th className="py-3 px-4 w-[20%]">Mese &amp; Periodo</th>
+                    <th className="py-3 px-3 text-right">Saldo Iniz.</th>
+                    <th className="py-3 px-3 text-right text-cyan-300">(+) Incassi</th>
+                    <th className="py-3 px-3 text-right text-emerald-300">(+) Accise F24</th>
+                    <th className="py-3 px-3 text-right text-rose-300">(-) Uscite</th>
+                    {showExpenseDetails && (
+                      <>
+                        <th className="py-3 px-3 text-right text-slate-300 bg-slate-800/80">Autisti</th>
+                        <th className="py-3 px-3 text-right text-slate-300 bg-slate-800/80">LNG Carb.</th>
+                        <th className="py-3 px-3 text-right text-slate-300 bg-slate-800/80">Telepass</th>
+                        <th className="py-3 px-3 text-right text-slate-300 bg-slate-800/80">Noleggi</th>
+                      </>
+                    )}
+                    <th className="py-3 px-3 text-right">Flusso Netto</th>
+                    <th className="py-3 px-3 text-right font-black">Saldo Finale</th>
+                    <th className="py-3 px-3 text-center">Stato Cassa</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100 font-medium">
-                  {monthlyCashFlow.map((m) => {
-                    const isDeficit = m.closingCash < 0;
-                    return (
-                      <tr
-                        key={m.monthIndex}
-                        className={`hover:bg-slate-50/80 transition ${isDeficit ? 'bg-amber-50/40' : ''}`}
+                {quartersData.map((q) => (
+                  <tbody key={q.id} className="divide-y divide-slate-100 font-medium">
+                    {/* Header del Trimestre */}
+                    <tr className={q.headerClass}>
+                      <td
+                        colSpan={showExpenseDetails ? 12 : 8}
+                        className="py-2 px-4 font-black text-xs uppercase tracking-wider"
                       >
-                        <td className="py-3 px-4 font-bold text-slate-900">{m.monthName}</td>
-                        <td className="py-3 px-4 text-right text-slate-600">{formatEUR(m.openingCash)}</td>
-                        <td className="py-3 px-4 text-right font-bold text-blue-600">{formatEUR(m.inflowBreakdown.clientsRegular + m.inflowBreakdown.factoringAdvance)}</td>
-                        <td className="py-3 px-4 text-right font-bold text-emerald-600">
-                          {m.inflowBreakdown.acciseRefunds > 0 ? `+${formatEUR(m.inflowBreakdown.acciseRefunds)}` : '-'}
-                        </td>
-                        <td className="py-3 px-4 text-right font-bold text-rose-600">{formatEUR(m.cashOut)}</td>
-                        <td className="py-3 px-4 text-right text-slate-600">{formatEUR(m.outflowBreakdown.drivers)}</td>
-                        <td className="py-3 px-4 text-right text-slate-600">{formatEUR(m.outflowBreakdown.lngFuel)}</td>
-                        <td className="py-3 px-4 text-right text-slate-600">{formatEUR(m.outflowBreakdown.tollsTelepass)}</td>
-                        <td className="py-3 px-4 text-right text-slate-600">{formatEUR(m.outflowBreakdown.leasesTotal)}</td>
-                        <td className="py-3 px-4 text-right">
-                          <span className={`font-bold ${m.netCashFlow >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
-                            {m.netCashFlow >= 0 ? '+' : ''}{formatEUR(m.netCashFlow)}
-                          </span>
-                        </td>
-                        <td className="py-3 px-4 text-right">
-                          <span className={`font-black text-sm ${isDeficit ? 'text-rose-600' : 'text-emerald-700'}`}>
-                            {formatEUR(m.closingCash)}
-                          </span>
-                        </td>
-                        <td className="py-3 px-4 text-center">
-                          {isDeficit ? (
-                            <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-rose-100 text-rose-800 border border-rose-300">
-                              DEFICIT {formatEUR(Math.abs(m.closingCash))}
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex items-center space-x-2">
+                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-black border ${q.badgeClass}`}>
+                              {q.id}
                             </span>
-                          ) : (
-                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-green-100 text-green-800">
-                              OK
+                            <span className="font-extrabold text-slate-900">{q.title} • {q.period}</span>
+                            <span className="text-[11px] font-medium text-slate-600 hidden sm:inline">— {q.season}</span>
+                          </div>
+                          <div className="flex items-center space-x-2 text-[11px]">
+                            <span className="font-semibold text-slate-600">Flusso Trimestrale:</span>
+                            <span className={`font-black ${q.netCashFlow >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
+                              {q.netCashFlow >= 0 ? '+' : ''}{formatEUR(q.netCashFlow)}
                             </span>
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+
+                    {/* Mesi del Trimestre */}
+                    {q.months.map((m) => {
+                      const isDeficit = m.closingCash < 0;
+                      const monthNum = String(m.monthIndex + 1).padStart(2, '0');
+                      return (
+                        <tr
+                          key={m.monthIndex}
+                          className={`hover:bg-slate-100/80 transition ${
+                            isDeficit ? 'bg-amber-50/30' : m.monthIndex % 2 === 1 ? 'bg-slate-50/50' : 'bg-white'
+                          }`}
+                        >
+                          <td className="py-2.5 px-4">
+                            <div className="flex items-center space-x-2">
+                              <span className={`px-1.5 py-0.5 rounded text-[10px] font-black border ${q.badgeClass}`}>
+                                M{monthNum}
+                              </span>
+                              <span className="font-bold text-slate-900">{m.monthName}</span>
+                              {m.inflowBreakdown.acciseRefunds > 0 && (
+                                <span className="px-1.5 py-0.5 rounded text-[9px] font-extrabold bg-emerald-100 text-emerald-800 border border-emerald-300 whitespace-nowrap">
+                                  💰 Accise F24
+                                </span>
+                              )}
+                            </div>
+                          </td>
+                          <td className="py-2.5 px-3 text-right text-slate-600 font-medium">{formatEUR(m.openingCash)}</td>
+                          <td className="py-2.5 px-3 text-right font-bold text-blue-700 bg-blue-50/20">
+                            {formatEUR(m.inflowBreakdown.clientsRegular + m.inflowBreakdown.factoringAdvance)}
+                          </td>
+                          <td className="py-2.5 px-3 text-right font-bold text-emerald-700 bg-emerald-50/20">
+                            {m.inflowBreakdown.acciseRefunds > 0 ? `+${formatEUR(m.inflowBreakdown.acciseRefunds)}` : '-'}
+                          </td>
+                          <td className="py-2.5 px-3 text-right font-bold text-rose-700 bg-rose-50/20">
+                            {formatEUR(m.cashOut)}
+                          </td>
+
+                          {showExpenseDetails && (
+                            <>
+                              <td className="py-2.5 px-3 text-right text-slate-600 bg-slate-50/70">{formatEUR(m.outflowBreakdown.drivers)}</td>
+                              <td className="py-2.5 px-3 text-right text-slate-600 bg-slate-50/70">{formatEUR(m.outflowBreakdown.lngFuel)}</td>
+                              <td className="py-2.5 px-3 text-right text-slate-600 bg-slate-50/70">{formatEUR(m.outflowBreakdown.tollsTelepass)}</td>
+                              <td className="py-2.5 px-3 text-right text-slate-600 bg-slate-50/70">{formatEUR(m.outflowBreakdown.leasesTotal)}</td>
+                            </>
                           )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-                <tfoot className="bg-slate-900 text-white font-bold">
+
+                          <td className="py-2.5 px-3 text-right">
+                            <span className={`font-bold ${m.netCashFlow >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
+                              {m.netCashFlow >= 0 ? '+' : ''}{formatEUR(m.netCashFlow)}
+                            </span>
+                          </td>
+                          <td className="py-2.5 px-3 text-right">
+                            <span className={`font-black text-xs ${isDeficit ? 'text-rose-600' : 'text-emerald-700'}`}>
+                              {formatEUR(m.closingCash)}
+                            </span>
+                          </td>
+                          <td className="py-2.5 px-3 text-center">
+                            {isDeficit ? (
+                              <span className="px-2 py-0.5 rounded-full text-[9px] font-extrabold bg-rose-100 text-rose-800 border border-rose-300 whitespace-nowrap">
+                                DEFICIT {formatEUR(Math.abs(m.closingCash))}
+                              </span>
+                            ) : (
+                              <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-green-100 text-green-800 border border-green-200">
+                                LIQUIDITÀ OK
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+
+                    {/* Riga Subtotale Trimestrale */}
+                    <tr className={q.subtotalClass}>
+                      <td className="py-2 px-4 font-black text-xs">
+                        SUBTOTALE {q.id} ({q.period})
+                      </td>
+                      <td className="py-2 px-3 text-right text-slate-700 font-semibold">{formatEUR(q.openingCash)}</td>
+                      <td className="py-2 px-3 text-right text-blue-800 font-black">{formatEUR(q.cashIn)}</td>
+                      <td className="py-2 px-3 text-right text-emerald-800 font-black">
+                        {q.acciseRefunds > 0 ? `+${formatEUR(q.acciseRefunds)}` : '-'}
+                      </td>
+                      <td className="py-2 px-3 text-right text-rose-800 font-black">{formatEUR(q.cashOut)}</td>
+
+                      {showExpenseDetails && (
+                        <>
+                          <td className="py-2 px-3 text-right font-bold text-slate-800">{formatEUR(q.drivers)}</td>
+                          <td className="py-2 px-3 text-right font-bold text-slate-800">{formatEUR(q.lngFuel)}</td>
+                          <td className="py-2 px-3 text-right font-bold text-slate-800">{formatEUR(q.tollsTelepass)}</td>
+                          <td className="py-2 px-3 text-right font-bold text-slate-800">{formatEUR(q.leasesTotal)}</td>
+                        </>
+                      )}
+
+                      <td className="py-2 px-3 text-right font-black">
+                        <span className={q.netCashFlow >= 0 ? 'text-emerald-800' : 'text-rose-800'}>
+                          {q.netCashFlow >= 0 ? '+' : ''}{formatEUR(q.netCashFlow)}
+                        </span>
+                      </td>
+                      <td className="py-2 px-3 text-right font-black">
+                        <span className={q.isDeficit ? 'text-rose-700' : 'text-emerald-800'}>
+                          {formatEUR(q.closingCash)}
+                        </span>
+                      </td>
+                      <td className="py-2 px-3 text-center">
+                        {q.isDeficit ? (
+                          <span className="px-2 py-0.5 rounded-full text-[9px] font-black bg-rose-200 text-rose-900 border border-rose-300">
+                            DEFICIT {q.id}
+                          </span>
+                        ) : (
+                          <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-emerald-200 text-emerald-900 border border-emerald-300">
+                            ATTIVO {q.id}
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  </tbody>
+                ))}
+                <tfoot className="bg-[#0b2440] text-white font-bold border-t-2 border-cyan-400">
                   <tr>
-                    <td className="py-3.5 px-4">TOTALE ANNUO</td>
-                    <td className="py-3.5 px-4 text-right text-slate-400">{formatEUR(initialCash)}</td>
-                    <td className="py-3.5 px-4 text-right text-blue-300">{formatEUR(totalCashIn - annualAcciseCredit)}</td>
-                    <td className="py-3.5 px-4 text-right text-emerald-400">{formatEUR(annualAcciseCredit)}</td>
-                    <td className="py-3.5 px-4 text-right text-rose-300">{formatEUR(totalCashOut)}</td>
-                    <td colSpan="4" className="py-3.5 px-4 text-center text-slate-400">Chiusura Flussi Reali</td>
-                    <td className="py-3.5 px-4 text-right text-emerald-300">
+                    <td className="py-3 px-4 font-black">TOTALE ANNUO ({selectedYear})</td>
+                    <td className="py-3 px-3 text-right text-slate-300">{formatEUR(initialCash)}</td>
+                    <td className="py-3 px-3 text-right text-cyan-300 font-black">{formatEUR(totalCashIn - annualAcciseCredit)}</td>
+                    <td className="py-3 px-3 text-right text-emerald-300 font-black">{formatEUR(annualAcciseCredit)}</td>
+                    <td className="py-3 px-3 text-right text-rose-300 font-black">{formatEUR(totalCashOut)}</td>
+                    {showExpenseDetails && (
+                      <td colSpan="4" className="py-3 px-3 text-center text-slate-300 text-[11px]">
+                        Dettaglio uscite operative consolidate
+                      </td>
+                    )}
+                    <td className="py-3 px-3 text-right text-emerald-300 font-black">
                       {netAnnualCash >= 0 ? '+' : ''}{formatEUR(netAnnualCash)}
                     </td>
-                    <td className="py-3.5 px-4 text-right text-white font-black text-sm">{formatEUR(finalCashBalance)}</td>
-                    <td className="py-3.5 px-4 text-center text-amber-300 font-extrabold">
-                      {peakFinancingRequired > 0 ? `Max: ${formatEUR(peakFinancingRequired)}` : 'Coperto'}
+                    <td className="py-3 px-3 text-right text-white font-black text-sm">{formatEUR(finalCashBalance)}</td>
+                    <td className="py-3 px-3 text-center text-amber-300 font-extrabold text-[10px]">
+                      {peakFinancingRequired > 0 ? `Picco Deficit: ${formatEUR(peakFinancingRequired)}` : 'Coperto'}
                     </td>
                   </tr>
                 </tfoot>
