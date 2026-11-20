@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
-import { Truck, Mail, Lock, ShieldCheck, ArrowRight, Leaf } from 'lucide-react';
+import { Truck, Mail, Lock, ShieldCheck, ArrowRight } from 'lucide-react';
+import logoFour from '../assets/logo-four.png';
 
 const LoginPage = () => {
   const { login, signup, loginLocal } = useAuth();
@@ -46,12 +47,11 @@ const LoginPage = () => {
       <div className="max-w-md w-full">
         {/* Brand FOUR */}
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center p-4 bg-emerald-600/30 border border-emerald-500/40 rounded-2xl mb-3 shadow-xl backdrop-blur-sm">
-            <Leaf className="w-10 h-10 text-emerald-400 mr-2" />
-            <span className="text-4xl font-extrabold text-white tracking-wider">FOUR</span>
+          <div className="inline-flex items-center justify-center p-3 bg-white rounded-2xl mb-3 shadow-xl border border-slate-700">
+            <img src={logoFour} alt="FOUR Sustainable Logistics" className="h-14 w-auto object-contain" onError={(e) => { e.currentTarget.src = './logo-four.png'; }} />
           </div>
-          <h1 className="text-2xl font-bold text-white mb-1">Trasporti a Basso Impatto Ambientale</h1>
-          <p className="text-emerald-200/80 text-sm">Controllo Costi, Flotta, Budget & Cash Flow Forecast</p>
+          <h1 className="text-2xl font-black text-white mb-1">FOUR Sustainable Logistics</h1>
+          <p className="text-cyan-200/90 text-sm">Controllo Costi, Flotta, Budget & Cash Flow Forecast</p>
         </div>
 
         {/* Card */}

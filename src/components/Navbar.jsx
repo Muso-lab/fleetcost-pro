@@ -1,5 +1,4 @@
-import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { useAuth } from '../contexts/AuthContext';
+import { Link, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard,
   Truck,
@@ -7,37 +6,17 @@ import {
   TrendingUp,
   Calculator,
   Settings,
-  LogOut,
   Menu,
   X,
-  Leaf,
-  RefreshCw,
   Download
 } from 'lucide-react';
 import { useState } from 'react';
 import storageService from '../services/storageService';
+import logoFour from '../assets/logo-four.png';
 
 const Navbar = () => {
-  const { currentUser, logout } = useAuth();
-  const navigate = useNavigate();
   const location = useLocation();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
-
-  const handleLogout = async () => {
-    try {
-      await logout();
-      navigate('/login');
-    } catch (error) {
-      console.error('Errore logout:', error);
-    }
-  };
-
-  const handleResetData = () => {
-    if (confirm('Attenzione: Ripristinare tutti i dati originali dal file Excel di FOUR (17 progetti e flotta completa)?')) {
-      storageService.resetToDefaults();
-      window.location.reload();
-    }
-  };
 
   const handleExportBackup = () => {
     const json = storageService.exportBackupJson();
@@ -52,10 +31,10 @@ const Navbar = () => {
 
   const navLinks = [
     { to: '/', label: 'Dashboard', icon: LayoutDashboard },
-    { to: '/fleet', label: 'Flotta Disponibile', icon: Truck },
+    { to: '/fleet', label: 'Flotta Mezzi', icon: Truck },
     { to: '/projects', label: 'Commesse & Budget', icon: Briefcase },
     { to: '/cashflow', label: 'Cash Flow & Forecast', icon: TrendingUp },
-    { to: '/simulation', label: 'Simulatore Tratte', icon: Calculator },
+    { to: '/simulation', label: 'Simulatore Preventivi', icon: Calculator, isSpecial: true },
     { to: '/settings', label: 'Impostazioni', icon: Settings }
   ];
 
@@ -70,10 +49,17 @@ const Navbar = () => {
         <div className="flex justify-between items-center h-16">
           {/* Logo & Brand */}
           <Link to="/" className="flex items-center space-x-3 group">
-            <div className="bg-white p-1 rounded-xl shadow-sm border border-slate-700/60 group-hover:border-cyan-400/60 transition flex items-center justify-center">
-              <img src="/logo-four.png" alt="FOUR Sustainable Logistics" className="h-9 w-auto object-contain max-w-[120px]" />
+            <div className="bg-white px-2 py-1 rounded-xl shadow-sm border border-slate-700/60 group-hover:border-cyan-400/60 transition flex items-center justify-center">
+              <img
+                src={logoFour}
+                alt="FOUR Sustainable Logistics"
+                className="h-9 w-auto object-contain max-w-[130px]"
+                onError={(e) => {
+                  e.currentTarget.src = './logo-four.png';
+                }}
+              />
             </div>
-            <div className="flex flex-col">
+            <div className="hidden sm:flex flex-col">
               <div className="flex items-center space-x-2">
                 <span className="text-lg font-black tracking-wider text-white">FOUR</span>
                 <span className="px-1.5 py-0.5 bg-cyan-500/20 text-cyan-300 text-[10px] font-bold rounded uppercase border border-cyan-500/30">
@@ -85,7 +71,7 @@ const Navbar = () => {
           </Link>
 
           {/* Desktop Navigation Links */}
-          <div className="hidden lg:flex items-center space-x-1">
+          <div className="hidden md:flex items-center space-x-1 lg:space-x-1.5">
             {navLinks.map((link) => {
               const Icon = link.icon;
               const active = isActive(link.to);
@@ -93,14 +79,19 @@ const Navbar = () => {
                 <Link
                   key={link.to}
                   to={link.to}
-                  className={`flex items-center space-x-1.5 px-3 py-2 rounded-lg text-xs font-semibold transition ${
+                  className={`flex items-center space-x-1.5 px-2.5 lg:px-3 py-2 rounded-lg text-xs font-bold transition ${
                     active
                       ? 'bg-[#164e87] text-white shadow-md shadow-blue-950/50 border border-cyan-500/40'
+                      : link.isSpecial
+                      ? 'text-cyan-300 hover:text-white hover:bg-slate-800 bg-slate-800/60 border border-cyan-500/20'
                       : 'text-slate-300 hover:text-white hover:bg-slate-800'
                   }`}
                 >
-                  <Icon className="w-4 h-4 text-cyan-400" />
+                  <Icon className={`w-4 h-4 ${active ? 'text-cyan-300' : link.isSpecial ? 'text-cyan-400' : 'text-slate-400'}`} />
                   <span>{link.label}</span>
+                  {link.isSpecial && !active && (
+                    <span className="w-2 h-2 rounded-full bg-cyan-400 inline-block animate-pulse"></span>
+                  )}
                 </Link>
               );
             })}
@@ -110,42 +101,19 @@ const Navbar = () => {
           <div className="hidden md:flex items-center space-x-2">
             <button
               onClick={handleExportBackup}
-              title="Esporta Backup Dati JSON"
-              className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition"
+              title="Esporta Backup di Sicurezza dei Dati (JSON)"
+              className="px-2.5 py-1.5 text-xs font-semibold text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg transition flex items-center space-x-1.5 shadow-sm"
             >
-              <Download className="w-4 h-4" />
-            </button>
-
-            <button
-              onClick={handleResetData}
-              title="Ripristina Dati Originali Excel"
-              className="p-2 text-slate-400 hover:text-amber-400 hover:bg-slate-800 rounded-lg transition"
-            >
-              <RefreshCw className="w-4 h-4" />
-            </button>
-
-            <div className="h-6 w-px bg-slate-800 mx-1"></div>
-
-            <div className="text-right">
-              <p className="text-xs font-medium text-slate-200">
-                {currentUser?.displayName || 'Team FOUR'}
-              </p>
-              <span className="text-[10px] text-emerald-400 font-mono">Locale</span>
-            </div>
-
-            <button
-              onClick={handleLogout}
-              title="Esci"
-              className="p-2 text-slate-400 hover:text-rose-400 hover:bg-slate-800 rounded-lg transition"
-            >
-              <LogOut className="w-4 h-4" />
+              <Download className="w-3.5 h-3.5 text-cyan-400" />
+              <span>Salva Backup</span>
             </button>
           </div>
 
           {/* Mobile hamburger */}
           <button
             onClick={() => setIsMenuOpen(!isMenuOpen)}
-            className="lg:hidden p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
+            className="md:hidden p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
+            aria-label="Menu"
           >
             {isMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
           </button>
@@ -154,7 +122,7 @@ const Navbar = () => {
 
       {/* Mobile Drawer */}
       {isMenuOpen && (
-        <div className="lg:hidden bg-slate-950 border-b border-slate-800 px-4 pt-2 pb-4 space-y-2">
+        <div className="md:hidden bg-slate-950 border-b border-slate-800 px-4 pt-2 pb-4 space-y-2">
           {navLinks.map((link) => {
             const Icon = link.icon;
             const active = isActive(link.to);
@@ -163,11 +131,11 @@ const Navbar = () => {
                 key={link.to}
                 to={link.to}
                 onClick={() => setIsMenuOpen(false)}
-                className={`flex items-center space-x-3 px-3 py-2.5 rounded-lg text-sm font-medium ${
-                  active ? 'bg-emerald-600 text-white' : 'text-slate-300 hover:bg-slate-800'
+                className={`flex items-center space-x-3 px-3 py-2.5 rounded-lg text-sm font-bold ${
+                  active ? 'bg-[#164e87] text-white border border-cyan-500/40' : 'text-slate-300 hover:bg-slate-800'
                 }`}
               >
-                <Icon className="w-5 h-5" />
+                <Icon className="w-5 h-5 text-cyan-400" />
                 <span>{link.label}</span>
               </Link>
             );
@@ -175,18 +143,13 @@ const Navbar = () => {
           <div className="pt-3 border-t border-slate-800 flex justify-between items-center text-xs text-slate-400">
             <button
               onClick={() => {
-                handleResetData();
+                handleExportBackup();
                 setIsMenuOpen(false);
               }}
-              className="text-amber-400 hover:underline"
+              className="text-cyan-400 hover:underline flex items-center space-x-1 font-semibold"
             >
-              Ripristina Dati Excel
-            </button>
-            <button
-              onClick={handleLogout}
-              className="text-rose-400 hover:underline"
-            >
-              Esci
+              <Download className="w-4 h-4" />
+              <span>Esporta Backup Dati</span>
             </button>
           </div>
         </div>

@@ -162,10 +162,10 @@ const DashboardPage = () => {
 
               <button
                 onClick={() => navigate('/simulation')}
-                className="inline-flex items-center space-x-2 bg-white/10 hover:bg-white/20 text-white px-4 py-2.5 rounded-xl font-semibold text-xs transition backdrop-blur-sm border border-white/20"
+                className="inline-flex items-center space-x-2 bg-[#164e87] hover:bg-[#0f3b75] text-white px-4 py-2.5 rounded-xl font-bold text-xs transition shadow-lg border border-cyan-400/40"
               >
-                <Calculator className="w-4 h-4 text-emerald-300" />
-                <span>Preventivatore Tratta</span>
+                <Calculator className="w-4 h-4 text-cyan-300" />
+                <span>Simulatore Preventivi</span>
               </button>
             </div>
           </div>

@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import storageService from '../services/storageService';
 import {
   formatEUR,
@@ -40,10 +40,12 @@ import {
   Wifi,
   ChevronDown,
   ChevronUp,
-  Sliders
+  Sliders,
+  Calculator
 } from 'lucide-react';
 
 const ProjectsPage = () => {
+  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const [projects, setProjects] = useState([]);
   const [fleet, setFleet] = useState([]);
@@ -826,6 +828,14 @@ const ProjectsPage = () => {
             >
               <Plus className="w-4 h-4" />
               <span>Nuova Commessa</span>
+            </button>
+            <button
+              onClick={() => navigate('/simulation')}
+              className="inline-flex items-center space-x-2 bg-[#164e87] hover:bg-[#0f3b75] text-white px-4 py-2.5 rounded-xl font-semibold text-sm shadow-sm transition border border-cyan-400/30"
+              title="Apri il Simulatore Preventivi per calcolare costi tratta, M.O.L., markup ed esportare il PDF"
+            >
+              <Calculator className="w-4 h-4 text-cyan-300" />
+              <span>Simulatore Preventivi</span>
             </button>
           </div>
         </div>
