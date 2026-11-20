@@ -1306,20 +1306,20 @@ const ProjectsPage = () => {
           </span>
         </div>
 
-        {/* BARRA STICKY DI CONTROLLO SCENARI & WHAT-IF (Sempre visibile a top-16 durante lo scroll) */}
-        <div className="sticky top-16 z-30 bg-[#0b2440]/95 backdrop-blur-md text-white rounded-2xl shadow-lg border border-[#164e87]/70 p-3 transition-all">
-          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+        {/* BARRA STICKY DI CONTROLLO SCENARI & WHAT-IF (Stile pulito e coerente con Cash Flow, sempre visibile a top-16) */}
+        <div className="sticky top-16 z-30 bg-white/95 backdrop-blur-md shadow-md border border-slate-200/90 rounded-2xl p-2.5 sm:p-3 transition-all text-slate-800">
+          <div className="flex flex-wrap items-center justify-between gap-2.5">
             {/* Selettore Vista Scenario */}
             <div className="flex items-center space-x-1.5 flex-wrap">
-              <span className="text-slate-400 text-xs font-bold mr-1 hidden sm:inline">Scenario:</span>
-              <div className="inline-flex rounded-xl bg-slate-900/90 p-1 border border-slate-700 text-xs">
+              <span className="text-slate-500 text-xs font-bold mr-1 hidden sm:inline">Scenario:</span>
+              <div className="inline-flex rounded-xl bg-slate-100 p-1 border border-slate-200 text-xs flex-shrink-0">
                 <button
                   type="button"
                   onClick={() => setSelectedScenario('consolidated')}
                   className={`px-3 py-1.5 rounded-lg font-bold text-xs transition ${
                     selectedScenario === 'consolidated' || selectedScenario === 'whatIf'
-                      ? 'bg-[#164e87] text-white shadow-sm'
-                      : 'text-slate-300 hover:text-white'
+                      ? 'bg-white text-[#164e87] shadow-sm font-black'
+                      : 'text-slate-600 hover:text-slate-900'
                   }`}
                 >
                   🌐 Tutto ({projects.length})
@@ -1329,8 +1329,8 @@ const ProjectsPage = () => {
                   onClick={() => setSelectedScenario('active2026')}
                   className={`px-3 py-1.5 rounded-lg font-bold text-xs transition ${
                     selectedScenario === 'active2026'
-                      ? 'bg-emerald-700 text-white shadow-sm'
-                      : 'text-slate-300 hover:text-white'
+                      ? 'bg-emerald-600 text-white shadow-sm font-black'
+                      : 'text-slate-600 hover:text-slate-900'
                   }`}
                 >
                   🏢 Status Quo ({statusQuoProjects.length})
@@ -1340,8 +1340,8 @@ const ProjectsPage = () => {
                   onClick={() => setSelectedScenario('futureOnly')}
                   className={`px-3 py-1.5 rounded-lg font-bold text-xs transition ${
                     selectedScenario === 'futureOnly'
-                      ? 'bg-amber-600 text-slate-950 font-black shadow-sm'
-                      : 'text-slate-300 hover:text-white'
+                      ? 'bg-amber-500 text-slate-950 font-black shadow-sm'
+                      : 'text-slate-600 hover:text-slate-900'
                   }`}
                 >
                   ⚡ Trattative ({allPotentialProjects.length})
@@ -1354,7 +1354,7 @@ const ProjectsPage = () => {
                   <button
                     type="button"
                     onClick={() => setWhatIfIncludedIds(new Set(allPotentialProjects.map(p => p.id)))}
-                    className="px-2.5 py-1.5 bg-[#164e87] hover:bg-blue-700 text-white text-[11px] font-bold rounded-lg transition border border-cyan-400/40"
+                    className="px-2.5 py-1.5 bg-[#164e87] hover:bg-[#0e3a6c] text-white text-[11px] font-bold rounded-xl transition shadow-xs"
                     title="Includi tutte le trattative nella simulazione"
                   >
                     Simula Tutte ({allPotentialProjects.length})
@@ -1362,12 +1362,12 @@ const ProjectsPage = () => {
                   <button
                     type="button"
                     onClick={() => setWhatIfIncludedIds(new Set())}
-                    className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] font-bold rounded-lg transition border border-slate-700"
+                    className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-bold rounded-xl transition border border-slate-300"
                     title="Escludi le trattative per vedere solo lo Status Quo base"
                   >
                     Escludi Trattative
                   </button>
-                  <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-amber-500/20 text-amber-300 border border-amber-400/40 hidden md:inline">
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-amber-100 text-amber-900 border border-amber-300 hidden md:inline">
                     {simulatedPotentialProjects.length}/{allPotentialProjects.length} attive
                   </span>
                 </div>
@@ -1376,14 +1376,14 @@ const ProjectsPage = () => {
 
             {/* Indicatori Live & Azioni Rapide */}
             <div className="flex items-center space-x-2 text-xs">
-              <div className="bg-slate-900/90 px-3 py-1.5 rounded-xl border border-slate-700 flex items-center space-x-2">
-                <span className="text-slate-400">M.O.L.:</span>
-                <span className="font-black text-emerald-400">{formatEUR(combinedTotals.molMonthly)}/m</span>
-                <span className="text-[10px] text-emerald-300 font-bold">({formatPercent(combinedTotals.molPercent)})</span>
+              <div className="bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-200 flex items-center space-x-1.5">
+                <span className="text-slate-500">M.O.L.:</span>
+                <span className="font-black text-emerald-600">{formatEUR(combinedTotals.molMonthly)}/m</span>
+                <span className="text-[10px] text-emerald-700 font-bold">({formatPercent(combinedTotals.molPercent)})</span>
               </div>
-              <div className="bg-slate-900/90 px-3 py-1.5 rounded-xl border border-slate-700 flex items-center space-x-1.5 hidden sm:flex">
-                <span className="text-slate-400">Cassa:</span>
-                <span className="font-black text-amber-300">{formatEUR(combinedTotals.workingCapital)}</span>
+              <div className="bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-200 flex items-center space-x-1.5 hidden sm:flex">
+                <span className="text-slate-500">Cassa:</span>
+                <span className="font-black text-amber-700">{formatEUR(combinedTotals.workingCapital)}</span>
               </div>
               <button
                 type="button"
@@ -1407,7 +1407,7 @@ const ProjectsPage = () => {
         <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
           <div className="w-full">
             <table className="w-full divide-y divide-slate-200 text-left text-xs">
-              <thead className="bg-[#f0f4f9] text-[#164e87] font-extrabold uppercase tracking-wider text-[11px] border-b border-slate-200 sticky top-[124px] z-20">
+              <thead className="bg-[#f0f4f9] text-[#164e87] font-extrabold uppercase tracking-wider text-[11px] border-b border-slate-200">
                 <tr>
                   <th className="py-3 px-4 w-[28%]">Commessa, Cliente &amp; Stato</th>
                   <th className="py-3 px-3 w-[26%]">Mezzo Assegnato &amp; Risorse</th>

@@ -354,43 +354,43 @@ const CashFlowPage = () => {
           </div>
         </div>
 
-        {/* BARRA DI CONTROLLO STICKY (Sempre visibile a top-16 durante lo scroll) */}
-        <div className="sticky top-16 z-30 bg-white/95 backdrop-blur-md shadow-md border border-slate-200/90 rounded-2xl p-3 sm:p-4 transition-all">
-          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+        {/* BARRA DI CONTROLLO STICKY (Sempre visibile a top-16 durante lo scroll, pulita e senza barre di scorrimento orizzontali) */}
+        <div className="sticky top-16 z-30 bg-white/95 backdrop-blur-md shadow-md border border-slate-200/90 rounded-2xl p-2.5 sm:p-3 transition-all">
+          <div className="flex flex-wrap items-center justify-between gap-2.5">
             {/* Selettore Tab Principali */}
-            <div className="flex items-center space-x-1 p-1 bg-slate-100 rounded-xl overflow-x-auto">
+            <div className="inline-flex items-center space-x-1 p-1 bg-slate-100 rounded-xl flex-shrink-0">
               <button
                 type="button"
                 onClick={() => setActiveTab('cashflow')}
-                className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition whitespace-nowrap ${
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition whitespace-nowrap ${
                   activeTab === 'cashflow'
                     ? 'bg-white text-slate-900 shadow-sm'
                     : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                Cash Flow Mensile (12 Mesi)
+                Cash Flow Mensile
               </button>
               <button
                 type="button"
                 onClick={() => setActiveTab('biweekly')}
-                className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition whitespace-nowrap ${
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition whitespace-nowrap ${
                   activeTab === 'biweekly'
                     ? 'bg-white text-slate-900 shadow-sm'
                     : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                Quindicinale (24 Periodi)
+                Quindicinale (24P)
               </button>
               <button
                 type="button"
                 onClick={() => setActiveTab('pnl')}
-                className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition whitespace-nowrap ${
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition whitespace-nowrap ${
                   activeTab === 'pnl'
                     ? 'bg-white text-slate-900 shadow-sm'
                     : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                Budget Economico P&amp;L
+                Budget P&amp;L
               </button>
             </div>
 
