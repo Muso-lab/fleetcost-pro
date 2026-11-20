@@ -1295,21 +1295,28 @@ const ProjectsPage = () => {
           </div>
         </div>
 
-        {/* Projects List / Table con leggibilità aumentata e prevenzione tagli orizzontali */}
+        {/* Helper di Usabilità per l'utente */}
+        <div className="flex items-center justify-between px-1 text-xs text-slate-500">
+          <div className="flex items-center space-x-1.5 font-medium">
+            <span className="text-blue-600 font-bold">💡 Gestione rapida:</span>
+            <span>Clicca su qualsiasi riga o sul pulsante <strong>Modifica</strong> per cambiare il mezzo o i parametri. Per le trattative, clicca <strong>Converti in Attiva</strong> per trasformarle al volo in contratti reali.</span>
+          </div>
+          <span className="font-bold text-slate-600 hidden sm:inline">
+            {filteredProjects.length} commesse visualizzate
+          </span>
+        </div>
+
+        {/* Projects List / Table Ottimizzata al 100% senza tagli orizzontali */}
         <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-slate-200 text-left text-xs">
+          <div className="w-full">
+            <table className="w-full divide-y divide-slate-200 text-left text-xs">
               <thead className="bg-[#f0f4f9] text-[#164e87] font-extrabold uppercase tracking-wider text-[11px] border-b border-slate-200">
                 <tr>
-                  <th className="py-3 px-3.5">Commessa &amp; Codice</th>
-                  <th className="py-3 px-3.5">Cliente &amp; Tratta</th>
-                  <th className="py-3 px-3.5">Validità &amp; Scadenza</th>
-                  <th className="py-3 px-3.5">Mezzo, Risorse &amp; Gestione</th>
-                  <th className="py-3 px-3.5 text-right">Ricavo / Mese</th>
-                  <th className="py-3 px-3.5 text-right">Costi / Mese</th>
-                  <th className="py-3 px-3.5 text-right">M.O.L. / Margine</th>
-                  <th className="py-3 px-3.5 text-right">Flussi &amp; Cassa</th>
-                  <th className="py-3 px-3 text-center">Azioni</th>
+                  <th className="py-3 px-4 w-[28%]">Commessa, Cliente &amp; Stato</th>
+                  <th className="py-3 px-3 w-[26%]">Mezzo Assegnato &amp; Risorse</th>
+                  <th className="py-3 px-3 w-[20%] text-right">Conto Economico / Mese</th>
+                  <th className="py-3 px-3 w-[14%] text-right">Cassa &amp; Termini</th>
+                  <th className="py-3 px-4 w-[12%] text-center">Azioni</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -1320,143 +1327,135 @@ const ProjectsPage = () => {
                   const isLowMargin = !isNegative && metrics.molPercent < 15;
                   const assignedVeh = fleet.find(v => v.id === project.vehicleId);
                   const assignedTrailer = trailers.find(t => t.id === project.trailerId);
+                  const isPot = isFutureProject(project);
 
                   return (
                     <tr
                       key={project.id}
-                      className={`hover:bg-blue-50/30 transition ${
-                        isFutureProject(project)
-                          ? 'bg-amber-50/25 border-l-4 border-l-amber-400'
+                      onClick={() => handleOpenModal(project)}
+                      className={`cursor-pointer transition group ${
+                        isPot
+                          ? 'bg-amber-50/20 hover:bg-amber-100/40 border-l-4 border-l-amber-500'
                           : isNegative
-                            ? 'bg-rose-50/50'
+                            ? 'bg-rose-50/40 hover:bg-rose-100/40'
                             : isLowMargin
-                              ? 'bg-amber-50/40'
-                              : ''
+                              ? 'bg-amber-50/30 hover:bg-amber-100/30'
+                              : 'hover:bg-blue-50/40'
                       }`}
                     >
-                      {/* Colonna 1: Commessa & Codice */}
-                      <td className="py-3.5 px-3.5 font-semibold text-slate-900">
-                        <div className="flex items-center space-x-1.5 flex-wrap gap-y-1">
-                          {isFutureProject(project) && (
+                      {/* Colonna 1: Commessa, Cliente & Stato */}
+                      <td className="py-3.5 px-4 font-semibold text-slate-900">
+                        {/* Riga Superiore: Checkbox + Codice + Badge Stato + Tasto Attiva */}
+                        <div className="flex items-center space-x-2 flex-wrap gap-y-1 mb-1" onClick={(e) => e.stopPropagation()}>
+                          {isPot && (
                             <input
                               type="checkbox"
                               checked={whatIfIncludedIds.has(project.id)}
                               onChange={() => handleToggleWhatIf(project.id)}
-                              className="w-4 h-4 text-amber-600 rounded cursor-pointer accent-amber-600 focus:ring-amber-500 mr-0.5"
-                              title="Spunta / Deseleziona per includere o escludere questa trattativa dalla simulazione globale"
+                              className="w-4 h-4 text-amber-600 rounded cursor-pointer accent-amber-600 focus:ring-amber-500"
+                              title="Includi / Escludi dalla simulazione What-If"
                             />
                           )}
+
                           <span className={`font-mono text-xs font-bold px-2 py-0.5 rounded border ${
-                            isFutureProject(project)
+                            isPot
                               ? 'bg-amber-100 text-amber-900 border-amber-300'
                               : 'bg-slate-100 text-slate-700 border-slate-200'
                           }`}>
-                            {project.code || (isFutureProject(project) ? 'SIM' : 'PRJ')}
+                            {project.code || (isPot ? 'SIM' : 'PRJ')}
                           </span>
-                          <button
-                            type="button"
-                            onClick={() => handleToggleFutureStatus(project.id)}
-                            title="Clicca per commutare tra Contratto Attivo (Status Quo) e Trattativa / Potenziale"
-                            className={`text-[10px] font-bold px-2 py-0.5 rounded-full cursor-pointer transition flex items-center gap-1 ${
-                              isFutureProject(project)
-                                ? 'bg-amber-100 text-amber-900 border border-amber-300 hover:bg-amber-200'
-                                : 'bg-emerald-100 text-emerald-800 border border-emerald-300 hover:bg-emerald-200'
-                            }`}
-                          >
-                            {isFutureProject(project) ? (
-                              <>
+
+                          {isPot ? (
+                            <div className="inline-flex items-center space-x-1.5 flex-wrap gap-y-1">
+                              <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300 flex items-center gap-1">
                                 <Sparkles className="w-3 h-3 text-amber-600" />
                                 <span>Trattativa / Potenziale</span>
-                              </>
-                            ) : (
-                              <>
-                                <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                                <span>Attivo 2026</span>
-                              </>
-                            )}
-                          </button>
+                              </span>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handlePromoteToActive(project.id);
+                                }}
+                                className="inline-flex items-center space-x-1 text-[11px] font-black px-2 py-0.5 rounded-full bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs transition"
+                                title="Converti questa trattativa in un contratto vero e operativo a budget"
+                              >
+                                <CheckCircle2 className="w-3 h-3" />
+                                <span>Converti in Attiva</span>
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleToggleFutureStatus(project.id);
+                              }}
+                              className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 hover:bg-emerald-200 flex items-center gap-1 cursor-pointer transition"
+                              title="Commessa operativa a budget. Clicca per retrocederla a simulazione."
+                            >
+                              <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                              <span>Attivo 2026</span>
+                            </button>
+                          )}
+
                           {isNegative && (
                             <span title="Attenzione: Commessa in perdita!" className="text-rose-600">
                               <AlertTriangle className="w-4 h-4 inline" />
                             </span>
                           )}
                         </div>
-                        <div className="text-xs font-bold text-slate-900 mt-1 max-w-[200px] truncate" title={project.name}>
+
+                        {/* Riga Centrale: Nome Commessa */}
+                        <div className="text-sm font-black text-slate-900 group-hover:text-[#164e87] transition">
                           {project.name}
                         </div>
-                      </td>
 
-                      {/* Colonna 2: Cliente & Tratta */}
-                      <td className="py-3.5 px-3.5">
-                        <div className="font-bold text-sm text-[#164e87]">{project.client}</div>
-                        <div className="text-xs text-slate-500 truncate max-w-[200px]" title={project.route}>
-                          {project.route || 'Tratta standard'}
-                        </div>
-                      </td>
-
-                      {/* Colonna 3: Validità & Scadenza */}
-                      <td className="py-3.5 px-3.5 whitespace-nowrap">
-                        <div className="flex flex-col gap-1">
-                          {validity.isExpired ? (
-                            <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-rose-100 text-rose-800 border border-rose-200 w-fit">
-                              <Clock className="w-3 h-3 text-rose-600" />
-                              Scaduto ({validity.formattedEnd})
-                            </span>
-                          ) : validity.isExpiringSoon ? (
-                            <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-200 w-fit">
-                              <Clock className="w-3 h-3 text-amber-600" />
-                              In scadenza ({validity.formattedEnd})
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200 w-fit">
-                              <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                              Attivo fino a {validity.formattedEnd}
-                            </span>
-                          )}
-                          <div className="text-xs text-slate-500 font-medium">
-                            Da {validity.formattedStart} • {validity.months} mesi
-                          </div>
-                          {(validity.isExpired || validity.isExpiringSoon) && (
-                            <button
-                              onClick={() => handleExtendContract(project.id, 12)}
-                              className="inline-flex items-center gap-1 text-xs font-bold text-blue-600 hover:text-blue-800 hover:underline w-fit mt-0.5"
-                              title="Proroga la commessa per 12 mesi o allineala al 2026"
-                            >
-                              <RotateCw className="w-3 h-3 inline" />
-                              <span>Proroga +12m</span>
-                            </button>
+                        {/* Riga Inferiore: Cliente e Tratta */}
+                        <div className="text-xs text-slate-500 mt-0.5 flex items-center gap-1.5 flex-wrap">
+                          <strong className="text-[#164e87]">{project.client}</strong>
+                          {project.route && (
+                            <>
+                              <span>•</span>
+                              <span className="text-slate-500">{project.route}</span>
+                            </>
                           )}
                         </div>
                       </td>
 
-                      {/* Colonna 4: Mezzo, Risorse & Gestione (Unificata e pulita) */}
-                      <td className="py-3.5 px-3.5">
+                      {/* Colonna 2: Mezzo Assegnato & Risorse */}
+                      <td className="py-3.5 px-3">
+                        {/* Veicolo e Targa */}
                         <div className="flex items-center gap-1.5 flex-wrap">
                           <span
-                            className={`inline-flex items-center justify-center px-1.5 py-0.5 rounded text-[10px] font-extrabold ${
+                            className={`inline-flex items-center justify-center px-1.5 py-0.5 rounded text-[10px] font-black ${
                               project.managementType === 'D'
                                 ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
                                 : 'bg-blue-100 text-blue-800 border border-blue-300'
                             }`}
-                            title={project.managementType === 'D' ? 'Gestione Diretta FOUR' : 'Gestione Terzi / Padroncino'}
                           >
                             {project.managementType === 'D' ? 'Dir.' : 'Terzi'}
                           </span>
-                          <span className="text-slate-800 font-bold text-xs truncate max-w-[160px]" title={assignedVeh?.name}>
+
+                          <span className="text-slate-900 font-bold text-xs" title={assignedVeh?.name}>
                             {assignedVeh ? assignedVeh.name : 'Mezzo non assegnato'}
                           </span>
-                          {assignedVeh?.plate && (
+
+                          {assignedVeh?.plate ? (
                             <span className="font-mono text-[11px] font-bold bg-white text-slate-800 px-1.5 py-0.5 rounded border border-slate-300 shadow-2xs tracking-wider inline-flex items-center gap-0.5">
                               <span className="text-[8px] text-blue-700 font-black">IT</span> {assignedVeh.plate}
+                            </span>
+                          ) : (
+                            <span className="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded font-semibold">
+                              Targa da assegnare
                             </span>
                           )}
                         </div>
 
+                        {/* Semirimorchio se presente */}
                         {assignedTrailer && (
-                          <div className="flex items-center gap-1.5 flex-wrap text-xs text-slate-600 mt-1">
-                            <span className="truncate max-w-[150px] font-medium" title={assignedTrailer.name}>
-                              {assignedTrailer.name}
-                            </span>
+                          <div className="flex items-center gap-1.5 text-xs text-slate-600 mt-1">
+                            <span className="font-medium text-slate-700">{assignedTrailer.name}</span>
                             {assignedTrailer.plate && (
                               <span className="font-mono text-[10px] bg-slate-100 text-slate-700 font-bold px-1.5 py-0.2 rounded border border-slate-200">
                                 {assignedTrailer.plate}
@@ -1465,114 +1464,95 @@ const ProjectsPage = () => {
                           </div>
                         )}
 
-                        <div className="flex items-center gap-1.5 mt-1.5 text-[11px] text-slate-500 flex-wrap">
+                        {/* Tag Operativi + Tasto Cambia Mezzo */}
+                        <div className="flex items-center gap-1.5 mt-1 text-[11px] text-slate-500 flex-wrap">
                           <span className="font-semibold">{project.workingDaysMonth || 22} gg/m</span>
                           <span>•</span>
                           <span className="font-semibold">{project.kmDaily || 200} km/gg</span>
                           {project.energyPayer === 'client' && (
                             <span className="bg-emerald-50 text-emerald-800 border border-emerald-200 font-bold text-[10px] px-1.5 py-0.5 rounded">
-                              ⚡ Energia Cliente (0 €)
+                              ⚡ Energia Cliente
                             </span>
                           )}
-                          {project.driverShiftType === '2_turni' && (
-                            <span className="bg-indigo-50 text-indigo-800 border border-indigo-200 font-bold text-[10px] px-1.5 py-0.5 rounded">
-                              🌙 2 Turni (D+N)
-                            </span>
-                          )}
-                          {project.refrigerationCostDaily > 0 && (
-                            <span className="bg-cyan-50 text-cyan-800 border border-cyan-200 font-bold text-[10px] px-1.5 py-0.5 rounded">
-                              ❄️ Frigo {project.refrigerationTech === 'azoto' ? 'Azoto' : 'Gasolio'} ({formatEUR(project.refrigerationCostDaily)}/gg)
-                            </span>
-                          )}
-                          {project.porterageDaily > 0 && (
-                            <span className="bg-purple-50 text-purple-800 border border-purple-200 font-bold text-[10px] px-1.5 py-0.5 rounded">
-                              📦 Facchinaggio ({formatEUR(project.porterageDaily)}/gg)
-                            </span>
-                          )}
-                          {project.managementType === 'T' && (
-                            <span className="bg-blue-50 text-blue-800 border border-blue-200 font-bold text-[10px] px-1.5 py-0.5 rounded">
-                              🤝 Vettore ({formatEUR(project.partnerMarginDaily)}/gg)
-                            </span>
-                          )}
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleOpenModal(project);
+                            }}
+                            className="text-[#164e87] hover:underline font-bold text-[11px] inline-flex items-center gap-0.5 ml-1"
+                            title="Cambia il mezzo assegnato a questa commessa"
+                          >
+                            <RotateCw className="w-3 h-3 text-[#164e87]" />
+                            <span>Cambia Mezzo</span>
+                          </button>
                         </div>
                       </td>
 
-                      {/* Colonna 5: Ricavo / Mese */}
-                      <td className="py-3.5 px-3.5 text-right whitespace-nowrap">
-                        <div className="text-sm font-black text-slate-900">
-                          {formatEUR(metrics.monthlyRevenue)}
+                      {/* Colonna 3: Conto Economico Mensile */}
+                      <td className="py-3.5 px-3 text-right">
+                        <div className="flex items-baseline justify-end space-x-2 text-xs">
+                          <span className="text-slate-500">Ricavi:</span>
+                          <span className="font-black text-slate-900 text-sm">{formatEUR(metrics.monthlyRevenue)}</span>
                         </div>
-                        <div className="text-xs text-slate-400 font-normal">
-                          {formatEUR(project.revenueDaily)}/gg
+                        <div className="flex items-baseline justify-end space-x-2 text-[11px] text-slate-500 mt-0.5">
+                          <span>Costi:</span>
+                          <span className="font-semibold text-slate-700">{formatEUR(metrics.monthlyCost)}</span>
+                        </div>
+                        <div className="flex items-baseline justify-end space-x-2 mt-1.5 pt-1 border-t border-slate-100">
+                          <span className="text-xs font-bold text-slate-600">M.O.L.:</span>
+                          <span className={`text-sm font-black ${isNegative ? 'text-rose-600' : isLowMargin ? 'text-amber-600' : 'text-emerald-700'}`}>
+                            {formatEUR(metrics.monthlyMol)}
+                          </span>
+                          <span className={`text-[10px] font-black px-1.5 py-0.5 rounded border ${
+                            isNegative
+                              ? 'bg-rose-100 text-rose-800 border-rose-200'
+                              : isLowMargin
+                                ? 'bg-amber-100 text-amber-800 border-amber-200'
+                                : 'bg-emerald-100 text-emerald-800 border-emerald-200'
+                          }`}>
+                            {formatPercent(metrics.molPercent)}
+                          </span>
                         </div>
                       </td>
 
-                      {/* Colonna 6: Costi / Mese */}
-                      <td className="py-3.5 px-3.5 text-right whitespace-nowrap">
-                        <div className="text-sm font-semibold text-slate-700">
-                          {formatEUR(metrics.monthlyCost)}
-                        </div>
-                        <div className="text-xs text-slate-400 font-normal">
-                          {formatEUR(metrics.totalCostDaily)}/gg
-                        </div>
-                      </td>
-
-                      {/* Colonna 7: M.O.L. / Margine */}
-                      <td className="py-3.5 px-3.5 text-right whitespace-nowrap">
-                        <div className={`text-sm font-black ${isNegative ? 'text-rose-600' : isLowMargin ? 'text-amber-600' : 'text-emerald-700'}`}>
-                          {formatEUR(metrics.monthlyMol)}
-                        </div>
-                        <span className={`inline-block text-xs font-black px-2 py-0.5 rounded-md mt-0.5 border ${
-                          isNegative
-                            ? 'bg-rose-100 text-rose-800 border-rose-200'
-                            : isLowMargin
-                              ? 'bg-amber-100 text-amber-800 border-amber-200'
-                              : 'bg-emerald-100 text-emerald-800 border-emerald-200'
-                        }`}>
-                          {formatPercent(metrics.molPercent)}
-                        </span>
-                      </td>
-
-                      {/* Colonna 8: Flussi & Cassa (Anticipo Cassa + Termini di Pagamento combinati) */}
-                      <td className="py-3.5 px-3.5 text-right whitespace-nowrap">
-                        <div className="text-xs font-extrabold text-amber-900 bg-amber-50 px-2.5 py-1 rounded-lg border border-amber-200 inline-block">
+                      {/* Colonna 4: Cassa & Termini */}
+                      <td className="py-3.5 px-3 text-right">
+                        <div className="text-xs font-black text-amber-900 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200 inline-block">
                           {formatEUR(metrics.estimatedWorkingCapitalGap)}
                         </div>
                         <div className="text-[11px] text-slate-500 font-medium mt-1">
-                          Inc: <strong className="text-slate-700">{project.paymentTermsClient ?? 60}gg</strong> • DPO: <strong className="text-slate-700">{metrics.weightedDpoDays}gg</strong>
+                          Inc: <strong>{project.paymentTermsClient ?? 60}gg</strong> • Pag: <strong>{metrics.weightedDpoDays}gg</strong>
                         </div>
-                        <div className="text-[10px] text-slate-400">
-                          Gap cassa: {metrics.gapDays} gg
+                        <div className="text-[10px] text-slate-400 mt-0.5">
+                          {validity.formattedEnd ? `Fino a ${validity.formattedEnd}` : 'Durata 12m'}
                         </div>
                       </td>
 
-                      {/* Colonna 9: Azioni */}
-                      <td className="py-3.5 px-3 text-center whitespace-nowrap">
-                        <div className="flex items-center justify-center space-x-1">
-                          {isFutureProject(project) && (
-                            <button
-                              onClick={() => handlePromoteToActive(project.id)}
-                              className="p-1.5 text-emerald-600 hover:text-emerald-800 hover:bg-emerald-50 rounded-lg transition"
-                              title="Promuovi a Contratto Attivo (Status Quo)"
-                            >
-                              <CheckCircle2 className="w-4 h-4" />
-                            </button>
-                          )}
+                      {/* Colonna 5: Azioni Rapide */}
+                      <td className="py-3.5 px-4 text-center whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                        <div className="flex items-center justify-center space-x-1.5">
                           <button
+                            type="button"
                             onClick={() => handleOpenModal(project)}
-                            className="p-1.5 text-slate-400 hover:text-[#164e87] hover:bg-slate-100 rounded-lg transition"
-                            title="Modifica Commessa"
+                            className="inline-flex items-center space-x-1 px-2.5 py-1.5 bg-[#164e87] hover:bg-[#0b2440] text-white rounded-lg text-xs font-bold transition shadow-xs"
+                            title="Modifica parametri, mezzo, costi e marginalità"
                           >
-                            <Edit2 className="w-4 h-4" />
+                            <Edit2 className="w-3.5 h-3.5" />
+                            <span>Modifica</span>
                           </button>
+
                           <button
+                            type="button"
                             onClick={() => handleDuplicateProject(project)}
                             className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-slate-100 rounded-lg transition"
                             title="Duplica Commessa"
                           >
                             <Copy className="w-4 h-4" />
                           </button>
+
                           <button
+                            type="button"
                             onClick={() => handleDeleteProject(project.id)}
                             className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-slate-100 rounded-lg transition"
                             title="Elimina"
