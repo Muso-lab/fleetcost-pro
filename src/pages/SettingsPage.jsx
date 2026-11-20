@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useAuth } from '../contexts/AuthContext';
 import storageService from '../services/storageService';
 import { formatEUR } from '../utils/cashFlowCalculations';
 import { MARKET_VEHICLE_BENCHMARKS } from '../data/initialData';
@@ -24,12 +25,44 @@ import {
   ExternalLink,
   Snowflake,
   Droplets,
-  Wifi
+  Wifi,
+  Lock,
+  ShieldCheck
 } from 'lucide-react';
 
 const SettingsPage = () => {
+  const { authConfig, updatePassword } = useAuth();
   const [settings, setSettings] = useState(null);
   const [saveMessage, setSaveMessage] = useState('');
+
+  // Stato per Sicurezza e Modifica Password
+  const [oldPassword, setOldPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [pwdError, setPwdError] = useState('');
+  const [pwdSuccess, setPwdSuccess] = useState('');
+
+  const handleChangePassword = (e) => {
+    e.preventDefault();
+    setPwdError('');
+    setPwdSuccess('');
+
+    if (newPassword !== confirmPassword) {
+      setPwdError('La nuova password e la conferma non coincidono.');
+      return;
+    }
+
+    try {
+      updatePassword(oldPassword, newPassword);
+      setPwdSuccess('Password aggiornata con successo! La nuova password è ora attiva.');
+      setOldPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+      setTimeout(() => setPwdSuccess(''), 5000);
+    } catch (err) {
+      setPwdError(err.message || 'Errore durante l\'aggiornamento della password.');
+    }
+  };
 
   // Stato per il Calcolatore "al contrario" (Resa km/unità <-> Consumo specifico)
   const [calcFuelType, setCalcFuelType] = useState('biolng');
@@ -1216,7 +1249,86 @@ const SettingsPage = () => {
           </div>
         </div>
 
-        {/* 5. GESTIONE BACKUP & RESET DATI */}
+        {/* 5. GESTIONE SICUREZZA & PASSWORD DI ACCESSO */}
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-4">
+          <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+            <div className="flex items-center space-x-2">
+              <ShieldCheck className="w-5 h-5 text-[#164e87]" />
+              <h2 className="text-sm font-bold text-slate-900">Sicurezza &amp; Credenziali di Accesso alla Piattaforma</h2>
+            </div>
+            <span className="text-xs text-slate-500 font-medium">
+              Utenza: <strong className="text-slate-800">{authConfig?.adminEmail || 'amministrazione@four-logistics.it'}</strong>
+            </span>
+          </div>
+
+          <p className="text-xs text-slate-600">
+            Proteggi i dati sensibili, i contratti con i clienti e i flussi di cassa aziendali modificando la password di accesso alla piattaforma.
+          </p>
+
+          {pwdError && (
+            <div className="bg-rose-50 border border-rose-200 text-rose-800 px-3.5 py-2.5 rounded-xl text-xs flex items-center space-x-2">
+              <span className="font-bold">Attenzione:</span>
+              <span>{pwdError}</span>
+            </div>
+          )}
+
+          {pwdSuccess && (
+            <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 px-3.5 py-2.5 rounded-xl text-xs flex items-center space-x-2">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 flex-shrink-0" />
+              <span className="font-semibold">{pwdSuccess}</span>
+            </div>
+          )}
+
+          <form onSubmit={handleChangePassword} className="grid grid-cols-1 md:grid-cols-4 gap-3 text-xs items-end">
+            <div>
+              <label className="block font-semibold text-slate-700 mb-1">Password Attuale *</label>
+              <input
+                type="password"
+                required
+                value={oldPassword}
+                onChange={(e) => setOldPassword(e.target.value)}
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-[#164e87] outline-none"
+                placeholder="Password attuale"
+              />
+            </div>
+
+            <div>
+              <label className="block font-semibold text-slate-700 mb-1">Nuova Password *</label>
+              <input
+                type="password"
+                required
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-[#164e87] outline-none"
+                placeholder="Minimo 6 caratteri"
+              />
+            </div>
+
+            <div>
+              <label className="block font-semibold text-slate-700 mb-1">Conferma Nuova Password *</label>
+              <input
+                type="password"
+                required
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-[#164e87] outline-none"
+                placeholder="Ripeti nuova password"
+              />
+            </div>
+
+            <div>
+              <button
+                type="submit"
+                className="w-full py-2 bg-[#164e87] hover:bg-[#0f3b75] text-white font-bold rounded-xl transition shadow-sm flex items-center justify-center space-x-1.5"
+              >
+                <Lock className="w-3.5 h-3.5 text-cyan-300" />
+                <span>Aggiorna Password</span>
+              </button>
+            </div>
+          </form>
+        </div>
+
+        {/* 6. GESTIONE BACKUP & RESET DATI */}
         <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-4">
           <div className="flex items-center justify-between pb-3 border-b border-slate-100">
             <div className="flex items-center space-x-2">

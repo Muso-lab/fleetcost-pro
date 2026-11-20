@@ -1,4 +1,5 @@
-import { Link, useLocation } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { useAuth } from '../contexts/AuthContext';
 import {
   LayoutDashboard,
   Truck,
@@ -8,15 +9,26 @@ import {
   Settings,
   Menu,
   X,
-  Download
+  Download,
+  LogOut,
+  ShieldCheck
 } from 'lucide-react';
 import { useState } from 'react';
 import storageService from '../services/storageService';
 import logoFour from '../assets/logo-four.png';
 
 const Navbar = () => {
+  const { currentUser, logout } = useAuth();
+  const navigate = useNavigate();
   const location = useLocation();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+
+  const handleLogout = async () => {
+    if (confirm('Confermi di voler uscire e proteggere la sessione aziendale?')) {
+      await logout();
+      navigate('/login');
+    }
+  };
 
   const handleExportBackup = () => {
     const json = storageService.exportBackupJson();
@@ -105,8 +117,29 @@ const Navbar = () => {
               className="px-2.5 py-1.5 text-xs font-semibold text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg transition flex items-center space-x-1.5 shadow-sm"
             >
               <Download className="w-3.5 h-3.5 text-cyan-400" />
-              <span>Salva Backup</span>
+              <span>Backup</span>
             </button>
+
+            {currentUser && (
+              <div className="flex items-center space-x-2 pl-2 border-l border-slate-800">
+                <div className="text-right hidden xl:block leading-tight">
+                  <span className="text-[11px] font-bold text-slate-200 block truncate max-w-[150px]">
+                    {currentUser.email}
+                  </span>
+                  <span className="text-[9px] text-emerald-400 font-bold flex items-center justify-end gap-1">
+                    <ShieldCheck className="w-2.5 h-2.5 inline" /> Protetto
+                  </span>
+                </div>
+                <button
+                  onClick={handleLogout}
+                  title="Esci dalla sessione sicura (Logout)"
+                  className="px-2.5 py-1.5 text-xs font-bold text-rose-300 hover:text-white bg-rose-950/40 hover:bg-rose-900/60 border border-rose-800/50 rounded-lg transition flex items-center space-x-1"
+                >
+                  <LogOut className="w-3.5 h-3.5 text-rose-400" />
+                  <span>Esci</span>
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Mobile hamburger */}
@@ -149,8 +182,20 @@ const Navbar = () => {
               className="text-cyan-400 hover:underline flex items-center space-x-1 font-semibold"
             >
               <Download className="w-4 h-4" />
-              <span>Esporta Backup Dati</span>
+              <span>Backup Dati</span>
             </button>
+            {currentUser && (
+              <button
+                onClick={() => {
+                  handleLogout();
+                  setIsMenuOpen(false);
+                }}
+                className="text-rose-400 hover:underline flex items-center space-x-1 font-bold"
+              >
+                <LogOut className="w-4 h-4" />
+                <span>Esci (Logout)</span>
+              </button>
+            )}
           </div>
         </div>
       )}

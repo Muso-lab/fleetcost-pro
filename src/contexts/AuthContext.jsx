@@ -1,107 +1,125 @@
 import { createContext, useContext, useState, useEffect } from 'react';
-import { auth } from '../config/firebase';
-import {
-  signInWithEmailAndPassword,
-  signOut,
-  onAuthStateChanged,
-  createUserWithEmailAndPassword
-} from 'firebase/auth';
 
 const AuthContext = createContext();
 
 export const useAuth = () => useContext(AuthContext);
 
+const DEFAULT_AUTH_CONFIG = {
+  adminEmail: 'amministrazione@four-logistics.it',
+  password: 'Four2026!',
+  role: 'Direzione & Controllo Costi',
+  lastUpdated: '2026-01-01'
+};
+
+const getStoredAuthConfig = () => {
+  try {
+    const raw = localStorage.getItem('four_security_auth_config');
+    if (raw) return JSON.parse(raw);
+  } catch (e) {
+    console.error('Errore lettura configurazione sicurezza:', e);
+  }
+  return DEFAULT_AUTH_CONFIG;
+};
+
 export const AuthProvider = ({ children }) => {
-  // Supporto sessione locale persistente
+  // Controlla prima la sessione in sessionStorage (scade alla chiusura scheda)
+  // o in localStorage (se l'utente ha scelto "Ricordami")
   const [currentUser, setCurrentUser] = useState(() => {
-    const savedLocalUser = localStorage.getItem('four_local_user');
-    if (savedLocalUser) {
-      try {
-        return JSON.parse(savedLocalUser);
-      } catch (e) {
-        return null;
-      }
+    try {
+      const sessionUser = sessionStorage.getItem('four_active_session');
+      if (sessionUser) return JSON.parse(sessionUser);
+
+      const persistentUser = localStorage.getItem('four_active_session');
+      if (persistentUser) return JSON.parse(persistentUser);
+    } catch (e) {
+      console.error('Errore lettura sessione attiva:', e);
     }
-    // Per consentire lo sviluppo locale immediato, impostiamo di default l'utente locale FOUR
-    const defaultUser = {
-      uid: 'local_four_admin',
-      email: 'operativo@four-trasporti.it',
-      displayName: 'FOUR Team',
-      isLocal: true
-    };
-    localStorage.setItem('four_local_user', JSON.stringify(defaultUser));
-    return defaultUser;
+    return null; // NON loggato di default: richiede autenticazione
   });
 
-  const [loading, setLoading] = useState(false);
+  const [authConfig, setAuthConfig] = useState(getStoredAuthConfig);
 
-  // Login con credenziali Firebase
-  const login = async (email, password) => {
-    try {
-      const userCred = await signInWithEmailAndPassword(auth, email, password);
-      setCurrentUser(userCred.user);
-      localStorage.removeItem('four_local_user');
-      return userCred.user;
-    } catch (error) {
-      console.warn('Login Firebase fallito, consento fallback locale:', error);
-      throw error;
+  // Funzione di Login sicuro
+  const login = async (email, password, rememberMe = true) => {
+    const currentConfig = getStoredAuthConfig();
+    const cleanEmail = (email || '').trim().toLowerCase();
+    const cleanConfigEmail = currentConfig.adminEmail.toLowerCase();
+
+    // Accetta l'email aziendale configurata o alias operativi
+    const isEmailValid = cleanEmail === cleanConfigEmail ||
+      cleanEmail === 'direzione@four-logistics.it' ||
+      cleanEmail === 'operativo@four-logistics.it' ||
+      cleanEmail === 'admin' ||
+      cleanEmail.includes('four');
+
+    if (!isEmailValid) {
+      throw new Error('E-mail aziendale non riconosciuta.');
     }
-  };
 
-  // Login locale istantaneo per sviluppo locale / offline
-  const loginLocal = (role = 'Amministratore') => {
-    const localUser = {
-      uid: 'local_four_admin',
-      email: 'operativo@four-trasporti.it',
-      displayName: `FOUR ${role}`,
-      isLocal: true
+    if (password !== currentConfig.password) {
+      throw new Error('Password di accesso non corretta. Verifica maiuscole/minuscole.');
+    }
+
+    const authenticatedUser = {
+      uid: 'four_auth_' + Date.now(),
+      email: cleanEmail.includes('@') ? cleanEmail : currentConfig.adminEmail,
+      displayName: 'FOUR ' + (currentConfig.role || 'Amministrazione'),
+      role: currentConfig.role || 'Direzione & Controllo Costi',
+      loginTime: new Date().toISOString()
     };
-    localStorage.setItem('four_local_user', JSON.stringify(localUser));
-    setCurrentUser(localUser);
-    return localUser;
-  };
 
-  const signup = async (email, password) => {
-    const userCred = await createUserWithEmailAndPassword(auth, email, password);
-    setCurrentUser(userCred.user);
-    return userCred.user;
-  };
-
-  const logout = async () => {
-    try {
-      if (auth.currentUser) {
-        await signOut(auth);
-      }
-    } catch (e) {
-      console.warn('Errore logout Firebase:', e);
-    } finally {
-      localStorage.removeItem('four_local_user');
-      setCurrentUser(null);
+    if (rememberMe) {
+      localStorage.setItem('four_active_session', JSON.stringify(authenticatedUser));
+      sessionStorage.removeItem('four_active_session');
+    } else {
+      sessionStorage.setItem('four_active_session', JSON.stringify(authenticatedUser));
+      localStorage.removeItem('four_active_session');
     }
+
+    setCurrentUser(authenticatedUser);
+    return authenticatedUser;
   };
 
-  useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      if (user) {
-        setCurrentUser(user);
-        localStorage.removeItem('four_local_user');
-      }
-      setLoading(false);
-    });
-    return unsubscribe;
-  }, []);
+  // Funzione di Logout (termina la sessione e protegge i dati)
+  const logout = async () => {
+    sessionStorage.removeItem('four_active_session');
+    localStorage.removeItem('four_active_session');
+    localStorage.removeItem('four_local_user');
+    setCurrentUser(null);
+  };
 
-  const value = {
-    currentUser,
-    login,
-    loginLocal,
-    signup,
-    logout
+  // Funzione per cambiare password / credenziali in Impostazioni
+  const updatePassword = (oldPassword, newPassword) => {
+    const currentConfig = getStoredAuthConfig();
+    if (oldPassword !== currentConfig.password) {
+      throw new Error('La password attuale inserita non è corretta.');
+    }
+    if (!newPassword || newPassword.length < 6) {
+      throw new Error('La nuova password deve contenere almeno 6 caratteri.');
+    }
+    const updated = {
+      ...currentConfig,
+      password: newPassword,
+      lastUpdated: new Date().toISOString()
+    };
+    localStorage.setItem('four_security_auth_config', JSON.stringify(updated));
+    setAuthConfig(updated);
+    return true;
   };
 
   return (
-    <AuthContext.Provider value={value}>
-      {!loading && children}
+    <AuthContext.Provider
+      value={{
+        currentUser,
+        login,
+        logout,
+        updatePassword,
+        authConfig
+      }}
+    >
+      {children}
     </AuthContext.Provider>
   );
 };
+
+export default AuthContext;
