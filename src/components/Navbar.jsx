@@ -65,22 +65,22 @@ const Navbar = () => {
   };
 
   return (
-    <nav className="bg-slate-900 border-b border-emerald-900/50 text-white shadow-xl sticky top-0 z-50">
+    <nav className="bg-slate-900 border-b border-blue-900/40 text-white shadow-xl sticky top-0 z-50">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex justify-between items-center h-16">
           {/* Logo & Brand */}
           <Link to="/" className="flex items-center space-x-3 group">
-            <div className="bg-emerald-600/30 border border-emerald-500/40 p-2 rounded-xl group-hover:bg-emerald-600/40 transition">
-              <Leaf className="w-6 h-6 text-emerald-400" />
+            <div className="bg-white p-1 rounded-xl shadow-sm border border-slate-700/60 group-hover:border-cyan-400/60 transition flex items-center justify-center">
+              <img src="/logo-four.png" alt="FOUR Sustainable Logistics" className="h-9 w-auto object-contain max-w-[120px]" />
             </div>
             <div className="flex flex-col">
               <div className="flex items-center space-x-2">
-                <span className="text-xl font-black tracking-wider text-white">FOUR</span>
-                <span className="px-1.5 py-0.5 bg-emerald-500/20 text-emerald-300 text-[10px] font-bold rounded uppercase">
-                  ECO-FLEET
+                <span className="text-lg font-black tracking-wider text-white">FOUR</span>
+                <span className="px-1.5 py-0.5 bg-cyan-500/20 text-cyan-300 text-[10px] font-bold rounded uppercase border border-cyan-500/30">
+                  SUSTAINABLE LOGISTICS
                 </span>
               </div>
-              <span className="text-[11px] text-slate-400 -mt-0.5 font-medium">Cost & Cash Flow Manager</span>
+              <span className="text-[11px] text-slate-400 -mt-0.5 font-medium">Cost &amp; Cash Flow Manager</span>
             </div>
           </Link>
 
@@ -95,11 +95,11 @@ const Navbar = () => {
                   to={link.to}
                   className={`flex items-center space-x-1.5 px-3 py-2 rounded-lg text-xs font-semibold transition ${
                     active
-                      ? 'bg-emerald-600 text-white shadow-md shadow-emerald-950/40'
+                      ? 'bg-[#164e87] text-white shadow-md shadow-blue-950/50 border border-cyan-500/40'
                       : 'text-slate-300 hover:text-white hover:bg-slate-800'
                   }`}
                 >
-                  <Icon className="w-4 h-4" />
+                  <Icon className="w-4 h-4 text-cyan-400" />
                   <span>{link.label}</span>
                 </Link>
               );

@@ -57,7 +57,8 @@ const SimulationPage = () => {
   const [fuelPrice, setFuelPrice] = useState(0.38); // €/kWh o €/kg
   const [tollRate, setTollRate] = useState(0.12); // €/km autostrada
   const [tireRate, setTireRate] = useState(0.04); // €/km
-  const [targetMarginPercent, setTargetMarginPercent] = useState(20); // 20% margine
+  const [targetMarginPercent, setTargetMarginPercent] = useState(21); // Default 21% margine target
+  const [operatingMonths, setOperatingMonths] = useState(36); // Default 36 mesi (Standard contratti FOUR)
 
   // Refrigerazione (NOTA 3.1)
   const [refrigerationEnabled, setRefrigerationEnabled] = useState(false);
@@ -293,7 +294,7 @@ const SimulationPage = () => {
     // Metriche finanziarie ponderate coerenti al 100% con ProjectsPage
     const simulatedProjectObj = {
       workingDaysMonth: workingDays,
-      operatingMonths: 12,
+      operatingMonths: Number(operatingMonths) || 36,
       driverCostDaily: driverDaily,
       energyPayer,
       fuelCostDaily: fuelDaily,
@@ -329,6 +330,7 @@ const SimulationPage = () => {
       highwayKm,
       urbanKm,
       workingDays,
+      operatingMonths: Number(operatingMonths) || 36,
       driverShiftType: currentShiftType,
       energyPayer,
       fuelDaily,
@@ -381,7 +383,7 @@ const SimulationPage = () => {
       client: clientName || 'Nuovo Committente',
       route: routeName || `${kmTotal} km giornalieri`,
       startDate: new Date().toISOString().slice(0, 10),
-      operatingMonths: 12,
+      operatingMonths: Number(operatingMonths) || 36,
       workingDaysMonth: simulationResult.workingDays,
       kmDaily: simulationResult.kmTotal,
       highwayPercent: Number(kmHighwayPercent) || 70,
@@ -425,6 +427,7 @@ const SimulationPage = () => {
       monthlyRevenue: +simulationResult.monthlyRevenue.toFixed(2),
       monthlyMol: +simulationResult.monthlyMol.toFixed(2),
       molPercent: simulationResult.molPercent,
+      targetMarginPercent: Number(targetMarginPercent) || 21,
       paymentTermsClient,
       paymentTermsSuppliers,
       paymentTermsLease: leaseTerms,
@@ -451,53 +454,103 @@ const SimulationPage = () => {
     }, 1200);
   };
 
-  // Esporta PDF Preventivo
+  // Esporta PDF Preventivo con layout istituzionale FOUR e righe differenziate cromaticamente
   const handleExportPDF = () => {
     if (!simulationResult) return;
     const doc = new jsPDF();
 
-    doc.setFontSize(18);
-    doc.setTextColor(16, 185, 129);
-    doc.text('FOUR Trasporti Ecologici', 14, 20);
+    // Fascia superiore blu istituzionale FOUR (#164e87)
+    doc.setFillColor(22, 78, 135);
+    doc.rect(0, 0, 210, 24, 'F');
 
-    doc.setFontSize(12);
-    doc.setTextColor(30, 41, 59);
-    doc.text('Preventivo di Costo Servizio di Trasporto', 14, 28);
+    // Titolo aziendale in testata
+    doc.setFontSize(15);
+    doc.setTextColor(255, 255, 255);
+    doc.text('FOUR SUSTAINABLE LOGISTICS', 14, 15);
 
+    doc.setFontSize(10);
+    doc.setTextColor(186, 230, 253); // sky-200
+    doc.text('PREVENTIVO ECONOMICO TRATTA & MARGINALITÀ', 110, 15);
+
+    // Box Metadati Tratta, Cliente e Mezzo
     doc.setFontSize(9);
-    doc.setTextColor(100);
-    doc.text(`Data: ${new Date().toLocaleDateString('it-IT')} | Mezzo: ${simulationResult.vehicle.name}`, 14, 34);
+    doc.setTextColor(51, 65, 85);
+    const clientTxt = clientName ? `Cliente: ${clientName}` : 'Cliente: Trattativa Commerciale';
+    const routeTxt = routeName ? `Tratta: ${routeName}` : `Percorso: ${simulationResult.kmTotal} km/gg`;
+    const durationTxt = `Durata Contratto: ${simulationResult.operatingMonths || 36} Mesi`;
+    doc.text(`${clientTxt}  |  ${routeTxt}  |  ${durationTxt}`, 14, 32);
+
+    const vehInfo = `Mezzo: ${simulationResult.vehicle.name}${simulationResult.trailer ? ` + ${simulationResult.trailer.name}` : ''}`;
+    doc.text(`Data: ${new Date().toLocaleDateString('it-IT')}  |  ${vehInfo}  |  Giorni Lav.: ${simulationResult.workingDays} gg/m`, 14, 37);
+
+    // Calcolo ricarico (markup) sui costi operativi
+    const markupPct = simulationResult.totalCostDaily > 0
+      ? ((simulationResult.molDailyTarget / simulationResult.totalCostDaily) * 100).toFixed(1)
+      : '0.0';
 
     const tableData = [
-      ['Distanza Giornaliera Totale', `${simulationResult.kmTotal} km (${simulationResult.highwayKm.toFixed(0)} km Autostrada)`],
+      ['Distanza Giornaliera Totale', `${simulationResult.kmTotal} km (${simulationResult.highwayKm.toFixed(0)} km Autostrada • ${simulationResult.urbanKm.toFixed(0)} km Urbano)`],
       [`Autista (${simulationResult.driverShiftType === '2_turni' ? 'Doppio Autista D+N' : simulationResult.driverShiftType === '1_notturno' ? 'Notturno' : 'Diurno'})`, formatEUR(simulationResult.driverDaily)],
-      [`Energia / Carburante (${simulationResult.energyPayer === 'client' ? 'A carico Cliente' : 'A carico FOUR'})`, formatEUR(simulationResult.fuelDaily)],
-      ['Pedaggio Autostradale', formatEUR(simulationResult.tollsDaily)],
-      ['Pneumatici e Manutenzione', formatEUR(simulationResult.tiresDaily)],
-      ['Quota Noleggio Trattore/Motrice', formatEUR(simulationResult.vehicleLeaseDaily)],
-      ['Quota Noleggio Semirimorchio', formatEUR(simulationResult.trailerLeaseDaily)],
-      ...(simulationResult.refrigerationCostDaily > 0 ? [[`Gruppo Frigo (${simulationResult.refrigerationTech === 'azoto' ? 'Azoto Liquido' : 'Gasolio'} • ${simulationResult.refrigerationHoursDaily}h)`, formatEUR(simulationResult.refrigerationCostDaily)]] : []),
-      ...(simulationResult.telematicsCostDaily > 0 ? [[`Telematica (${formatEUR(simulationResult.telematicsMonthly)}/m)`, formatEUR(simulationResult.telematicsCostDaily)]] : []),
-      ...(simulationResult.washingCostDaily > 0 ? [[`Lavaggi (${formatEUR(simulationResult.washingMonthly)}/m)`, formatEUR(simulationResult.washingCostDaily)]] : []),
-      ...(simulationResult.extraCostDaily > 0 ? [[`Costi Extra (${simulationResult.extraCostDescription || simulationResult.extraCostFrequency})`, formatEUR(simulationResult.extraCostDaily)]] : []),
+      [`Energia / Carburante (${simulationResult.energyPayer === 'client' ? 'A carico Cliente (0 €)' : 'A carico FOUR'})`, formatEUR(simulationResult.fuelDaily)],
+      ['Pedaggio Autostradale Telepass', formatEUR(simulationResult.tollsDaily)],
+      ['Pneumatici e Manutenzione Programmata', formatEUR(simulationResult.tiresDaily)],
+      ['Quota Noleggio Trattore / Motrice', formatEUR(simulationResult.vehicleLeaseDaily)],
+      ['Quota Noleggio Semirimorchio FOUR', formatEUR(simulationResult.trailerLeaseDaily)],
+      ...(simulationResult.refrigerationCostDaily > 0 ? [[`Gruppo Frigo (${simulationResult.refrigerationTech === 'azoto' ? 'Azoto Liquido' : 'Gasolio'} • ${simulationResult.refrigerationHoursDaily}h/gg)`, formatEUR(simulationResult.refrigerationCostDaily)]] : []),
+      ...(simulationResult.telematicsCostDaily > 0 ? [[`Telematica GPS & Controllo Flotta (${formatEUR(simulationResult.telematicsMonthly)}/m)`, formatEUR(simulationResult.telematicsCostDaily)]] : []),
+      ...(simulationResult.washingCostDaily > 0 ? [[`Lavaggi Automezzi (${formatEUR(simulationResult.washingMonthly)}/m)`, formatEUR(simulationResult.washingCostDaily)]] : []),
+      ...(simulationResult.extraCostDaily > 0 ? [[`Costi Accessori Extra (${simulationResult.extraCostDescription || simulationResult.extraCostFrequency})`, formatEUR(simulationResult.extraCostDaily)]] : []),
       ['TOTALE COSTO OPERATIVO GIORNALIERO', formatEUR(simulationResult.totalCostDaily)],
-      ['TARIFFA GIORNALIERA PROPOSTA', formatEUR(simulationResult.revenueDailyTarget)],
-      ['M.O.L. GIORNALIERO (MARGINE)', `${formatEUR(simulationResult.molDailyTarget)} (${simulationResult.molPercent}%)`],
-      [`RICAVO MENSILE STIMATO (${simulationResult.workingDays} gg)`, formatEUR(simulationResult.monthlyRevenue)],
+      ['TARIFFA GIORNALIERA PROPOSTA AL CLIENTE', formatEUR(simulationResult.revenueDailyTarget)],
+      ['M.O.L. GIORNALIERO (MARGINE SUL RICAVO)', `${formatEUR(simulationResult.molDailyTarget)} (${simulationResult.molPercent}%)`],
+      ['RICARICO APPLICATO SUI COSTI (MARKUP)', `+${markupPct}% sui costi operativi`],
       [`COSTO MENSILE STIMATO (${simulationResult.workingDays} gg)`, formatEUR(simulationResult.monthlyCost)],
-      ['M.O.L. MENSILE STIMATO', formatEUR(simulationResult.monthlyMol)],
-      [`Fabbisogno Circolante Ponderato (Gap ${simulationResult.gapDays} gg)`, formatEUR(simulationResult.workingCapitalNeed)]
+      [`RICAVO MENSILE STIMATO (${simulationResult.workingDays} gg)`, formatEUR(simulationResult.monthlyRevenue)],
+      ['M.O.L. MENSILE STIMATO (MARGINE)', `${formatEUR(simulationResult.monthlyMol)} (${simulationResult.molPercent}%)`],
+      [`FATTURATO INTERO CONTRATTO (${simulationResult.operatingMonths || 36} Mesi)`, formatEUR(simulationResult.monthlyRevenue * (simulationResult.operatingMonths || 36))],
+      [`FABBISOGNO CIRCOLANTE PONDERATO (Gap ${simulationResult.gapDays} gg)`, formatEUR(simulationResult.workingCapitalNeed)]
     ];
 
     autoTable(doc, {
-      startY: 40,
-      head: [['Voce di Costo / Parametro', 'Valore']],
+      startY: 42,
+      head: [['Voce di Costo / Parametro Operativo ed Economico', 'Valore / Importo']],
       body: tableData,
-      theme: 'striped',
-      headStyles: { fillColor: [15, 23, 42] }
+      theme: 'grid',
+      headStyles: { fillColor: [22, 78, 135], textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 9 },
+      styles: { fontSize: 8.5, cellPadding: 2.2 },
+      didParseCell: (data) => {
+        if (data.section === 'body') {
+          const rowText = String(data.row.raw[0] || '').toUpperCase();
+          // Costi Totali -> Sfondo rosa/rosso chiaro (#fef2f2), testo rosso scuro
+          if (rowText.includes('TOTALE COSTO') || rowText.includes('COSTO MENSILE')) {
+            data.cell.styles.fillColor = [254, 242, 242];
+            data.cell.styles.textColor = [153, 27, 27];
+            data.cell.styles.fontStyle = 'bold';
+          }
+          // Ricavi Totali -> Sfondo azzurro/blu chiaro (#eff6ff), testo blu scuro FOUR
+          else if (rowText.includes('TARIFFA GIORNALIERA') || rowText.includes('RICAVO MENSILE') || rowText.includes('FATTURATO INTERO')) {
+            data.cell.styles.fillColor = [239, 246, 255];
+            data.cell.styles.textColor = [30, 58, 138];
+            data.cell.styles.fontStyle = 'bold';
+          }
+          // Margine / M.O.L. -> Sfondo verde smeraldo chiaro (#ecfdf5), testo verde scuro
+          else if (rowText.includes('M.O.L.') || rowText.includes('MARGINE') || rowText.includes('RICARICO')) {
+            data.cell.styles.fillColor = [236, 253, 245];
+            data.cell.styles.textColor = [6, 95, 70];
+            data.cell.styles.fontStyle = 'bold';
+          }
+          // Fabbisogno Cassa Circolante -> Sfondo ambra chiaro (#fef3c7), testo ambra scuro
+          else if (rowText.includes('FABBISOGNO CIRCOLANTE')) {
+            data.cell.styles.fillColor = [254, 243, 199];
+            data.cell.styles.textColor = [146, 64, 14];
+            data.cell.styles.fontStyle = 'bold';
+          }
+        }
+      }
     });
 
-    doc.save(`FOUR_Preventivo_${simulationResult.vehicle.id}.pdf`);
+    const clientPart = clientName ? `_${clientName.replace(/\s+/g, '_')}` : '';
+    doc.save(`FOUR_Preventivo${clientPart}_${simulationResult.vehicle.id}.pdf`);
   };
 
   return (
@@ -906,60 +959,118 @@ const SimulationPage = () => {
                 </p>
               </div>
 
-              {/* Margine Target & Termini di Pagamento (NOTA 1.1) */}
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Margine Target (%)</label>
-                  <div className="flex items-center space-x-1">
+              {/* Durata Contratto, Margine Target & Termini di Pagamento */}
+              <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-3">
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block font-bold text-slate-800 mb-1 flex items-center justify-between">
+                      <span>Durata Contratto (Mesi)</span>
+                      <span className="text-[10px] text-blue-700 font-bold">Standard: 36m</span>
+                    </label>
                     <input
                       type="number"
                       min="1"
-                      max="60"
-                      value={targetMarginPercent}
-                      onChange={(e) => setTargetMarginPercent(parseFloat(e.target.value) || 20)}
-                      className="w-full px-3 py-1.5 border border-emerald-400 rounded-xl font-extrabold text-emerald-800 bg-emerald-50"
+                      max="120"
+                      value={operatingMonths}
+                      onChange={(e) => setOperatingMonths(parseInt(e.target.value) || 36)}
+                      className="w-full px-3 py-1.5 border border-slate-300 rounded-xl font-bold bg-white text-xs"
                     />
-                    <span className="text-emerald-800 font-bold">%</span>
+                    <div className="flex gap-1 mt-1 flex-wrap">
+                      {[12, 24, 36, 48, 60].map(m => (
+                        <button
+                          key={m}
+                          type="button"
+                          onClick={() => setOperatingMonths(m)}
+                          className={`px-1.5 py-0.5 rounded text-[10px] font-bold transition ${
+                            operatingMonths === m
+                              ? 'bg-[#164e87] text-white shadow-xs'
+                              : 'bg-slate-200 text-slate-700 hover:bg-slate-300'
+                          }`}
+                        >
+                          {m}m{m === 36 ? ' (FOUR)' : ''}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block font-bold text-slate-800 mb-1 flex items-center justify-between">
+                      <span>Margine Target (%)</span>
+                      <span className="text-[10px] text-emerald-700 font-bold">M.O.L. sul Ricavo</span>
+                    </label>
+                    <div className="flex items-center space-x-1">
+                      <input
+                        type="number"
+                        min="1"
+                        max="60"
+                        value={targetMarginPercent}
+                        onChange={(e) => setTargetMarginPercent(parseFloat(e.target.value) || 21)}
+                        className="w-full px-3 py-1.5 border border-emerald-400 rounded-xl font-extrabold text-emerald-800 bg-emerald-50 text-xs"
+                      />
+                      <span className="text-emerald-800 font-bold text-xs">%</span>
+                    </div>
+                    <div className="flex gap-1 mt-1 flex-wrap">
+                      {[15, 18, 21, 25].map(pct => (
+                        <button
+                          key={pct}
+                          type="button"
+                          onClick={() => setTargetMarginPercent(pct)}
+                          className={`px-1.5 py-0.5 rounded text-[10px] font-bold transition ${
+                            targetMarginPercent === pct
+                              ? 'bg-emerald-600 text-white shadow-xs'
+                              : 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200'
+                          }`}
+                        >
+                          {pct}%{pct === 21 ? ' (Std)' : ''}
+                        </button>
+                      ))}
+                    </div>
+                    <p className="text-[9px] text-slate-500 mt-0.5">
+                      Ricarico sui costi: <strong className="text-slate-800">+{targetMarginPercent < 100 ? ((targetMarginPercent / (100 - targetMarginPercent)) * 100).toFixed(1) : 0}%</strong>
+                    </p>
                   </div>
                 </div>
 
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Incasso Cliente (DSO)</label>
-                  <select
-                    value={paymentTermsClient}
-                    onChange={(e) => setPaymentTermsClient(parseInt(e.target.value))}
-                    className="w-full px-3 py-1.5 border border-slate-300 rounded-xl bg-white font-bold"
-                  >
-                    <option value="30">30 gg d.f.f.m.</option>
-                    <option value="60">60 gg d.f.f.m. (Standard)</option>
-                    <option value="90">90 gg d.f.f.m.</option>
-                  </select>
-                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-2 border-t border-slate-200">
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-700 mb-0.5">Incasso Cliente (DSO)</label>
+                    <select
+                      value={paymentTermsClient}
+                      onChange={(e) => setPaymentTermsClient(parseInt(e.target.value))}
+                      className="w-full px-2 py-1.5 border border-slate-300 rounded-xl bg-white font-bold text-xs"
+                    >
+                      <option value="30">30 gg d.f.f.m.</option>
+                      <option value="60">60 gg d.f.f.m. (Standard)</option>
+                      <option value="90">90 gg d.f.f.m.</option>
+                      <option value="120">120 gg d.f.f.m.</option>
+                    </select>
+                  </div>
 
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Scadenza Nolo Mezzo Motore</label>
-                  <select
-                    value={leasePaymentTiming}
-                    onChange={(e) => setLeasePaymentTiming(e.target.value)}
-                    className="w-full px-3 py-1.5 border border-slate-300 rounded-xl bg-white font-bold text-xs"
-                  >
-                    <option value="M1_D10">Giorno 10 Mese 1 (Anticipato)</option>
-                    <option value="M1_D30">Giorno 30 Mese 1 (Fine Mese)</option>
-                    <option value="M2_D20">Giorno 20 Mese 2 (Mese Succ.)</option>
-                  </select>
-                </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-700 mb-0.5">Nolo Mezzo Motore</label>
+                    <select
+                      value={leasePaymentTiming}
+                      onChange={(e) => setLeasePaymentTiming(e.target.value)}
+                      className="w-full px-2 py-1.5 border border-slate-300 rounded-xl bg-white font-bold text-xs"
+                    >
+                      <option value="M1_D10">10 M1 (Anticipato)</option>
+                      <option value="M1_D30">30 M1 (Fine Mese)</option>
+                      <option value="M2_D20">20 M2 (Posticipato)</option>
+                    </select>
+                  </div>
 
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Scadenza Nolo Semirimorchio</label>
-                  <select
-                    value={trailerLeasePaymentTiming}
-                    onChange={(e) => setTrailerLeasePaymentTiming(e.target.value)}
-                    className="w-full px-3 py-1.5 border border-slate-300 rounded-xl bg-white font-bold text-xs"
-                  >
-                    <option value="M1_D10">Giorno 10 Mese 1 (Anticipato)</option>
-                    <option value="M1_D30">Giorno 30 Mese 1 (Fine Mese)</option>
-                    <option value="M2_D20">Giorno 20 Mese 2 (Mese Succ.)</option>
-                  </select>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-700 mb-0.5">Nolo Semirimorchio</label>
+                    <select
+                      value={trailerLeasePaymentTiming}
+                      onChange={(e) => setTrailerLeasePaymentTiming(e.target.value)}
+                      className="w-full px-2 py-1.5 border border-slate-300 rounded-xl bg-white font-bold text-xs"
+                    >
+                      <option value="M1_D10">10 M1 (Anticipato)</option>
+                      <option value="M1_D30">30 M1 (Fine Mese)</option>
+                      <option value="M2_D20">20 M2 (Posticipato)</option>
+                    </select>
+                  </div>
                 </div>
               </div>
 
@@ -1119,9 +1230,11 @@ const SimulationPage = () => {
                       <div className="text-lg font-black text-emerald-300 mt-1">
                         {formatEUR(simulationResult.molDailyTarget)}
                       </div>
-                      <span className="text-[10px] text-emerald-400 font-bold">
-                        {formatPercent(simulationResult.molPercent)}
-                      </span>
+                      <div className="flex items-center justify-center gap-1 text-[10px]">
+                        <span className="text-emerald-400 font-bold">{formatPercent(simulationResult.molPercent)} MOL</span>
+                        <span className="text-slate-500">•</span>
+                        <span className="text-cyan-300 font-medium">+{simulationResult.totalCostDaily > 0 ? ((simulationResult.molDailyTarget / simulationResult.totalCostDaily) * 100).toFixed(1) : 0}% Ricarico</span>
+                      </div>
                     </div>
 
                     <div className="bg-slate-800/80 p-3 rounded-xl">
@@ -1130,8 +1243,32 @@ const SimulationPage = () => {
                         {formatEUR(simulationResult.monthlyMol)}
                       </div>
                       <span className="text-[10px] text-slate-400">
-                        su {simulationResult.workingDays} gg
+                        su {simulationResult.workingDays} gg • {formatPercent(simulationResult.molPercent)}
                       </span>
+                    </div>
+                  </div>
+
+                  {/* Riepilogo Pluriennale Contratto */}
+                  <div className="p-3 bg-slate-800/60 rounded-xl border border-slate-700/60 flex flex-wrap items-center justify-between gap-3 text-xs">
+                    <div className="flex items-center space-x-2">
+                      <Clock className="w-4 h-4 text-cyan-400" />
+                      <span className="text-slate-300 font-semibold">
+                        Durata Contratto: <strong className="text-white">{simulationResult.operatingMonths || 36} Mesi</strong>
+                      </span>
+                    </div>
+                    <div className="flex items-center space-x-4">
+                      <div>
+                        <span className="text-slate-400 text-[10px] block">Fatturato Intero Periodo:</span>
+                        <strong className="text-emerald-400 font-black text-sm">
+                          {formatEUR(simulationResult.monthlyRevenue * (simulationResult.operatingMonths || 36))}
+                        </strong>
+                      </div>
+                      <div>
+                        <span className="text-slate-400 text-[10px] block">M.O.L. Totale Periodo:</span>
+                        <strong className="text-cyan-300 font-black text-sm">
+                          {formatEUR(simulationResult.monthlyMol * (simulationResult.operatingMonths || 36))}
+                        </strong>
+                      </div>
                     </div>
                   </div>
                 </div>

@@ -1071,7 +1071,12 @@ export const calculateSingleProjectMetrics = (project) => {
   const vLeaseGapDays = Math.max(0, clientDso - getLeaseOffset(leaseTimingKey));
   const tLeaseGapDays = Math.max(0, clientDso - getLeaseOffset(trailerLeaseTimingKey));
 
-  const driverGapDays = Math.max(0, clientDso - driverTerms);
+  // Personale (Autisti + Facchinaggio): Pagato al giorno 16 del mese T1 (o termine impostato)
+  // In tesoreria reale, prima dell'incasso del cliente l'azienda deve sborsare l'intera retribuzione mensile.
+  // Con incasso standard (DSO >= 30 gg) l'anticipo di cassa deve coprire almeno 1 mensilità intera
+  // (tariffa giornaliera * giornate lavorative del mese). Con DSO 60 gg copre 2 mensilità, con DSO 90 gg 3 mensilità.
+  const personnelAdvanceMonths = clientDso <= 0 ? 0 : Math.max(1, clientDso / 30);
+  const driverGapDays = Math.round(personnelAdvanceMonths * 30);
   const fuelGapDays = Math.max(0, clientDso - fuelTerms);
   const tollsGapDays = Math.max(0, clientDso - tollsTerms);
   const tiresGapDays = Math.max(0, clientDso - tiresTerms);
@@ -1096,7 +1101,7 @@ export const calculateSingleProjectMetrics = (project) => {
 
   const needLease = (vLeaseMonthly * (vLeaseGapDays / 30)) + (tLeaseMonthly * (tLeaseGapDays / 30));
   const leaseGapDays = leaseMonthly > 0 ? Math.round((needLease / leaseMonthly) * 30) : vLeaseGapDays;
-  const needPersonnel = personnelMonthly * (driverGapDays / 30);
+  const needPersonnel = +(personnelMonthly * personnelAdvanceMonths).toFixed(2);
   const needFuel = fuelMonthly * (fuelGapDays / 30);
   const needTolls = tollsMonthly * (tollsGapDays / 30);
   const needTires = tiresMonthly * (tiresGapDays / 30);

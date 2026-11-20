@@ -39,7 +39,8 @@ import {
   Droplets,
   Wifi,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  Sliders
 } from 'lucide-react';
 
 const ProjectsPage = () => {
@@ -65,7 +66,7 @@ const ProjectsPage = () => {
     client: '',
     route: '',
     startDate: '2026-01-01',
-    operatingMonths: 12,
+    operatingMonths: 36, // Default 36 mesi standard contratti FOUR
     workingDaysMonth: 22,
     kmDaily: 250,
     managementType: 'D', // D = Diretta, T = Terzi
@@ -102,6 +103,8 @@ const ProjectsPage = () => {
     vehicleLeaseDaily: 200,
     trailerLeaseDaily: 35,
     revenueDaily: 750,
+    targetMarginPercent: 21,
+    isPipelineFuture: false,
     paymentTermsClient: 60, // DSO: incasso clienti gg
     paymentTermsSuppliers: 30, // DPO: fornitori / terzisti gg
     paymentTermsLease: 30,
@@ -202,7 +205,7 @@ const ProjectsPage = () => {
         client: project.client || '',
         route: project.route || '',
         startDate: project.startDate || '2026-01-01',
-        operatingMonths: project.operatingMonths || 12,
+        operatingMonths: project.operatingMonths || 36,
         workingDaysMonth: project.workingDaysMonth || 22,
         kmDaily: project.kmDaily || 250,
         managementType: project.managementType || 'D',
@@ -251,6 +254,8 @@ const ProjectsPage = () => {
         vehicleLeaseDaily: project.vehicleLeaseDaily || 0,
         trailerLeaseDaily: project.trailerLeaseDaily || 0,
         revenueDaily: project.revenueDaily || 0,
+        targetMarginPercent: project.targetMarginPercent !== undefined ? project.targetMarginPercent : (project.molPercent || 21),
+        isPipelineFuture: Boolean(project.isPipelineFuture),
         paymentTermsClient: project.paymentTermsClient ?? 60,
         paymentTermsSuppliers: project.paymentTermsSuppliers ?? 30,
         paymentTermsLease: project.paymentTermsLease ?? 30,
@@ -285,7 +290,7 @@ const ProjectsPage = () => {
         client: '',
         route: '',
         startDate: '2026-01-01',
-        operatingMonths: 12,
+        operatingMonths: 36,
         workingDaysMonth: workingDays,
         kmDaily: 250,
         managementType: defaultVeh?.ownershipType === 'terzi' ? 'T' : 'D',
@@ -322,6 +327,8 @@ const ProjectsPage = () => {
         vehicleLeaseDaily: defaultVeh && defaultVeh.monthlyLease ? +(defaultVeh.monthlyLease / workingDays).toFixed(2) : 208,
         trailerLeaseDaily: 0,
         revenueDaily: 750,
+        targetMarginPercent: 21,
+        isPipelineFuture: false,
         paymentTermsClient: 60,
         paymentTermsSuppliers: payDef.suppliersPaymentTermsDays ?? 30,
         paymentTermsLease: defaultVeh?.leasePaymentTerms ?? 0,
@@ -606,22 +613,144 @@ const ProjectsPage = () => {
     return { active, expiring, expired };
   }, [projects]);
 
-  // Statistiche di Portfolio
-  const totalProjectsCount = projects.length;
-  const totalMonthlyBudgetRevenue = projects.reduce((sum, p) => sum + (Number(p.monthlyRevenue) || 0), 0);
-  const totalMonthlyBudgetCost = projects.reduce((sum, p) => sum + (Number(p.monthlyCost) || 0), 0);
-  const totalMonthlyBudgetMol = totalMonthlyBudgetRevenue - totalMonthlyBudgetCost;
-  const averageMolPercent = totalMonthlyBudgetRevenue > 0 ? (totalMonthlyBudgetMol / totalMonthlyBudgetRevenue) * 100 : 0;
-  const totalWorkingCapitalRequired = projects.reduce((sum, p) => {
-    const m = calculateSingleProjectMetrics(p);
-    return sum + (m.estimatedWorkingCapitalGap || 0);
-  }, 0);
+  // NOTA 5: Scenari Previsionali e What-If ('consolidated' | 'active2026' | 'futureOnly' | 'whatIf')
+  const [selectedScenario, setSelectedScenario] = useState('consolidated');
+  const [whatIfIncludedIds, setWhatIfIncludedIds] = useState(() => new Set());
+  const [savedScenarios, setSavedScenarios] = useState(() => {
+    try {
+      const saved = localStorage.getItem('four_whatif_scenarios');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [scenarioNameInput, setScenarioNameInput] = useState('');
+  const [showScenarioSaveBox, setShowScenarioSaveBox] = useState(false);
+
+  // Helper per distinguere commesse operative 2026 da nuove commesse / pipeline futura
+  const isFutureProject = (p) => {
+    if (p.isPipelineFuture !== undefined) return Boolean(p.isPipelineFuture);
+    const start = p.startDate ? new Date(p.startDate) : new Date();
+    const today = new Date();
+    return start > today || (p.notes && p.notes.toLowerCase().includes('preventivo')) || (p.code && p.code.startsWith('PRJ-FUT'));
+  };
+
+  const handleToggleFutureStatus = (projectId) => {
+    const updated = projects.map(p => {
+      if (p.id !== projectId) return p;
+      const current = isFutureProject(p);
+      return { ...p, isPipelineFuture: !current };
+    });
+    storageService.saveProjects(updated);
+    setProjects(updated);
+  };
+
+  const handleToggleWhatIf = (projectId) => {
+    setWhatIfIncludedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(projectId)) next.delete(projectId);
+      else next.add(projectId);
+      return next;
+    });
+  };
+
+  const handleSelectScenario = (scen) => {
+    setSelectedScenario(scen);
+    if (scen === 'whatIf' && whatIfIncludedIds.size === 0) {
+      setWhatIfIncludedIds(new Set(projects.map(p => p.id)));
+    }
+  };
+
+  const handleSaveCurrentScenario = () => {
+    if (!scenarioNameInput.trim()) return;
+    const newScen = {
+      id: 'scen_' + Date.now(),
+      name: scenarioNameInput.trim(),
+      includedIds: Array.from(whatIfIncludedIds),
+      createdAt: new Date().toISOString()
+    };
+    const updated = [...savedScenarios, newScen];
+    setSavedScenarios(updated);
+    localStorage.setItem('four_whatif_scenarios', JSON.stringify(updated));
+    setScenarioNameInput('');
+    setShowScenarioSaveBox(false);
+  };
+
+  const handleLoadSavedScenario = (scenId) => {
+    const found = savedScenarios.find(s => s.id === scenId);
+    if (found) {
+      setWhatIfIncludedIds(new Set(found.includedIds));
+      setSelectedScenario('whatIf');
+    }
+  };
+
+  const handleDeleteSavedScenario = (scenId) => {
+    const updated = savedScenarios.filter(s => s.id !== scenId);
+    setSavedScenarios(updated);
+    localStorage.setItem('four_whatif_scenarios', JSON.stringify(updated));
+  };
+
+  // Progetti appartenenti allo scenario attivo
+  const effectiveScenarioProjects = useMemo(() => {
+    if (selectedScenario === 'whatIf') {
+      return projects.filter(p => whatIfIncludedIds.has(p.id));
+    }
+    if (selectedScenario === 'active2026') {
+      return projects.filter(p => !isFutureProject(p) && getContractValidity(p).isActive);
+    }
+    if (selectedScenario === 'futureOnly') {
+      return projects.filter(p => isFutureProject(p));
+    }
+    return projects; // consolidated
+  }, [projects, selectedScenario, whatIfIncludedIds]);
+
+  // Metriche Base (Solo Attive 2026) per il confronto differenziale
+  const base2026Projects = useMemo(() => {
+    return projects.filter(p => !isFutureProject(p) && getContractValidity(p).isActive);
+  }, [projects]);
+
+  const calcPortfolioTotals = (projList) => {
+    const count = projList.length;
+    const revenueMonthly = projList.reduce((sum, p) => sum + (Number(p.monthlyRevenue) || 0), 0);
+    const costMonthly = projList.reduce((sum, p) => sum + (Number(p.monthlyCost) || 0), 0);
+    const molMonthly = revenueMonthly - costMonthly;
+    const molPercent = revenueMonthly > 0 ? (molMonthly / revenueMonthly) * 100 : 0;
+    const workingCapital = projList.reduce((sum, p) => {
+      const m = calculateSingleProjectMetrics(p);
+      return sum + (m.estimatedWorkingCapitalGap || 0);
+    }, 0);
+    const creditLine = workingCapital > 0 ? Math.ceil((workingCapital * 1.15) / 5000) * 5000 : 15000;
+    return { count, revenueMonthly, costMonthly, molMonthly, molPercent, workingCapital, creditLine };
+  };
+
+  const scenarioTotals = useMemo(() => calcPortfolioTotals(effectiveScenarioProjects), [effectiveScenarioProjects]);
+  const base2026Totals = useMemo(() => calcPortfolioTotals(base2026Projects), [base2026Projects]);
+
+  const deltaRevenue = scenarioTotals.revenueMonthly - base2026Totals.revenueMonthly;
+  const deltaMol = scenarioTotals.molMonthly - base2026Totals.molMonthly;
+  const deltaWc = scenarioTotals.workingCapital - base2026Totals.workingCapital;
+
+  // Statistiche di Portfolio calcolate sullo scenario
+  const totalProjectsCount = scenarioTotals.count;
+  const totalMonthlyBudgetRevenue = scenarioTotals.revenueMonthly;
+  const totalMonthlyBudgetCost = scenarioTotals.costMonthly;
+  const totalMonthlyBudgetMol = scenarioTotals.molMonthly;
+  const averageMolPercent = scenarioTotals.molPercent;
+  const totalWorkingCapitalRequired = scenarioTotals.workingCapital;
 
   // Lista clienti unici per filtro
   const uniqueClients = Array.from(new Set(projects.map(p => p.client).filter(Boolean)));
 
   // Filtro progetti
   const filteredProjects = projects.filter(p => {
+    // 1. Filtro Scenario Previsionale (Attive 2026 / Nuove Future / Consolidato / What-If)
+    if (selectedScenario === 'active2026') {
+      const validity = getContractValidity(p);
+      if (isFutureProject(p) || validity.isExpired) return false;
+    } else if (selectedScenario === 'futureOnly') {
+      if (!isFutureProject(p)) return false;
+    }
+
     const matchesSearch = p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       (p.client && p.client.toLowerCase().includes(searchQuery.toLowerCase())) ||
       (p.route && p.route.toLowerCase().includes(searchQuery.toLowerCase())) ||
@@ -727,23 +856,211 @@ const ProjectsPage = () => {
           </div>
         )}
 
+        {/* NOTA 5: Barra Scenari Previsionali & What-If */}
+        <div className="bg-slate-900 text-white p-4 rounded-2xl shadow-md border border-slate-800 space-y-3">
+          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+            <div className="flex items-center space-x-2.5">
+              <span className="p-2 bg-blue-600/30 border border-blue-500/40 rounded-xl text-cyan-400">
+                <Sliders className="w-5 h-5" />
+              </span>
+              <div>
+                <div className="flex items-center space-x-2">
+                  <h3 className="text-sm font-black uppercase tracking-wider text-white">Scenari Previsionali &amp; What-If</h3>
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
+                    Pianificazione Strategica
+                  </span>
+                </div>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Visualizza separatamente l'esercizio 2026, le nuove commesse future o simula scenari what-if personalizzati
+                </p>
+              </div>
+            </div>
+
+            {/* Selettore Scenario */}
+            <div className="flex flex-wrap items-center gap-1.5 bg-slate-800 p-1.5 rounded-xl border border-slate-700/60">
+              <button
+                type="button"
+                onClick={() => handleSelectScenario('consolidated')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center space-x-1.5 ${
+                  selectedScenario === 'consolidated'
+                    ? 'bg-[#164e87] text-white shadow-sm border border-cyan-400/40'
+                    : 'text-slate-300 hover:text-white hover:bg-slate-700/50'
+                }`}
+              >
+                <span>🌐 Consolidato</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleSelectScenario('active2026')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center space-x-1.5 ${
+                  selectedScenario === 'active2026'
+                    ? 'bg-emerald-700 text-white shadow-sm border border-emerald-400/40'
+                    : 'text-slate-300 hover:text-white hover:bg-slate-700/50'
+                }`}
+              >
+                <span>🏢 Solo Esercizio 2026</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleSelectScenario('futureOnly')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center space-x-1.5 ${
+                  selectedScenario === 'futureOnly'
+                    ? 'bg-purple-700 text-white shadow-sm border border-purple-400/40'
+                    : 'text-slate-300 hover:text-white hover:bg-slate-700/50'
+                }`}
+              >
+                <span>🚀 Solo Nuove / Pipeline</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleSelectScenario('whatIf')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center space-x-1.5 ${
+                  selectedScenario === 'whatIf'
+                    ? 'bg-amber-600 text-white shadow-sm border border-amber-300/40'
+                    : 'text-slate-300 hover:text-white hover:bg-slate-700/50'
+                }`}
+              >
+                <span>🎛️ Simulazione What-If</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Dettaglio What-If Panel se attivo */}
+          {selectedScenario === 'whatIf' && (
+            <div className="pt-3 border-t border-slate-800 space-y-3">
+              <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3 text-xs bg-slate-800/80 p-3.5 rounded-xl border border-amber-500/30">
+                <div className="space-y-0.5">
+                  <div className="flex items-center space-x-2">
+                    <span className="font-extrabold text-amber-300 text-sm">Confronto Differenziale con Scenario Base 2026:</span>
+                    <span className="px-2 py-0.5 rounded-full bg-slate-700 text-slate-200 text-[11px] font-bold">
+                      {effectiveScenarioProjects.length} commesse attive nel modello
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-400">
+                    Spunta o deseleziona le commesse nella tabella per simulare impatto economico e bancabilità
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-4 bg-slate-900/80 p-2.5 rounded-xl border border-slate-700">
+                  <div>
+                    <span className="text-[10px] text-slate-400 block font-semibold">Delta Ricavi / Mese:</span>
+                    <strong className={`text-sm font-black ${deltaRevenue >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                      {deltaRevenue >= 0 ? '+' : ''}{formatEUR(deltaRevenue)}
+                    </strong>
+                  </div>
+                  <div className="border-l border-slate-700 pl-3">
+                    <span className="text-[10px] text-slate-400 block font-semibold">Delta M.O.L. / Mese:</span>
+                    <strong className={`text-sm font-black ${deltaMol >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                      {deltaMol >= 0 ? '+' : ''}{formatEUR(deltaMol)}
+                    </strong>
+                  </div>
+                  <div className="border-l border-slate-700 pl-3">
+                    <span className="text-[10px] text-slate-400 block font-semibold">Delta Circolante Anticipato:</span>
+                    <strong className={`text-sm font-black ${deltaWc >= 0 ? 'text-amber-300' : 'text-emerald-400'}`}>
+                      {deltaWc >= 0 ? '+' : ''}{formatEUR(deltaWc)}
+                    </strong>
+                  </div>
+                  <div className="border-l border-slate-700 pl-3">
+                    <span className="text-[10px] text-slate-400 block font-semibold">Fido SBF Stimato:</span>
+                    <strong className="text-sm font-black text-white">
+                      {formatEUR(scenarioTotals.creditLine)}
+                    </strong>
+                  </div>
+                </div>
+
+                <div className="flex items-center space-x-2">
+                  <button
+                    type="button"
+                    onClick={() => setWhatIfIncludedIds(new Set(projects.map(p => p.id)))}
+                    className="px-2.5 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs font-semibold text-slate-200"
+                  >
+                    Tutte
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setWhatIfIncludedIds(new Set(base2026Projects.map(p => p.id)))}
+                    className="px-2.5 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs font-semibold text-slate-200"
+                  >
+                    Solo Base 2026
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowScenarioSaveBox(!showScenarioSaveBox)}
+                    className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 rounded-lg text-xs text-white font-bold shadow-sm"
+                  >
+                    Salva Scenario
+                  </button>
+                </div>
+              </div>
+
+              {/* Box Salvataggio / Caricamento Scenario */}
+              {showScenarioSaveBox && (
+                <div className="p-3 bg-slate-800 rounded-xl border border-slate-700 flex flex-wrap items-center gap-2 text-xs">
+                  <input
+                    type="text"
+                    placeholder="Nome scenario (es. 'Ipotesi Espansione Lindt + Conad')..."
+                    value={scenarioNameInput}
+                    onChange={(e) => setScenarioNameInput(e.target.value)}
+                    className="px-3 py-1.5 bg-slate-900 border border-slate-600 rounded-lg text-white text-xs flex-1 min-w-[220px]"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleSaveCurrentScenario}
+                    className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-bold text-xs"
+                  >
+                    Conferma Salvataggio
+                  </button>
+                  {savedScenarios.length > 0 && (
+                    <div className="flex items-center gap-1.5 pl-3 border-l border-slate-700 flex-wrap">
+                      <span className="text-slate-400 text-[11px]">Scenari Salvati:</span>
+                      {savedScenarios.map(sc => (
+                        <span key={sc.id} className="inline-flex items-center gap-1 bg-slate-700 px-2 py-1 rounded text-[11px]">
+                          <button type="button" onClick={() => handleLoadSavedScenario(sc.id)} className="font-bold text-cyan-300 hover:underline">
+                            {sc.name}
+                          </button>
+                          <button type="button" onClick={() => handleDeleteSavedScenario(sc.id)} className="text-rose-400 hover:text-rose-300 text-[11px] font-bold">
+                            &times;
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
         {/* Portfolio KPI Bar */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
           <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
-            <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Commesse Attive 2026</span>
+            <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">
+              {selectedScenario === 'active2026'
+                ? 'Commesse Esercizio 2026'
+                : selectedScenario === 'futureOnly'
+                  ? 'Commesse Nuove / Pipeline'
+                  : selectedScenario === 'whatIf'
+                    ? 'Commesse Simulate (What-If)'
+                    : 'Commesse Consolidate'}
+            </span>
             <div className="flex items-baseline justify-between mt-2">
-              <span className="text-3xl font-black text-slate-900">{contractStats.active} <span className="text-sm font-semibold text-slate-400">/ {totalProjectsCount}</span></span>
+              <span className="text-3xl font-black text-slate-900">{totalProjectsCount} <span className="text-sm font-semibold text-slate-400">/ {projects.length}</span></span>
               <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
-                contractStats.expired > 0 || contractStats.expiring > 0 ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800'
+                selectedScenario === 'active2026'
+                  ? 'bg-emerald-100 text-emerald-800'
+                  : selectedScenario === 'futureOnly'
+                    ? 'bg-purple-100 text-purple-800'
+                    : selectedScenario === 'whatIf'
+                      ? 'bg-amber-100 text-amber-800'
+                      : 'bg-blue-100 text-blue-800'
               }`}>
-                {contractStats.expired > 0
-                  ? `${contractStats.expired} scadute`
-                  : contractStats.expiring > 0
-                    ? `${contractStats.expiring} in scad.`
-                    : '100% attive'}
+                {selectedScenario === 'active2026' ? 'Solo 2026' : selectedScenario === 'futureOnly' ? 'Pipeline' : selectedScenario === 'whatIf' ? 'What-If' : 'Tutte'}
               </span>
             </div>
-            <p className="text-xs text-slate-500 mt-1">Servizi attivi per l'esercizio 2026</p>
+            <p className="text-xs text-slate-500 mt-1">Linee incluse nello scenario</p>
           </div>
 
           <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
@@ -855,6 +1172,11 @@ const ProjectsPage = () => {
             <table className="min-w-full divide-y divide-slate-200 text-left text-xs">
               <thead className="bg-slate-50 text-slate-700 font-bold uppercase tracking-wider">
                 <tr>
+                  {selectedScenario === 'whatIf' && (
+                    <th className="py-3.5 px-3 text-center w-12 bg-amber-50 text-amber-900 border-b-2 border-amber-400">
+                      What-If
+                    </th>
+                  )}
                   <th className="py-3.5 px-4">Cod / Linea</th>
                   <th className="py-3.5 px-4">Cliente & Tratta</th>
                   <th className="py-3.5 px-4">Validità & Scadenza</th>
@@ -884,11 +1206,34 @@ const ProjectsPage = () => {
                         isNegative ? 'bg-rose-50/40' : isLowMargin ? 'bg-amber-50/30' : ''
                       }`}
                     >
+                      {selectedScenario === 'whatIf' && (
+                        <td className="py-3.5 px-3 text-center bg-amber-50/40">
+                          <input
+                            type="checkbox"
+                            checked={whatIfIncludedIds.has(project.id)}
+                            onChange={() => handleToggleWhatIf(project.id)}
+                            className="w-4 h-4 text-amber-600 rounded cursor-pointer accent-amber-600 focus:ring-amber-500"
+                            title="Includi / Escludi questa commessa dalla simulazione What-If"
+                          />
+                        </td>
+                      )}
                       <td className="py-3.5 px-4 font-semibold text-slate-900">
-                        <div className="flex items-center space-x-1.5">
+                        <div className="flex items-center space-x-1.5 flex-wrap gap-y-1">
                           <span className="font-mono text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded">
                             {project.code || 'PRJ'}
                           </span>
+                          <button
+                            type="button"
+                            onClick={() => handleToggleFutureStatus(project.id)}
+                            title="Clicca per commutare lo stato: Commessa Attiva 2026 vs Nuova / Futura"
+                            className={`text-[9px] font-bold px-1.5 py-0.5 rounded cursor-pointer transition flex items-center gap-1 ${
+                              isFutureProject(project)
+                                ? 'bg-purple-100 text-purple-800 border border-purple-300 hover:bg-purple-200'
+                                : 'bg-emerald-100 text-emerald-800 border border-emerald-300 hover:bg-emerald-200'
+                            }`}
+                          >
+                            {isFutureProject(project) ? '🚀 Futura' : '🏢 Attiva 2026'}
+                          </button>
                           {isNegative && (
                             <span title="Attenzione: Commessa in perdita!" className="text-rose-600">
                               <AlertTriangle className="w-4 h-4 inline" />
@@ -1247,15 +1592,34 @@ const ProjectsPage = () => {
                   </div>
 
                   <div>
-                    <label className="block font-semibold text-slate-700 mb-1">Mesi Operativi</label>
+                    <label className="block font-semibold text-slate-700 mb-1 flex items-center justify-between">
+                      <span>Mesi Operativi</span>
+                      <span className="text-[10px] text-blue-700 font-bold">Standard FOUR: 36m</span>
+                    </label>
                     <input
                       type="number"
                       min="1"
-                      max="24"
+                      max="120"
                       value={formData.operatingMonths}
-                      onChange={(e) => setFormData({ ...formData, operatingMonths: parseInt(e.target.value) || 12 })}
-                      className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500"
+                      onChange={(e) => setFormData({ ...formData, operatingMonths: parseInt(e.target.value) || 36 })}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 font-bold"
                     />
+                    <div className="flex gap-1 mt-1 flex-wrap">
+                      {[12, 24, 36, 48, 60].map(m => (
+                        <button
+                          key={m}
+                          type="button"
+                          onClick={() => setFormData({ ...formData, operatingMonths: m })}
+                          className={`px-1.5 py-0.5 rounded text-[10px] font-bold transition ${
+                            formData.operatingMonths === m
+                              ? 'bg-[#164e87] text-white shadow-xs'
+                              : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                          }`}
+                        >
+                          {m}m{m === 36 ? ' (FOUR)' : ''}
+                        </button>
+                      ))}
+                    </div>
                   </div>
 
                   <div>
@@ -1406,15 +1770,61 @@ const ProjectsPage = () => {
                             className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-slate-700"
                           />
                         </div>
-                        <div className="md:col-span-3">
-                          <label className="block font-bold text-emerald-900 mb-0.5">Ricavo Giornaliero Riconosciuto da Cliente (€/gg) *</label>
-                          <input
-                            type="number"
-                            step="10"
-                            value={formData.revenueDaily}
-                            onChange={(e) => setFormData({ ...formData, revenueDaily: parseFloat(e.target.value) || 0 })}
-                            className="w-full px-3 py-1.5 border border-emerald-500 rounded-lg font-black text-emerald-800 bg-emerald-50 text-sm"
-                          />
+                        <div className="md:col-span-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          <div>
+                            <label className="block font-bold text-emerald-900 mb-0.5">Ricavo Giornaliero Riconosciuto da Cliente (€/gg) *</label>
+                            <input
+                              type="number"
+                              step="10"
+                              value={formData.revenueDaily}
+                              onChange={(e) => {
+                                const rev = parseFloat(e.target.value) || 0;
+                                const cost = liveModalMetrics.totalCostDaily;
+                                const margin = rev > cost ? +(((rev - cost) / rev) * 100).toFixed(1) : 0;
+                                setFormData({ ...formData, revenueDaily: rev, targetMarginPercent: margin });
+                              }}
+                              className="w-full px-3 py-1.5 border border-emerald-500 rounded-lg font-black text-emerald-800 bg-emerald-50 text-sm"
+                            />
+                          </div>
+                          <div>
+                            <label className="block font-bold text-slate-800 mb-0.5 flex items-center justify-between">
+                              <span>Margine Target M.O.L. (%)</span>
+                              <span className="text-[10px] text-emerald-700 font-bold">sul Ricavo</span>
+                            </label>
+                            <div className="flex items-center space-x-1">
+                              <input
+                                type="number"
+                                min="1"
+                                max="60"
+                                step="0.5"
+                                value={formData.targetMarginPercent !== undefined ? formData.targetMarginPercent : +liveModalMetrics.molPercent.toFixed(1)}
+                                onChange={(e) => {
+                                  const margin = parseFloat(e.target.value) || 0;
+                                  const cost = liveModalMetrics.totalCostDaily;
+                                  const rev = margin < 100 ? +(cost / (1 - (margin / 100))).toFixed(2) : cost * 1.2;
+                                  setFormData({ ...formData, targetMarginPercent: margin, revenueDaily: rev });
+                                }}
+                                className="w-full px-2 py-1.5 border border-emerald-400 rounded-lg font-black text-emerald-800 bg-white text-xs"
+                              />
+                              <span className="text-emerald-800 font-bold text-xs">%</span>
+                            </div>
+                            <div className="flex gap-1 mt-1 flex-wrap">
+                              {[15, 18, 21, 25].map(pct => (
+                                <button
+                                  key={pct}
+                                  type="button"
+                                  onClick={() => {
+                                    const cost = liveModalMetrics.totalCostDaily;
+                                    const rev = +(cost / (1 - (pct / 100))).toFixed(2);
+                                    setFormData({ ...formData, targetMarginPercent: pct, revenueDaily: rev });
+                                  }}
+                                  className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-100 text-emerald-800 hover:bg-emerald-200"
+                                >
+                                  {pct}%{pct === 21 ? ' (Std)' : ''}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -1717,15 +2127,66 @@ const ProjectsPage = () => {
                   </div>
 
                   {formData.managementType !== 'T' && (
-                    <div className="pt-2 border-t border-slate-200">
-                      <label className="block font-bold text-slate-900 mb-0.5">Ricavo Giornaliero (€/gg) *</label>
-                      <input
-                        type="number"
-                        step="10"
-                        value={formData.revenueDaily}
-                        onChange={(e) => setFormData({ ...formData, revenueDaily: parseFloat(e.target.value) || 0 })}
-                        className="w-full px-3 py-2 border border-emerald-500 rounded-lg font-black text-emerald-800 bg-emerald-50 text-sm"
-                      />
+                    <div className="pt-2 border-t border-slate-200 space-y-1.5">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block font-bold text-slate-900 mb-0.5">Ricavo Giornaliero (€/gg) *</label>
+                          <input
+                            type="number"
+                            step="10"
+                            value={formData.revenueDaily}
+                            onChange={(e) => {
+                              const rev = parseFloat(e.target.value) || 0;
+                              const cost = liveModalMetrics.totalCostDaily;
+                              const margin = rev > cost ? +(((rev - cost) / rev) * 100).toFixed(1) : 0;
+                              setFormData({ ...formData, revenueDaily: rev, targetMarginPercent: margin });
+                            }}
+                            className="w-full px-3 py-2 border border-emerald-500 rounded-lg font-black text-emerald-800 bg-emerald-50 text-sm"
+                          />
+                        </div>
+                        <div>
+                          <label className="block font-bold text-slate-900 mb-0.5 flex items-center justify-between">
+                            <span>Margine Target M.O.L. (%)</span>
+                            <span className="text-[10px] text-emerald-700 font-bold">sul Ricavo</span>
+                          </label>
+                          <div className="flex items-center space-x-1">
+                            <input
+                              type="number"
+                              min="1"
+                              max="60"
+                              step="0.5"
+                              value={formData.targetMarginPercent !== undefined ? formData.targetMarginPercent : +liveModalMetrics.molPercent.toFixed(1)}
+                              onChange={(e) => {
+                                const margin = parseFloat(e.target.value) || 0;
+                                const cost = liveModalMetrics.totalCostDaily;
+                                const rev = margin < 100 ? +(cost / (1 - (margin / 100))).toFixed(2) : cost * 1.2;
+                                setFormData({ ...formData, targetMarginPercent: margin, revenueDaily: rev });
+                              }}
+                              className="w-full px-3 py-2 border border-emerald-400 rounded-lg font-black text-emerald-800 bg-white text-sm"
+                            />
+                            <span className="text-emerald-800 font-bold text-sm">%</span>
+                          </div>
+                          <div className="flex gap-1 mt-1 flex-wrap">
+                            {[15, 18, 21, 25].map(pct => (
+                              <button
+                                key={pct}
+                                type="button"
+                                onClick={() => {
+                                  const cost = liveModalMetrics.totalCostDaily;
+                                  const rev = +(cost / (1 - (pct / 100))).toFixed(2);
+                                  setFormData({ ...formData, targetMarginPercent: pct, revenueDaily: rev });
+                                }}
+                                className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800 hover:bg-emerald-200"
+                              >
+                                {pct}%{pct === 21 ? ' (Std)' : ''}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                      <p className="text-[10px] text-slate-500">
+                        Costo totale calcolato: <strong className="text-slate-800">{formatEUR(liveModalMetrics.totalCostDaily)}/gg</strong> • Ricarico sui costi corrispondente: <strong className="text-slate-800">+{liveModalMetrics.totalCostDaily > 0 ? (((liveModalMetrics.revenueDaily - liveModalMetrics.totalCostDaily) / liveModalMetrics.totalCostDaily) * 100).toFixed(1) : 0}%</strong>
+                      </p>
                     </div>
                   )}
                 </div>
