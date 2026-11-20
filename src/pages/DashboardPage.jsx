@@ -24,7 +24,9 @@ import {
   PieChart as PieIcon,
   BarChart3,
   ShieldAlert,
-  Calendar
+  Calendar,
+  Layers,
+  Sparkles
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -92,6 +94,25 @@ const DashboardPage = () => {
     co2SavedKg,
     monthlyCashFlow
   } = financialModel;
+
+  // Analisi strategica di portafoglio: Status Quo vs Pipeline Trattative
+  const statusQuoProjects = useMemo(() => projects.filter(p => !isPotentialProject(p)), [projects]);
+  const potentialProjects = useMemo(() => projects.filter(p => isPotentialProject(p)), [projects]);
+
+  const statusQuoRevenueMonth = useMemo(() => statusQuoProjects.reduce((sum, p) => sum + (p.monthlyRevenue || 0), 0), [statusQuoProjects]);
+  const statusQuoCostMonth = useMemo(() => statusQuoProjects.reduce((sum, p) => sum + (p.monthlyCost || 0), 0), [statusQuoProjects]);
+  const statusQuoMolMonth = statusQuoRevenueMonth - statusQuoCostMonth;
+  const statusQuoMolPct = statusQuoRevenueMonth > 0 ? (statusQuoMolMonth / statusQuoRevenueMonth) * 100 : 0;
+
+  const potentialRevenueMonth = useMemo(() => potentialProjects.reduce((sum, p) => sum + (p.monthlyRevenue || 0), 0), [potentialProjects]);
+  const potentialCostMonth = useMemo(() => potentialProjects.reduce((sum, p) => sum + (p.monthlyCost || 0), 0), [potentialProjects]);
+  const potentialMolMonth = potentialRevenueMonth - potentialCostMonth;
+  const potentialMolPct = potentialRevenueMonth > 0 ? (potentialMolMonth / potentialRevenueMonth) * 100 : 0;
+
+  const combinedRevenueMonth = statusQuoRevenueMonth + potentialRevenueMonth;
+  const combinedCostMonth = statusQuoCostMonth + potentialCostMonth;
+  const combinedMolMonth = combinedRevenueMonth - combinedCostMonth;
+  const combinedMolPct = combinedRevenueMonth > 0 ? (combinedMolMonth / combinedRevenueMonth) * 100 : 0;
 
   // Statistiche Flotta
   const totalVehicles = fleet.length;
@@ -364,6 +385,125 @@ const DashboardPage = () => {
                 </div>
               </div>
             </div>
+          </div>
+        </div>
+
+        {/* Sezione Visione Strategica di Portafoglio: Status Quo vs Nuove Trattative */}
+        <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pb-4 border-b border-slate-100">
+            <div>
+              <div className="flex items-center space-x-2">
+                <span className="p-1.5 bg-[#164e87]/10 text-[#164e87] rounded-xl border border-[#164e87]/20">
+                  <Layers className="w-5 h-5" />
+                </span>
+                <h3 className="text-base font-black text-slate-900 tracking-tight">
+                  Visione Strategica di Portafoglio (Status Quo vs Trattative Pipeline)
+                </h3>
+              </div>
+              <p className="text-xs text-slate-500 mt-1">
+                Confronto esecutivo tra la redditività delle linee operative consolidate e l'impatto atteso delle nuove opportunità commerciali
+              </p>
+            </div>
+            <Link
+              to="/projects"
+              className="inline-flex items-center space-x-1.5 text-xs font-bold text-[#164e87] hover:text-blue-900 bg-blue-50 hover:bg-blue-100 px-3 py-1.5 rounded-xl border border-blue-200 transition"
+            >
+              <span>Gestisci &amp; Simula in Commesse</span>
+              <ArrowRight className="w-3.5 h-3.5" />
+            </Link>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
+            {/* 1. Status Quo */}
+            <div className="bg-slate-50/70 rounded-xl p-4 border border-emerald-300 flex flex-col justify-between">
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center space-x-1.5">
+                    <div className="w-2 h-2 rounded-full bg-emerald-500"></div>
+                    <span className="text-xs font-black uppercase text-emerald-800 tracking-wider">Status Quo Operativo</span>
+                  </div>
+                  <span className="text-[10px] font-black bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full border border-emerald-200">
+                    {statusQuoProjects.length} Commesse
+                  </span>
+                </div>
+                <div className="text-2xl font-black text-slate-900 mt-1">
+                  {formatEUR(statusQuoRevenueMonth)}/m
+                </div>
+                <p className="text-[11px] text-slate-500 mt-0.5">Fatturato mensile contratti attivi</p>
+              </div>
+
+              <div className="mt-3 pt-2.5 border-t border-slate-200/80 space-y-1 text-xs">
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Costi Mensili:</span>
+                  <span className="font-medium text-slate-700">{formatEUR(statusQuoCostMonth)}/m</span>
+                </div>
+                <div className="flex justify-between pt-1 border-t border-slate-200/80 font-black">
+                  <span className="text-emerald-700">M.O.L. Mensile:</span>
+                  <span className="text-emerald-700">{formatEUR(statusQuoMolMonth)} ({formatPercent(statusQuoMolPct)})</span>
+                </div>
+              </div>
+            </div>
+
+            {/* 2. Pipeline Trattative */}
+            <div className="bg-slate-50/70 rounded-xl p-4 border border-amber-300 flex flex-col justify-between">
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center space-x-1.5">
+                    <Sparkles className="w-3.5 h-3.5 text-amber-500" />
+                    <span className="text-xs font-black uppercase text-amber-900 tracking-wider">Nuove Trattative (What-If)</span>
+                  </div>
+                  <span className="text-[10px] font-black bg-amber-100 text-amber-900 px-2 py-0.5 rounded-full border border-amber-200">
+                    +{potentialProjects.length} Pipeline
+                  </span>
+                </div>
+                <div className="text-2xl font-black text-[#164e87] mt-1">
+                  +{formatEUR(potentialRevenueMonth)}/m
+                </div>
+                <p className="text-[11px] text-slate-500 mt-0.5">Potenziale incremento fatturato mensile</p>
+              </div>
+
+              <div className="mt-3 pt-2.5 border-t border-slate-200/80 space-y-1 text-xs">
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Costi Addizionali:</span>
+                  <span className="font-medium text-slate-700">+{formatEUR(potentialCostMonth)}/m</span>
+                </div>
+                <div className="flex justify-between pt-1 border-t border-slate-200/80 font-black">
+                  <span className="text-amber-800">Delta M.O.L. Atteso:</span>
+                  <span className="text-amber-800">+{formatEUR(potentialMolMonth)} ({formatPercent(potentialMolPct)})</span>
+                </div>
+              </div>
+            </div>
+
+            {/* 3. Proiezione a Regime */}
+            <div className="bg-gradient-to-br from-blue-50/70 to-slate-50 rounded-xl p-4 border border-blue-300 flex flex-col justify-between">
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center space-x-1.5">
+                    <TrendingUp className="w-3.5 h-3.5 text-[#164e87]" />
+                    <span className="text-xs font-black uppercase text-[#164e87] tracking-wider">Scenario a Regime Totale</span>
+                  </div>
+                  <span className="text-[10px] font-black bg-[#164e87]/15 text-[#164e87] px-2 py-0.5 rounded-full border border-blue-300">
+                    {projects.length} Totali
+                  </span>
+                </div>
+                <div className="text-2xl font-black text-slate-900 mt-1">
+                  {formatEUR(combinedRevenueMonth)}/m
+                </div>
+                <p className="text-[11px] text-slate-500 mt-0.5">Fatturato a regime ({formatEUR(combinedRevenueMonth * 12)}/anno)</p>
+              </div>
+
+              <div className="mt-3 pt-2.5 border-t border-blue-200/80 space-y-1 text-xs">
+                <div className="flex justify-between">
+                  <span className="text-slate-600">Costi Totali:</span>
+                  <span className="font-medium text-slate-800">{formatEUR(combinedCostMonth)}/m</span>
+                </div>
+                <div className="flex justify-between pt-1 border-t border-blue-200/80 font-black">
+                  <span className="text-[#164e87]">M.O.L. Globale:</span>
+                  <span className="text-emerald-700">{formatEUR(combinedMolMonth)} ({formatPercent(combinedMolPct)})</span>
+                </div>
+              </div>
+            </div>
+
           </div>
         </div>
 

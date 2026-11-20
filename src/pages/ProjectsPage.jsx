@@ -642,6 +642,7 @@ const ProjectsPage = () => {
   });
   const [scenarioNameInput, setScenarioNameInput] = useState('');
   const [showScenarioSaveBox, setShowScenarioSaveBox] = useState(false);
+  const [showStrategicVision, setShowStrategicVision] = useState(false);
 
   // Helper per distinguere commesse operative (Status Quo) da trattative / simulazioni / contratti potenziali
   const isFutureProject = (p) => {
@@ -955,84 +956,73 @@ const ProjectsPage = () => {
           </div>
         )}
 
-        {/* CRUSCOTTO ESECUTIVO PERMANENTE: STATUS QUO (CONTRATTI ATTIVI) vs CONTRATTI POTENZIALI & SCENARIO GLOBALE */}
-        <div className="bg-[#0b2440] text-white rounded-3xl p-6 shadow-xl border border-[#164e87]/70 space-y-5">
-          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 border-b border-slate-700/60 pb-4">
-            <div className="space-y-1">
-              <div className="flex items-center space-x-2">
-                <span className="p-2 bg-[#164e87] text-cyan-300 rounded-xl border border-cyan-400/30">
-                  <Layers className="w-5 h-5" />
-                </span>
-                <h2 className="text-xl font-black text-white tracking-tight">
-                  Visione Strategica di Portafoglio
-                </h2>
-                <span className="px-2.5 py-0.5 rounded-full text-xs font-black bg-cyan-500/20 text-cyan-300 border border-cyan-400/40">
-                  Status Quo vs Contratti Potenziali
-                </span>
+        {/* CRUSCOTTO STRATEGICO DI PORTAFOGLIO (Alleggerito, Chiaro e Collassabile) */}
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden transition-all">
+          <div className="p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div className="flex items-center space-x-3">
+              <span className="p-2 bg-[#164e87]/10 text-[#164e87] rounded-xl border border-[#164e87]/20 flex-shrink-0">
+                <Layers className="w-5 h-5" />
+              </span>
+              <div>
+                <div className="flex items-center space-x-2">
+                  <h3 className="text-sm font-black text-slate-900 tracking-tight">
+                    Visione Strategica di Portafoglio
+                  </h3>
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-cyan-50 text-[#164e87] border border-cyan-200">
+                    Status Quo vs Trattative
+                  </span>
+                </div>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Confronto sintetico tra commesse operative ({statusQuoTotals.count}) e pipeline di trattative simulate (+{simulatedPotentialProjects.length}/{allPotentialProjects.length}).
+                </p>
               </div>
-              <p className="text-xs text-slate-300">
-                Confronto permanente tra la redditività delle commesse operative consolidate e l'impatto economico-finanziario delle nuove trattative e simulazioni.
-              </p>
             </div>
 
-            {/* Azioni rapide What-If e Salvataggio Scenario */}
-            <div className="flex flex-wrap items-center gap-2">
-              {allPotentialProjects.length > 0 && (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => setWhatIfIncludedIds(new Set(allPotentialProjects.map(p => p.id)))}
-                    className="px-3 py-1.5 bg-[#164e87] hover:bg-blue-700 text-white text-xs font-bold rounded-lg transition border border-cyan-400/40"
-                    title="Includi tutte le trattative nella simulazione"
-                  >
-                    Simula Tutte ({allPotentialProjects.length})
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setWhatIfIncludedIds(new Set())}
-                    className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold rounded-lg transition border border-slate-700"
-                    title="Escludi le trattative per vedere solo lo Status Quo base"
-                  >
-                    Escludi Trattative (Solo Base)
-                  </button>
-                </>
-              )}
+            <div className="flex items-center space-x-2 self-start sm:self-center">
               <button
                 type="button"
                 onClick={() => setShowScenarioSaveBox(!showScenarioSaveBox)}
-                className="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs rounded-lg transition shadow-sm"
+                className="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs rounded-xl transition shadow-xs whitespace-nowrap"
               >
                 Salva Scenario
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowStrategicVision(!showStrategicVision)}
+                className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 transition border border-slate-200 whitespace-nowrap"
+              >
+                <span>{showStrategicVision ? 'Comprimi Box' : 'Espandi Dettaglio'}</span>
+                {showStrategicVision ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
               </button>
             </div>
           </div>
 
-          {/* Form Salvataggio / Caricamento Scenari Personalizzati se aperto */}
+          {/* Form Salvataggio / Caricamento Scenari se aperto */}
           {showScenarioSaveBox && (
-            <div className="p-3 bg-slate-800/90 rounded-xl border border-slate-700 flex flex-wrap items-center gap-2 text-xs">
+            <div className="p-3 mx-4 mb-3 bg-slate-50 rounded-xl border border-slate-200 flex flex-wrap items-center gap-2 text-xs">
               <input
                 type="text"
                 placeholder="Nome scenario (es. 'Ipotesi Espansione Lindt + Conad')..."
                 value={scenarioNameInput}
                 onChange={(e) => setScenarioNameInput(e.target.value)}
-                className="px-3 py-1.5 bg-slate-900 border border-slate-600 rounded-lg text-white text-xs flex-1 min-w-[240px]"
+                className="px-3 py-1.5 bg-white border border-slate-300 rounded-lg text-slate-800 text-xs flex-1 min-w-[240px]"
               />
               <button
                 type="button"
                 onClick={handleSaveCurrentScenario}
-                className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-bold text-xs"
+                className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-bold text-xs shadow-xs"
               >
                 Salva Simulazione
               </button>
               {savedScenarios.length > 0 && (
-                <div className="flex items-center gap-1.5 pl-3 border-l border-slate-700 flex-wrap">
-                  <span className="text-slate-400 text-[11px]">Scenari Salvati:</span>
+                <div className="flex items-center gap-1.5 pl-3 border-l border-slate-200 flex-wrap">
+                  <span className="text-slate-500 text-[11px]">Scenari:</span>
                   {savedScenarios.map(sc => (
-                    <span key={sc.id} className="inline-flex items-center gap-1 bg-slate-700 px-2 py-1 rounded text-[11px]">
-                      <button type="button" onClick={() => handleLoadSavedScenario(sc.id)} className="font-bold text-cyan-300 hover:underline">
+                    <span key={sc.id} className="inline-flex items-center gap-1 bg-white px-2 py-1 rounded border border-slate-200 text-[11px]">
+                      <button type="button" onClick={() => handleLoadSavedScenario(sc.id)} className="font-bold text-[#164e87] hover:underline">
                         {sc.name}
                       </button>
-                      <button type="button" onClick={() => handleDeleteSavedScenario(sc.id)} className="text-rose-400 hover:text-rose-300 font-bold ml-1">
+                      <button type="button" onClick={() => handleDeleteSavedScenario(sc.id)} className="text-rose-500 hover:text-rose-700 font-bold ml-1">
                         &times;
                       </button>
                     </span>
@@ -1042,196 +1032,134 @@ const ProjectsPage = () => {
             </div>
           )}
 
-          {/* Le 3 Colonne a Confronto Diretto: Status Quo, Contratti Potenziali, Scenario Globale */}
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-            
-            {/* 1. STATUS QUO (Contratti Attivi Operativi) */}
-            <div className="bg-slate-900/90 rounded-2xl p-5 border border-emerald-500/40 relative overflow-hidden flex flex-col justify-between">
-              <div className="absolute top-0 right-0 bg-emerald-500/20 text-emerald-300 px-3 py-1 text-[11px] font-black rounded-bl-xl border-l border-b border-emerald-500/40">
-                STATUS QUO
-              </div>
-              <div>
-                <div className="flex items-center space-x-2 mb-2">
-                  <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></div>
-                  <h3 className="text-xs font-black text-emerald-400 uppercase tracking-wider">
-                    Contratti Attivi Operativi
-                  </h3>
-                </div>
-                <div className="flex items-baseline space-x-2">
-                  <span className="text-3xl font-black text-white">{statusQuoTotals.count}</span>
-                  <span className="text-xs text-slate-400 font-semibold">commesse operative 2026</span>
-                </div>
-              </div>
+          {/* Sezione Espansa: Le 3 Colonne a Confronto con grafica chiara e leggera */}
+          {showStrategicVision && (
+            <div className="p-5 border-t border-slate-100 bg-slate-50/60 space-y-4">
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                
+                {/* 1. STATUS QUO (Contratti Attivi) */}
+                <div className="bg-white rounded-xl p-4 border border-emerald-300 shadow-xs flex flex-col justify-between">
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center space-x-1.5">
+                        <div className="w-2 h-2 rounded-full bg-emerald-500"></div>
+                        <h4 className="text-xs font-black text-emerald-800 uppercase tracking-wider">
+                          Status Quo Operativo
+                        </h4>
+                      </div>
+                      <span className="text-[10px] font-black bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full border border-emerald-200">
+                        Attivi
+                      </span>
+                    </div>
+                    <div className="flex items-baseline space-x-2">
+                      <span className="text-2xl font-black text-slate-900">{statusQuoTotals.count}</span>
+                      <span className="text-xs text-slate-500 font-medium">commesse 2026</span>
+                    </div>
+                  </div>
 
-              <div className="mt-4 pt-3 border-t border-slate-800 space-y-2 text-xs">
-                <div className="flex justify-between items-center">
-                  <span className="text-slate-400">Fatturato Mensile:</span>
-                  <span className="font-black text-white">{formatEUR(statusQuoTotals.revenueMonthly)}</span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-slate-400">Fatturato Annuo:</span>
-                  <span className="font-semibold text-slate-300">{formatEUR(statusQuoTotals.revenueMonthly * 12)}</span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-slate-400">Costi Operativi:</span>
-                  <span className="font-medium text-slate-300">{formatEUR(statusQuoTotals.costMonthly)}/m</span>
-                </div>
-                <div className="flex justify-between items-center pt-1.5 border-t border-slate-800/80">
-                  <span className="text-emerald-400 font-bold">M.O.L. / EBITDA:</span>
-                  <div className="text-right">
-                    <span className="font-black text-emerald-400 block text-sm">{formatEUR(statusQuoTotals.molMonthly)}</span>
-                    <span className="text-[10px] text-emerald-300 font-bold">Margine: {formatPercent(statusQuoTotals.molPercent)}</span>
+                  <div className="mt-3 pt-2.5 border-t border-slate-100 space-y-1.5 text-xs">
+                    <div className="flex justify-between items-center">
+                      <span className="text-slate-500">Fatturato / Mese:</span>
+                      <span className="font-bold text-slate-800">{formatEUR(statusQuoTotals.revenueMonthly)}</span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-slate-500">Costi Operativi:</span>
+                      <span className="font-medium text-slate-700">{formatEUR(statusQuoTotals.costMonthly)}/m</span>
+                    </div>
+                    <div className="flex justify-between items-center pt-1 border-t border-slate-100">
+                      <span className="text-emerald-700 font-bold">M.O.L. / EBITDA:</span>
+                      <span className="font-black text-emerald-700">{formatEUR(statusQuoTotals.molMonthly)} ({formatPercent(statusQuoTotals.molPercent)})</span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-slate-500">Circolante Cassa:</span>
+                      <span className="font-bold text-amber-700">{formatEUR(statusQuoTotals.workingCapital)}</span>
+                    </div>
                   </div>
                 </div>
-                <div className="flex justify-between items-center pt-1.5 border-t border-slate-800/80">
-                  <span className="text-slate-400">Capitale Circolante Cassa:</span>
-                  <span className="font-black text-amber-300">{formatEUR(statusQuoTotals.workingCapital)}</span>
-                </div>
-              </div>
-            </div>
 
-            {/* 2. CONTRATTI POTENZIALI (Trattative & Simulazioni) */}
-            <div className="bg-slate-900/90 rounded-2xl p-5 border border-amber-500/40 relative overflow-hidden flex flex-col justify-between">
-              <div className="absolute top-0 right-0 bg-amber-500/20 text-amber-300 px-3 py-1 text-[11px] font-black rounded-bl-xl border-l border-b border-amber-500/40">
-                PIPELINE WHAT-IF
-              </div>
-              <div>
-                <div className="flex items-center space-x-2 mb-2">
-                  <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-                  <h3 className="text-xs font-black text-amber-400 uppercase tracking-wider">
-                    Trattative &amp; Simulazioni
-                  </h3>
-                </div>
-                <div className="flex items-baseline space-x-2">
-                  <span className="text-3xl font-black text-white">+{simulatedPotentialProjects.length}</span>
-                  <span className="text-xs text-slate-400 font-semibold">simulate ({allPotentialProjects.length} a pipeline)</span>
-                </div>
-              </div>
+                {/* 2. PIPELINE TRATTATIVE */}
+                <div className="bg-white rounded-xl p-4 border border-amber-300 shadow-xs flex flex-col justify-between">
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center space-x-1.5">
+                        <Sparkles className="w-3.5 h-3.5 text-amber-500" />
+                        <h4 className="text-xs font-black text-amber-900 uppercase tracking-wider">
+                          Trattative &amp; What-If
+                        </h4>
+                      </div>
+                      <span className="text-[10px] font-black bg-amber-100 text-amber-900 px-2 py-0.5 rounded-full border border-amber-200">
+                        Potenziali
+                      </span>
+                    </div>
+                    <div className="flex items-baseline space-x-2">
+                      <span className="text-2xl font-black text-slate-900">+{simulatedPotentialProjects.length}</span>
+                      <span className="text-xs text-slate-500 font-medium">simulate ({allPotentialProjects.length} a pipeline)</span>
+                    </div>
+                  </div>
 
-              <div className="mt-4 pt-3 border-t border-slate-800 space-y-2 text-xs">
-                <div className="flex justify-between items-center">
-                  <span className="text-slate-400">Delta Ricavi / Mese:</span>
-                  <span className={`font-black ${deltaRevenueMonthly >= 0 ? 'text-cyan-300' : 'text-rose-400'}`}>
-                    +{formatEUR(deltaRevenueMonthly)}
-                  </span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-slate-400">Delta Ricavi Annuo:</span>
-                  <span className="font-semibold text-slate-300">+{formatEUR(deltaRevenueMonthly * 12)}</span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-slate-400">Delta Costi Operativi:</span>
-                  <span className="font-medium text-slate-300">+{formatEUR(deltaCostMonthly)}/m</span>
-                </div>
-                <div className="flex justify-between items-center pt-1.5 border-t border-slate-800/80">
-                  <span className="text-amber-400 font-bold">Delta M.O.L. Atteso:</span>
-                  <div className="text-right">
-                    <span className="font-black text-amber-400 block text-sm">+{formatEUR(deltaMolMonthly)}</span>
-                    <span className="text-[10px] text-amber-300 font-bold">Margine: {formatPercent(potentialTotals.molPercent)}</span>
+                  <div className="mt-3 pt-2.5 border-t border-slate-100 space-y-1.5 text-xs">
+                    <div className="flex justify-between items-center">
+                      <span className="text-slate-500">Delta Fatturato:</span>
+                      <span className="font-bold text-[#164e87]">+{formatEUR(deltaRevenueMonthly)}/m</span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-slate-500">Delta Costi:</span>
+                      <span className="font-medium text-slate-700">+{formatEUR(deltaCostMonthly)}/m</span>
+                    </div>
+                    <div className="flex justify-between items-center pt-1 border-t border-slate-100">
+                      <span className="text-amber-800 font-bold">Delta M.O.L. Atteso:</span>
+                      <span className="font-black text-amber-800">+{formatEUR(deltaMolMonthly)} ({formatPercent(potentialTotals.molPercent)})</span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-slate-500">Fabbisogno Extra:</span>
+                      <span className="font-bold text-amber-700">+{formatEUR(deltaWorkingCapital)}</span>
+                    </div>
                   </div>
                 </div>
-                <div className="flex justify-between items-center pt-1.5 border-t border-slate-800/80">
-                  <span className="text-slate-400">Fabbisogno Addizionale:</span>
-                  <span className="font-black text-amber-300">+{formatEUR(deltaWorkingCapital)}</span>
-                </div>
-              </div>
-            </div>
 
-            {/* 3. PROIEZIONE COMPLESSIVA (Status Quo + Potenziali) */}
-            <div className="bg-gradient-to-br from-[#164e87] via-[#0f3b75] to-[#0b2440] rounded-2xl p-5 border border-cyan-400/60 relative overflow-hidden flex flex-col justify-between shadow-xl shadow-cyan-950/40">
-              <div className="absolute top-0 right-0 bg-cyan-400/20 text-cyan-200 px-3 py-1 text-[11px] font-black rounded-bl-xl border-l border-b border-cyan-400/50">
-                SCENARIO A REGIME
-              </div>
-              <div>
-                <div className="flex items-center space-x-2 mb-2">
-                  <TrendingUp className="w-3.5 h-3.5 text-cyan-300" />
-                  <h3 className="text-xs font-black text-cyan-300 uppercase tracking-wider">
-                    Proiezione Globale a Regime
-                  </h3>
-                </div>
-                <div className="flex items-baseline space-x-2">
-                  <span className="text-3xl font-black text-white">{combinedTotals.count}</span>
-                  <span className="text-xs text-cyan-200 font-semibold">commesse totali previste</span>
-                </div>
-              </div>
+                {/* 3. SCENARIO A REGIME COMBINATO */}
+                <div className="bg-gradient-to-br from-blue-50/80 to-slate-50 rounded-xl p-4 border border-blue-300 shadow-xs flex flex-col justify-between">
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center space-x-1.5">
+                        <TrendingUp className="w-3.5 h-3.5 text-[#164e87]" />
+                        <h4 className="text-xs font-black text-[#164e87] uppercase tracking-wider">
+                          Scenario Globale a Regime
+                        </h4>
+                      </div>
+                      <span className="text-[10px] font-black bg-[#164e87]/15 text-[#164e87] px-2 py-0.5 rounded-full border border-blue-300">
+                        Totale
+                      </span>
+                    </div>
+                    <div className="flex items-baseline space-x-2">
+                      <span className="text-2xl font-black text-slate-900">{combinedTotals.count}</span>
+                      <span className="text-xs text-slate-500 font-medium">commesse previste</span>
+                    </div>
+                  </div>
 
-              <div className="mt-4 pt-3 border-t border-cyan-800/60 space-y-2 text-xs">
-                <div className="flex justify-between items-center">
-                  <span className="text-cyan-100">Fatturato Complessivo:</span>
-                  <span className="font-black text-white text-sm">{formatEUR(combinedTotals.revenueMonthly)}/m</span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-cyan-100">Fatturato Annuo Stimato:</span>
-                  <span className="font-bold text-cyan-200">{formatEUR(combinedTotals.revenueMonthly * 12)}</span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-cyan-100">Costi Totali Complessivi:</span>
-                  <span className="font-medium text-slate-200">{formatEUR(combinedTotals.costMonthly)}/m</span>
-                </div>
-                <div className="flex justify-between items-center pt-1.5 border-t border-cyan-800/80">
-                  <span className="text-white font-bold">M.O.L. Totale Aziendale:</span>
-                  <div className="text-right">
-                    <span className="font-black text-emerald-300 block text-sm">{formatEUR(combinedTotals.molMonthly)}</span>
-                    <span className="text-[10px] text-emerald-200 font-bold">Margine: {formatPercent(combinedTotals.molPercent)}</span>
+                  <div className="mt-3 pt-2.5 border-t border-blue-200/60 space-y-1.5 text-xs">
+                    <div className="flex justify-between items-center">
+                      <span className="text-slate-600">Fatturato Complessivo:</span>
+                      <span className="font-black text-slate-900">{formatEUR(combinedTotals.revenueMonthly)}/m</span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-slate-600">Costi Totali:</span>
+                      <span className="font-medium text-slate-800">{formatEUR(combinedTotals.costMonthly)}/m</span>
+                    </div>
+                    <div className="flex justify-between items-center pt-1 border-t border-blue-200/60">
+                      <span className="text-[#164e87] font-bold">M.O.L. Globale:</span>
+                      <span className="font-black text-emerald-700">{formatEUR(combinedTotals.molMonthly)} ({formatPercent(combinedTotals.molPercent)})</span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-slate-600">Picco Fabbisogno:</span>
+                      <span className="font-black text-amber-700">{formatEUR(combinedTotals.workingCapital)}</span>
+                    </div>
                   </div>
                 </div>
-                <div className="flex justify-between items-center pt-1.5 border-t border-cyan-800/80">
-                  <span className="text-cyan-100">Fabbisogno Cassa di Picco:</span>
-                  <div className="text-right">
-                    <span className="font-black text-amber-300 block text-sm">{formatEUR(combinedTotals.workingCapital)}</span>
-                    <span className="text-[10px] text-cyan-200">Fido cons.: {formatEUR(combinedTotals.creditLine)}</span>
-                  </div>
-                </div>
+
               </div>
             </div>
-
-          </div>
-
-          {/* Selettore Vista Tabella */}
-          <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-slate-700/60 text-xs">
-            <div className="flex items-center space-x-2">
-              <span className="text-slate-400 font-bold">Visualizza in Tabella:</span>
-              <div className="inline-flex rounded-xl bg-slate-900/90 p-1 border border-slate-700">
-                <button
-                  type="button"
-                  onClick={() => setSelectedScenario('consolidated')}
-                  className={`px-3 py-1.5 rounded-lg font-bold text-xs transition ${
-                    selectedScenario === 'consolidated' || selectedScenario === 'whatIf'
-                      ? 'bg-[#164e87] text-white shadow-sm'
-                      : 'text-slate-300 hover:text-white'
-                  }`}
-                >
-                  🌐 Tutto il Portfolio ({projects.length})
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSelectedScenario('active2026')}
-                  className={`px-3 py-1.5 rounded-lg font-bold text-xs transition ${
-                    selectedScenario === 'active2026'
-                      ? 'bg-emerald-700 text-white shadow-sm'
-                      : 'text-slate-300 hover:text-white'
-                  }`}
-                >
-                  🏢 Solo Status Quo ({statusQuoProjects.length})
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSelectedScenario('futureOnly')}
-                  className={`px-3 py-1.5 rounded-lg font-bold text-xs transition ${
-                    selectedScenario === 'futureOnly'
-                      ? 'bg-amber-600 text-slate-950 font-black shadow-sm'
-                      : 'text-slate-300 hover:text-white'
-                  }`}
-                >
-                  ⚡ Solo Trattative &amp; Potenziali ({allPotentialProjects.length})
-                </button>
-              </div>
-            </div>
-
-            <p className="text-[11px] text-slate-400 italic">
-              💡 Spunta o deseleziona la casella "Simula" accanto alle commesse in trattativa per aggiornare in tempo reale la proiezione globale.
-            </p>
-          </div>
+          )}
         </div>
 
         {/* Filter Controls con design moderno */}
