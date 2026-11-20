@@ -51,15 +51,36 @@ const DashboardPage = () => {
     setProjects(storageService.getProjects());
   }, []);
 
-  const financialModel = calculateAnnualBudgetAndCashFlow(projects, {
+  const [portfolioScope, setPortfolioScope] = useState('consolidated'); // 'consolidated' | 'activeOnly' | 'potentialOnly'
+
+  const isPotentialProject = (p) => {
+    if (!p) return false;
+    if (p.contractStatus) return p.contractStatus === 'potential' || p.contractStatus === 'simulation' || p.contractStatus === 'negotiation';
+    if (p.isPipelineFuture !== undefined) return Boolean(p.isPipelineFuture);
+    const start = p.startDate ? new Date(p.startDate) : new Date();
+    const today = new Date();
+    return start > today || (p.notes && (p.notes.toLowerCase().includes('preventivo') || p.notes.toLowerCase().includes('trattativa') || p.notes.toLowerCase().includes('simulazione'))) || (p.code && (p.code.startsWith('PRJ-FUT') || p.code.startsWith('SIM-')));
+  };
+
+  const effectiveProjects = useMemo(() => {
+    if (portfolioScope === 'activeOnly') {
+      return projects.filter(p => !isPotentialProject(p));
+    }
+    if (portfolioScope === 'potentialOnly') {
+      return projects.filter(p => isPotentialProject(p));
+    }
+    return projects;
+  }, [projects, portfolioScope]);
+
+  const financialModel = calculateAnnualBudgetAndCashFlow(effectiveProjects, {
     year: selectedYear,
     initialCashBalance: 30000
   });
 
   // Modelli pluriennali per confronto strategico
-  const model2025 = useMemo(() => calculateAnnualBudgetAndCashFlow(projects, { year: 2025, rolloverPreviousYearBudget: false }), [projects]);
-  const model2026 = useMemo(() => calculateAnnualBudgetAndCashFlow(projects, { year: 2026, rolloverPreviousYearBudget: false }), [projects]);
-  const model2027 = useMemo(() => calculateAnnualBudgetAndCashFlow(projects, { year: 2027, rolloverPreviousYearBudget: true }), [projects]);
+  const model2025 = useMemo(() => calculateAnnualBudgetAndCashFlow(effectiveProjects, { year: 2025, rolloverPreviousYearBudget: false }), [effectiveProjects]);
+  const model2026 = useMemo(() => calculateAnnualBudgetAndCashFlow(effectiveProjects, { year: 2026, rolloverPreviousYearBudget: false }), [effectiveProjects]);
+  const model2027 = useMemo(() => calculateAnnualBudgetAndCashFlow(effectiveProjects, { year: 2027, rolloverPreviousYearBudget: true }), [effectiveProjects]);
 
   const {
     annualRevenue,
@@ -139,6 +160,19 @@ const DashboardPage = () => {
             </div>
 
             <div className="flex flex-wrap items-center gap-3">
+              <div className="flex items-center bg-white/10 hover:bg-white/15 transition backdrop-blur-md rounded-xl px-2.5 py-1.5 border border-white/20">
+                <select
+                  value={portfolioScope}
+                  onChange={(e) => setPortfolioScope(e.target.value)}
+                  className="bg-transparent text-white font-bold text-xs outline-none cursor-pointer [&>option]:text-slate-900"
+                  title="Filtro perimetro aziendale: Status Quo consolidato vs con Trattative"
+                >
+                  <option value="consolidated">🌐 Tutto il Portfolio ({projects.length})</option>
+                  <option value="activeOnly">🏢 Solo Status Quo (Contratti Attivi)</option>
+                  <option value="potentialOnly">⚡ Solo Trattative &amp; Simulazioni</option>
+                </select>
+              </div>
+
               <div className="flex items-center bg-white/10 hover:bg-white/15 transition backdrop-blur-md rounded-xl px-2.5 py-1.5 border border-white/20">
                 <Calendar className="w-4 h-4 text-emerald-300 mr-2" />
                 <select

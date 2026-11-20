@@ -30,7 +30,8 @@ import {
   Droplets,
   Wifi,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  Sparkles
 } from 'lucide-react';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -371,16 +372,19 @@ const SimulationPage = () => {
   };
 
   // Salva direttamente nel Budget Commesse FOUR passando TUTTI i parametri e le nuove voci
-  const handleSaveAsProject = () => {
+  const [saveMode, setSaveMode] = useState(null); // 'potential' | 'active'
+
+  const handleSaveAsProject = (statusType = 'potential') => {
     if (!simulationResult) return;
+    const isPotential = statusType === 'potential';
 
     const leaseTiming = simulationResult.leasePaymentTiming || leasePaymentTiming;
     const leaseTerms = leaseTiming === 'M1_D10' ? 0 : leaseTiming === 'M1_D30' ? 30 : 60;
 
     const newProject = {
-      code: 'PRJ-' + Math.floor(100 + Math.random() * 900),
+      code: (isPotential ? 'SIM-' : 'PRJ-') + Math.floor(100 + Math.random() * 900),
       name: clientName && routeName ? `${clientName} - ${routeName}` : `Linea con ${simulationResult.vehicle.name}`,
-      client: clientName || 'Nuovo Committente',
+      client: clientName || (isPotential ? 'Trattativa Commerciale' : 'Nuovo Committente'),
       route: routeName || `${kmTotal} km giornalieri`,
       startDate: new Date().toISOString().slice(0, 10),
       operatingMonths: Number(operatingMonths) || 36,
@@ -428,6 +432,8 @@ const SimulationPage = () => {
       monthlyMol: +simulationResult.monthlyMol.toFixed(2),
       molPercent: simulationResult.molPercent,
       targetMarginPercent: Number(targetMarginPercent) || 21,
+      contractStatus: isPotential ? 'potential' : 'active',
+      isPipelineFuture: isPotential,
       paymentTermsClient,
       paymentTermsSuppliers,
       paymentTermsLease: leaseTerms,
@@ -444,10 +450,11 @@ const SimulationPage = () => {
       acciseRecoveryEligible: energyPayer !== 'client',
       depositAmount: 0,
       cashAdvanceRequired: +simulationResult.workingCapitalNeed.toFixed(2),
-      notes: `Preventivo generato dal simulatore con margine target ${simulationResult.molPercent}%${extraCostDescription ? ` | Extra: ${extraCostDescription}` : ''}`
+      notes: `${isPotential ? 'Trattativa / Simulazione potenziale' : 'Contratto operativo attivo'} generato dal simulatore con margine target ${simulationResult.molPercent}%${extraCostDescription ? ` | Extra: ${extraCostDescription}` : ''}`
     };
 
     storageService.addProject(newProject);
+    setSaveMode(statusType);
     setSaveSuccess(true);
     setTimeout(() => {
       navigate('/projects');
@@ -1396,25 +1403,43 @@ const SimulationPage = () => {
                   )}
                 </div>
 
-                {/* Bottone "Aggiungi al Budget Commesse FOUR" */}
-                <div className="flex items-center space-x-3">
-                  <button
-                    onClick={handleSaveAsProject}
-                    disabled={saveSuccess}
-                    className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-extrabold shadow-md transition flex items-center justify-center space-x-2 text-sm disabled:opacity-50"
-                  >
-                    {saveSuccess ? (
-                      <>
-                        <CheckCircle2 className="w-5 h-5" />
-                        <span>Commessa Aggiunta al Budget! Reindirizzamento...</span>
-                      </>
-                    ) : (
-                      <>
-                        <Save className="w-5 h-5" />
-                        <span>Salva nel Budget & Cash Flow Annuale</span>
-                      </>
-                    )}
-                  </button>
+                {/* Bottoni Salvataggio nel Portfolio FOUR: Trattativa Potenziale vs Contratto Attivo */}
+                <div className="space-y-2">
+                  {saveSuccess ? (
+                    <div className="py-3 px-4 bg-emerald-600 text-white rounded-xl font-extrabold shadow-md flex items-center justify-center space-x-2 text-sm">
+                      <CheckCircle2 className="w-5 h-5 text-emerald-200" />
+                      <span>
+                        {saveMode === 'potential'
+                          ? 'Salvato come Trattativa Potenziale! Reindirizzamento al Portfolio...'
+                          : 'Salvato come Contratto Attivo! Reindirizzamento al Portfolio...'}
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <button
+                        type="button"
+                        onClick={() => handleSaveAsProject('potential')}
+                        className="py-3 px-4 bg-amber-500 hover:bg-amber-600 text-slate-950 rounded-xl font-black shadow-md transition flex items-center justify-center space-x-2 text-xs"
+                        title="Salva questa simulazione come Trattativa/Potenziale per testarne l'impatto sul progetto nella sua interezza"
+                      >
+                        <Sparkles className="w-4 h-4 text-slate-950" />
+                        <span>Salva come Trattativa / Simulazione</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleSaveAsProject('active')}
+                        className="py-3 px-4 bg-[#164e87] hover:bg-[#0b2440] text-white rounded-xl font-black shadow-md transition flex items-center justify-center space-x-2 text-xs border border-cyan-400/40"
+                        title="Salva direttamente come Contratto Attivo a regime nel budget operativo"
+                      >
+                        <Save className="w-4 h-4 text-cyan-300" />
+                        <span>Salva come Contratto Attivo</span>
+                      </button>
+                    </div>
+                  )}
+                  <p className="text-[11px] text-slate-400 text-center">
+                    Salvando come <strong>Trattativa / Simulazione</strong> potrai valutare in tempo reale cosa accade al progetto nella sua interezza prima di promuoverla a contratto definitivo.
+                  </p>
                 </div>
               </div>
             ) : (

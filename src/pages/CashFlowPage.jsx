@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import storageService from '../services/storageService';
 import {
   calculateAnnualBudgetAndCashFlow,
@@ -68,8 +68,29 @@ const CashFlowPage = () => {
     }
   };
 
+  const [portfolioScope, setPortfolioScope] = useState('consolidated'); // 'consolidated' | 'activeOnly' | 'potentialOnly'
+
+  const isPotentialProject = (p) => {
+    if (!p) return false;
+    if (p.contractStatus) return p.contractStatus === 'potential' || p.contractStatus === 'simulation' || p.contractStatus === 'negotiation';
+    if (p.isPipelineFuture !== undefined) return Boolean(p.isPipelineFuture);
+    const start = p.startDate ? new Date(p.startDate) : new Date();
+    const today = new Date();
+    return start > today || (p.notes && (p.notes.toLowerCase().includes('preventivo') || p.notes.toLowerCase().includes('trattativa') || p.notes.toLowerCase().includes('simulazione'))) || (p.code && (p.code.startsWith('PRJ-FUT') || p.code.startsWith('SIM-')));
+  };
+
+  const effectiveProjects = useMemo(() => {
+    if (portfolioScope === 'activeOnly') {
+      return projects.filter(p => !isPotentialProject(p));
+    }
+    if (portfolioScope === 'potentialOnly') {
+      return projects.filter(p => isPotentialProject(p));
+    }
+    return projects;
+  }, [projects, portfolioScope]);
+
   // Calcolo del budget e cash flow con il nuovo motore avanzato
-  const financialModel = calculateAnnualBudgetAndCashFlow(projects, {
+  const financialModel = calculateAnnualBudgetAndCashFlow(effectiveProjects, {
     year: selectedYear,
     initialCashBalance: initialCash,
     stressTestClientDays: stressTestDays,
@@ -232,6 +253,17 @@ const CashFlowPage = () => {
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            <select
+              value={portfolioScope}
+              onChange={(e) => setPortfolioScope(e.target.value)}
+              className="text-xs font-bold py-2 px-3 rounded-xl border border-slate-300 bg-white focus:ring-2 focus:ring-[#164e87] shadow-sm text-slate-800"
+              title="Scegli se analizzare solo lo Status Quo consolidato o includere le trattative e simulazioni"
+            >
+              <option value="consolidated">🌐 Tutto il Portfolio ({projects.length})</option>
+              <option value="activeOnly">🏢 Solo Status Quo (Contratti Attivi)</option>
+              <option value="potentialOnly">⚡ Solo Trattative &amp; Simulazioni</option>
+            </select>
+
             <select
               value={selectedYear}
               onChange={(e) => setSelectedYear(parseInt(e.target.value))}
