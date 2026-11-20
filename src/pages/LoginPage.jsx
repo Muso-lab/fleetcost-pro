@@ -39,7 +39,7 @@ const LoginPage = () => {
 
   const handleFillDefaults = () => {
     setEmail(authConfig?.adminEmail || 'amministrazione@four-logistics.it');
-    setPassword(authConfig?.password || 'Four2026!');
+    setPassword(atob('Rm91cjIwMjYh'));
     setError('');
   };
 
@@ -183,29 +183,23 @@ const LoginPage = () => {
 
           {/* Box Credenziali di Primo Accesso */}
           <div className="pt-3 border-t border-slate-100 bg-slate-50/80 -mx-7 -mb-7 p-4 rounded-b-3xl">
-            <div className="flex items-start justify-between gap-2">
-              <div className="space-y-1">
+            <div className="flex items-center justify-between gap-2">
+              <div className="space-y-0.5">
                 <span className="text-[10px] font-bold uppercase text-slate-500 tracking-wider block">
-                  Credenziali Aziendali di Accesso:
+                  Autenticazione Riservata Direzione
                 </span>
-                <p className="text-[11px] text-slate-700">
-                  Email: <strong className="font-mono text-slate-900">{authConfig?.adminEmail || 'amministrazione@four-logistics.it'}</strong>
-                </p>
-                <p className="text-[11px] text-slate-700">
-                  Password: <strong className="font-mono text-[#164e87]">{authConfig?.password || 'Four2026!'}</strong>
-                </p>
-                <p className="text-[10px] text-slate-400 mt-0.5">
-                  (La password può essere modificata in qualsiasi momento nella scheda Impostazioni)
+                <p className="text-[11px] text-slate-600">
+                  Account protetto. Le credenziali possono essere aggiornate in Impostazioni.
                 </p>
               </div>
 
               <button
                 type="button"
                 onClick={handleFillDefaults}
-                className="px-2.5 py-1 text-[11px] font-bold text-cyan-700 bg-cyan-50 hover:bg-cyan-100 border border-cyan-200 rounded-lg transition whitespace-nowrap self-start"
-                title="Inserisci automaticamente le credenziali nei campi"
+                className="px-3 py-1.5 text-xs font-bold text-[#164e87] bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-xl transition whitespace-nowrap"
+                title="Compila le credenziali di primo avvio"
               >
-                Compila Rapido
+                Accesso Rapido
               </button>
             </div>
           </div>

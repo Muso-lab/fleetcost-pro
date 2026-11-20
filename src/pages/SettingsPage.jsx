@@ -42,7 +42,7 @@ const SettingsPage = () => {
   const [pwdError, setPwdError] = useState('');
   const [pwdSuccess, setPwdSuccess] = useState('');
 
-  const handleChangePassword = (e) => {
+  const handleChangePassword = async (e) => {
     e.preventDefault();
     setPwdError('');
     setPwdSuccess('');
@@ -53,7 +53,7 @@ const SettingsPage = () => {
     }
 
     try {
-      updatePassword(oldPassword, newPassword);
+      await updatePassword(oldPassword, newPassword);
       setPwdSuccess('Password aggiornata con successo! La nuova password è ora attiva.');
       setOldPassword('');
       setNewPassword('');

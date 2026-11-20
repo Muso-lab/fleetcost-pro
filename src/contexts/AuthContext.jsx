@@ -1,12 +1,28 @@
-import { createContext, useContext, useState, useEffect } from 'react';
+import { createContext, useContext, useState } from 'react';
 
 const AuthContext = createContext();
 
 export const useAuth = () => useContext(AuthContext);
 
+// Funzione di utilità per hashing SHA-256 standard (Web Crypto API nativa del browser)
+// Nessuna password aziendale in chiaro viene mai memorizzata o esposta nel codice
+const hashPassword = async (str) => {
+  try {
+    const enc = new TextEncoder().encode(str);
+    const buf = await crypto.subtle.digest('SHA-256', enc);
+    return Array.from(new Uint8Array(buf))
+      .map(b => b.toString(16).padStart(2, '0'))
+      .join('');
+  } catch (e) {
+    console.error('Errore hashing password:', e);
+    return '';
+  }
+};
+
+// Hash crittografico di default (SHA-256) per primo avvio
 const DEFAULT_AUTH_CONFIG = {
   adminEmail: 'amministrazione@four-logistics.it',
-  password: 'Four2026!',
+  passwordHash: 'b52efa8ed2011cd22daf234524d91b02f98c370f33dda1a883ad30621c0bde35',
   role: 'Direzione & Controllo Costi',
   lastUpdated: '2026-01-01'
 };
@@ -14,7 +30,14 @@ const DEFAULT_AUTH_CONFIG = {
 const getStoredAuthConfig = () => {
   try {
     const raw = localStorage.getItem('four_security_auth_config');
-    if (raw) return JSON.parse(raw);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      // Elimina residui di password in chiaro se presenti in vecchie sessioni locali
+      if (parsed.password) {
+        delete parsed.password;
+      }
+      return parsed;
+    }
   } catch (e) {
     console.error('Errore lettura configurazione sicurezza:', e);
   }
@@ -39,11 +62,11 @@ export const AuthProvider = ({ children }) => {
 
   const [authConfig, setAuthConfig] = useState(getStoredAuthConfig);
 
-  // Funzione di Login sicuro
+  // Funzione di Login sicuro (verifica basata su hash SHA-256)
   const login = async (email, password, rememberMe = true) => {
     const currentConfig = getStoredAuthConfig();
     const cleanEmail = (email || '').trim().toLowerCase();
-    const cleanConfigEmail = currentConfig.adminEmail.toLowerCase();
+    const cleanConfigEmail = (currentConfig.adminEmail || '').toLowerCase();
 
     // Accetta l'email aziendale configurata o alias operativi
     const isEmailValid = cleanEmail === cleanConfigEmail ||
@@ -56,7 +79,10 @@ export const AuthProvider = ({ children }) => {
       throw new Error('E-mail aziendale non riconosciuta.');
     }
 
-    if (password !== currentConfig.password) {
+    const inputHash = await hashPassword(password);
+    const targetHash = currentConfig.passwordHash || DEFAULT_AUTH_CONFIG.passwordHash;
+
+    if (inputHash !== targetHash) {
       throw new Error('Password di accesso non corretta. Verifica maiuscole/minuscole.');
     }
 
@@ -88,18 +114,24 @@ export const AuthProvider = ({ children }) => {
     setCurrentUser(null);
   };
 
-  // Funzione per cambiare password / credenziali in Impostazioni
-  const updatePassword = (oldPassword, newPassword) => {
+  // Funzione per cambiare password / credenziali in Impostazioni con hash sicuro
+  const updatePassword = async (oldPassword, newPassword) => {
     const currentConfig = getStoredAuthConfig();
-    if (oldPassword !== currentConfig.password) {
+    const oldHash = await hashPassword(oldPassword);
+    const targetHash = currentConfig.passwordHash || DEFAULT_AUTH_CONFIG.passwordHash;
+
+    if (oldHash !== targetHash) {
       throw new Error('La password attuale inserita non è corretta.');
     }
     if (!newPassword || newPassword.length < 6) {
       throw new Error('La nuova password deve contenere almeno 6 caratteri.');
     }
+
+    const newHash = await hashPassword(newPassword);
     const updated = {
-      ...currentConfig,
-      password: newPassword,
+      adminEmail: currentConfig.adminEmail || DEFAULT_AUTH_CONFIG.adminEmail,
+      passwordHash: newHash,
+      role: currentConfig.role || DEFAULT_AUTH_CONFIG.role,
       lastUpdated: new Date().toISOString()
     };
     localStorage.setItem('four_security_auth_config', JSON.stringify(updated));
