@@ -554,7 +554,7 @@ const DashboardPage = () => {
             <div className="mt-4 p-2.5 bg-emerald-50/70 border border-emerald-200/80 rounded-xl space-y-0.5">
               <div className="flex items-baseline justify-between">
                 <span className="text-[11px] font-bold text-emerald-800">Media Mensile:</span>
-                <span className={`text-sm font-black ${annualMolAvg >= 0 ? 'text-emerald-700' : 'text-rose-600'}`}>
+                <span className={`text-sm font-black ${monthlyMolAvg >= 0 ? 'text-emerald-700' : 'text-rose-600'}`}>
                   {formatEUR(monthlyMolAvg)} /m
                 </span>
               </div>
