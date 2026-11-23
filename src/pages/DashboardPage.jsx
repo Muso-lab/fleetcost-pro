@@ -5,7 +5,9 @@ import {
   calculateAnnualBudgetAndCashFlow,
   calculateSingleProjectMetrics,
   formatEUR,
-  formatPercent
+  formatPercent,
+  OPERATING_UNITS,
+  getProjectOperatingUnit
 } from '../utils/cashFlowCalculations';
 import {
   LayoutDashboard,
@@ -30,7 +32,10 @@ import {
   Sparkles,
   Filter,
   Wallet,
-  Activity
+  Activity,
+  ArrowUpDown,
+  GripVertical,
+  MapPin
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -52,11 +57,46 @@ const DashboardPage = () => {
   const [projects, setProjects] = useState([]);
   const [selectedYear, setSelectedYear] = useState(2026);
   const [portfolioScope, setPortfolioScope] = useState('consolidated'); // 'consolidated' | 'activeOnly' | 'potentialOnly'
+  const [dashboardSortBy, setDashboardSortBy] = useState(() => localStorage.getItem('four_dashboard_sort_by') || 'custom');
+  const [dashboardHubFilter, setDashboardHubFilter] = useState('all');
+  const [draggedProjectId, setDraggedProjectId] = useState(null);
 
   useEffect(() => {
     setFleet(storageService.getFleet());
     setProjects(storageService.getProjects());
   }, []);
+
+  const handleMoveDashboardProject = (projectId, direction) => {
+    const currentIndex = projects.findIndex(p => p.id === projectId);
+    if (currentIndex === -1) return;
+    const targetIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
+    if (targetIndex < 0 || targetIndex >= projects.length) return;
+
+    const newProjects = [...projects];
+    const [moved] = newProjects.splice(currentIndex, 1);
+    newProjects.splice(targetIndex, 0, moved);
+
+    storageService.saveProjects(newProjects);
+    setProjects(newProjects);
+  };
+
+  const handleDashboardDrop = (e, targetProjectId) => {
+    e.preventDefault();
+    const sourceId = e.dataTransfer.getData('text/plain') || draggedProjectId;
+    setDraggedProjectId(null);
+    if (!sourceId || sourceId === targetProjectId) return;
+
+    const sourceIndex = projects.findIndex(p => p.id === sourceId);
+    const targetIndex = projects.findIndex(p => p.id === targetProjectId);
+    if (sourceIndex === -1 || targetIndex === -1) return;
+
+    const newProjects = [...projects];
+    const [moved] = newProjects.splice(sourceIndex, 1);
+    newProjects.splice(targetIndex, 0, moved);
+
+    storageService.saveProjects(newProjects);
+    setProjects(newProjects);
+  };
 
   // Riconosce le commesse in trattativa / simulazione / potenziale
   const isPotentialProject = (p) => {
@@ -200,6 +240,40 @@ const DashboardPage = () => {
     { name: 'Facchinaggio', value: Math.round(annualCostBreakdown.porterage), color: '#a855f7' },
     { name: 'Margine Terzisti', value: Math.round(annualCostBreakdown.partner), color: '#ec4899' }
   ].filter(item => item.value > 0);
+
+  // Commesse per la tabella rapida della dashboard con ordinamento e filtro per Unità Operativa
+  const displayDashboardProjects = useMemo(() => {
+    let list = [...effectiveProjects];
+
+    if (dashboardHubFilter !== 'all') {
+      list = list.filter(p => {
+        const v = fleet.find(item => item.id === p.vehicleId);
+        return getProjectOperatingUnit(p, v) === dashboardHubFilter;
+      });
+    }
+
+    if (dashboardSortBy === 'operatingUnit') {
+      const order = { 'Arborio': 1, 'Buccinasco': 2, 'Landriano': 3, 'Caorso': 4, 'Bologna': 5, 'Altro / Sede': 6 };
+      list.sort((a, b) => {
+        const vA = fleet.find(item => item.id === a.vehicleId);
+        const vB = fleet.find(item => item.id === b.vehicleId);
+        const uA = getProjectOperatingUnit(a, vA);
+        const uB = getProjectOperatingUnit(b, vB);
+        const orderA = order[uA] || 99;
+        const orderB = order[uB] || 99;
+        if (orderA !== orderB) return orderA - orderB;
+        return (a.name || '').localeCompare(b.name || '');
+      });
+    } else if (dashboardSortBy === 'client') {
+      list.sort((a, b) => (a.client || '').localeCompare(b.client || ''));
+    } else if (dashboardSortBy === 'molDesc') {
+      list.sort((a, b) => (b.monthlyMol || 0) - (a.monthlyMol || 0));
+    } else if (dashboardSortBy === 'revenueDesc') {
+      list.sort((a, b) => (b.monthlyRevenue || 0) - (a.monthlyRevenue || 0));
+    }
+
+    return list;
+  }, [effectiveProjects, dashboardHubFilter, dashboardSortBy, fleet]);
 
   const getScopeBadge = () => {
     if (portfolioScope === 'activeOnly') {
@@ -1091,28 +1165,68 @@ const DashboardPage = () => {
 
         {/* TABELLA RAPIDA COMMESSE DELLO SCENARIO SELEZIONATO */}
         <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden p-6 space-y-4">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
             <div>
-              <h3 className="text-sm font-bold text-slate-900">
-                Elenco Commesse nello Scenario ({effectiveProjects.length})
-              </h3>
-              <p className="text-xs text-slate-500">
-                Visualizzazione filtered: <strong className="text-slate-800">{scopeBadge.label}</strong>
+              <div className="flex items-center space-x-2">
+                <Briefcase className="w-4 h-4 text-[#164e87]" />
+                <h3 className="text-sm font-bold text-slate-900">
+                  Elenco Commesse nello Scenario ({displayDashboardProjects.length})
+                </h3>
+              </div>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Perimetro: <strong className="text-slate-800">{scopeBadge.label}</strong> • Riorganizza liberamente con Drag &amp; Drop o per Unità
               </p>
             </div>
-            <Link to="/projects" className="text-xs text-emerald-700 font-bold hover:underline flex items-center">
-              <span>Gestisci tutte in Commesse</span>
-              <ArrowRight className="w-3.5 h-3.5 ml-1" />
-            </Link>
+
+            <div className="flex flex-wrap items-center gap-2">
+              {/* Filtro Unità Operativa */}
+              <select
+                value={dashboardHubFilter}
+                onChange={(e) => setDashboardHubFilter(e.target.value)}
+                className="text-xs font-semibold py-1.5 px-2.5 rounded-xl border border-slate-300 bg-white text-slate-700 focus:ring-2 focus:ring-[#164e87] outline-none cursor-pointer"
+              >
+                <option value="all">Tutti i Poli / Unità</option>
+                {OPERATING_UNITS.map(hub => (
+                  <option key={hub} value={hub}>📍 Polo {hub}</option>
+                ))}
+              </select>
+
+              {/* Selettore Ordinamento */}
+              <div className="flex items-center space-x-1">
+                <ArrowUpDown className="w-3.5 h-3.5 text-[#164e87]" />
+                <select
+                  value={dashboardSortBy}
+                  onChange={(e) => {
+                    setDashboardSortBy(e.target.value);
+                    localStorage.setItem('four_dashboard_sort_by', e.target.value);
+                  }}
+                  className="text-xs font-bold py-1.5 px-2.5 rounded-xl border border-blue-300 bg-blue-50/60 text-[#164e87] focus:ring-2 focus:ring-[#164e87] outline-none cursor-pointer"
+                  title="Ordinamento commesse dashboard"
+                >
+                  <option value="custom">⇅ Ordine Manuale (Drag &amp; Drop)</option>
+                  <option value="operatingUnit">📍 Raggruppa per Unità Operativa</option>
+                  <option value="client">🏢 Ordina per Cliente (A-Z)</option>
+                  <option value="molDesc">💰 M.O.L. Mensile (dal più alto)</option>
+                  <option value="revenueDesc">📈 Fatturato (dal più alto)</option>
+                </select>
+              </div>
+
+              <Link to="/projects" className="text-xs text-emerald-700 font-bold hover:underline flex items-center ml-1">
+                <span>Gestisci tutte in Commesse</span>
+                <ArrowRight className="w-3.5 h-3.5 ml-1" />
+              </Link>
+            </div>
           </div>
 
           <div className="overflow-x-auto">
             <table className="min-w-full divide-y divide-slate-100 text-left text-xs">
               <thead className="bg-slate-50 text-slate-700 font-bold uppercase">
                 <tr>
+                  <th className="py-2.5 px-2 w-[4%] text-center">Pos.</th>
                   <th className="py-2.5 px-3">Linea / Commessa</th>
                   <th className="py-2.5 px-3">Cliente</th>
-                  <th className="py-2.5 px-3">Tipologia</th>
+                  <th className="py-2.5 px-3">Unità / Polo</th>
+                  <th className="py-2.5 px-3">Gestione</th>
                   <th className="py-2.5 px-3 text-right">Ricavo/Mese</th>
                   <th className="py-2.5 px-3 text-right">Costo/Mese</th>
                   <th className="py-2.5 px-3 text-right">M.O.L./Mese</th>
@@ -1120,17 +1234,59 @@ const DashboardPage = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 font-medium">
-                {effectiveProjects.length === 0 ? (
+                {displayDashboardProjects.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="py-6 text-center text-slate-400 text-xs">
+                    <td colSpan={9} className="py-6 text-center text-slate-400 text-xs">
                       Nessuna commessa presente nel filtro selezionato.
                     </td>
                   </tr>
                 ) : (
-                  effectiveProjects.slice(0, 8).map(p => {
+                  displayDashboardProjects.slice(0, 12).map((p, idx) => {
                     const isPot = isPotentialProject(p);
+                    const veh = fleet.find(item => item.id === p.vehicleId);
+                    const hubName = getProjectOperatingUnit(p, veh);
+
                     return (
-                      <tr key={p.id} className="hover:bg-slate-50 transition">
+                      <tr
+                        key={p.id}
+                        draggable={dashboardSortBy === 'custom'}
+                        onDragStart={(e) => {
+                          e.dataTransfer.setData('text/plain', p.id);
+                          setDraggedProjectId(p.id);
+                        }}
+                        onDragOver={(e) => e.preventDefault()}
+                        onDrop={(e) => handleDashboardDrop(e, p.id)}
+                        className="hover:bg-slate-50 transition group"
+                      >
+                        {/* Riordino Drag & Drop / Up & Down */}
+                        <td className="py-2.5 px-2 text-center" onClick={(e) => e.stopPropagation()}>
+                          {dashboardSortBy === 'custom' ? (
+                            <div className="flex items-center justify-center space-x-1">
+                              <GripVertical className="w-3.5 h-3.5 text-slate-400 group-hover:text-slate-700 cursor-grab active:cursor-grabbing" title="Trascina riga per riordinare" />
+                              <div className="flex flex-col text-[8px] leading-tight text-slate-400">
+                                <button
+                                  type="button"
+                                  onClick={() => handleMoveDashboardProject(p.id, 'up')}
+                                  disabled={idx === 0}
+                                  className="hover:text-blue-700 hover:bg-slate-200 px-0.5 rounded disabled:opacity-20"
+                                  title="Sposta su"
+                                >▲</button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleMoveDashboardProject(p.id, 'down')}
+                                  disabled={idx === displayDashboardProjects.length - 1}
+                                  className="hover:text-blue-700 hover:bg-slate-200 px-0.5 rounded disabled:opacity-20"
+                                  title="Sposta giù"
+                                >▼</button>
+                              </div>
+                            </div>
+                          ) : (
+                            <span className="text-[10px] text-slate-400 font-mono font-bold">
+                              {idx + 1}
+                            </span>
+                          )}
+                        </td>
+
                         <td className="py-2.5 px-3">
                           <div className="flex items-center space-x-2">
                             <span className="font-bold text-slate-900">{p.name}</span>
@@ -1146,6 +1302,12 @@ const DashboardPage = () => {
                           </div>
                         </td>
                         <td className="py-2.5 px-3 text-slate-700">{p.client}</td>
+                        <td className="py-2.5 px-3">
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-50 text-[#164e87] border border-blue-200 flex items-center gap-1 w-fit">
+                            <MapPin className="w-2.5 h-2.5 text-blue-600" />
+                            <span>{hubName}</span>
+                          </span>
+                        </td>
                         <td className="py-2.5 px-3">
                           <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
                             p.managementType === 'D' ? 'bg-emerald-100 text-emerald-800' : 'bg-blue-100 text-blue-800'

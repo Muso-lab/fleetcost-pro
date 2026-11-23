@@ -834,20 +834,26 @@ export const calculateDriverDailyCost = (vehicle, driverShiftType = '1_diurno', 
     return found ? Number(found.dailyCost) : fallback;
   };
 
-  const category = (vehicle?.category || '').toLowerCase() || (
-    vehicle?.licenseTypeId?.startsWith('c_') ? 'motrice' :
-    vehicle?.licenseTypeId?.startsWith('b') ? 'furgone' : 'trattore'
-  );
+  const name = (vehicle?.name || '').toLowerCase();
+  const model = (vehicle?.model || '').toLowerCase();
+  const explicitLicense = (vehicle?.licenseTypeId || '').toLowerCase();
+  // Il Daily 72 (7.2 tonnellate) è un autocarro che richiede obbligatoriamente Patente C (o C1)
+  const isDaily72 = name.includes('72') || model.includes('72') || name.includes('daily 72');
+
+  const category = isDaily72 ? 'motrice' : ((vehicle?.category || '').toLowerCase() || (
+    explicitLicense.startsWith('c') ? 'motrice' :
+    explicitLicense.startsWith('b') ? 'furgone' : 'trattore'
+  ));
 
   let dayCost = getLicCost('ce_diurno', 220);
   let nightCost = getLicCost('ce_notturno', 260);
 
-  if (category === 'furgone') {
-    dayCost = getLicCost('b', 140);
-    nightCost = getLicCost('b_notturno', 170);
-  } else if (category === 'motrice') {
+  if (isDaily72 || explicitLicense.startsWith('c_') || explicitLicense === 'c' || category === 'motrice') {
     dayCost = getLicCost('c_diurno', 180);
     nightCost = getLicCost('c_notturno', 220);
+  } else if (category === 'furgone' && !isDaily72) {
+    dayCost = getLicCost('b', 140);
+    nightCost = getLicCost('b_notturno', 170);
   }
 
   if (driverShiftType === '2_turni') {
@@ -1396,4 +1402,34 @@ export const recalculateProjectCost = (project, fleet = [], trailers = [], setti
     molPercent: +metrics.molPercent.toFixed(2),
     cashAdvanceRequired: metrics.estimatedWorkingCapitalGap
   };
+};
+
+/**
+ * Unità Operative / Poli Logistici ufficiali FOUR
+ */
+export const OPERATING_UNITS = [
+  'Bologna',
+  'Buccinasco',
+  'Landriano',
+  'Caorso',
+  'Arborio'
+];
+
+/**
+ * Risolve l'Unità Operativa (Polo) di una commessa
+ */
+export const getProjectOperatingUnit = (project, vehicle = null) => {
+  if (project?.operatingUnit && project.operatingUnit !== 'auto') {
+    return project.operatingUnit;
+  }
+  if (vehicle?.branch && OPERATING_UNITS.includes(vehicle.branch)) {
+    return vehicle.branch;
+  }
+  const text = `${project?.name || ''} ${project?.route || ''} ${project?.client || ''} ${vehicle?.branch || ''} ${vehicle?.clientSite || ''}`.toLowerCase();
+  if (text.includes('arborio')) return 'Arborio';
+  if (text.includes('landriano')) return 'Landriano';
+  if (text.includes('caorso') || text.includes('piacenza')) return 'Caorso';
+  if (text.includes('buccinasco') || text.includes('milano') || text.includes('cossato') || text.includes('gravedona')) return 'Buccinasco';
+  if (text.includes('bologna') || text.includes('interporto') || text.includes('granarolo') || text.includes('camst') || text.includes('decathlon')) return 'Bologna';
+  return 'Bologna';
 };

@@ -352,8 +352,8 @@ export const DEFAULT_FLEET = [
     clientSite: 'Bologna Città',
     brand: 'Iveco',
     model: 'Daily 72 eDaily',
-    category: 'furgone',
-    categoryLabel: 'Furgone Elettrico 7.2t',
+    category: 'motrice',
+    categoryLabel: 'Autocarro Elettrico 7.2t (Patente C)',
     fuelTypeId: 'elettrico',
     avgConsumption: 0.45,
     yieldKmPerUnit: 2.22,
@@ -366,7 +366,7 @@ export const DEFAULT_FLEET = [
     capacityPlt: 8,
     status: 'assigned',
     assignedProject: 'Distribuzione Urbana Bologna',
-    notes: 'Inclusi 3.000 km/mese.'
+    notes: 'Inclusi 3.000 km/mese. Autocarro 7.2t richiedente Patente C.'
   },
   {
     id: 'veh_6e_iveco_daily_gv018xf',
@@ -377,8 +377,8 @@ export const DEFAULT_FLEET = [
     clientSite: 'Bologna Città',
     brand: 'Iveco',
     model: 'Daily 72 eDaily',
-    category: 'furgone',
-    categoryLabel: 'Furgone Elettrico 7.2t',
+    category: 'motrice',
+    categoryLabel: 'Autocarro Elettrico 7.2t (Patente C)',
     fuelTypeId: 'elettrico',
     avgConsumption: 0.45,
     yieldKmPerUnit: 2.22,
@@ -391,7 +391,7 @@ export const DEFAULT_FLEET = [
     capacityPlt: 8,
     status: 'assigned',
     assignedProject: 'Consegne Notturne Bologna',
-    notes: 'Inclusi 3.000 km/mese (in trasformazione a lungo termine).'
+    notes: 'Inclusi 3.000 km/mese (in trasformazione a lungo termine). Richiesta Patente C.'
   },
   {
     id: 'veh_7e_iveco_daily_gt521re',
@@ -402,8 +402,8 @@ export const DEFAULT_FLEET = [
     clientSite: 'Hub Bologna',
     brand: 'Iveco',
     model: 'Daily 72 eDaily',
-    category: 'furgone',
-    categoryLabel: 'Furgone Elettrico 7.2t',
+    category: 'motrice',
+    categoryLabel: 'Autocarro Elettrico 7.2t (Patente C)',
     fuelTypeId: 'elettrico',
     avgConsumption: 0.45,
     yieldKmPerUnit: 2.22,
@@ -416,7 +416,7 @@ export const DEFAULT_FLEET = [
     capacityPlt: 8,
     status: 'available',
     assignedProject: null,
-    notes: 'Inclusi 3.000 km/mese (in trasformazione a lungo termine).'
+    notes: 'Inclusi 3.000 km/mese (in trasformazione a lungo termine). Richiesta Patente C.'
   },
   {
     id: 'veh_8e_renault_d_gt853re',

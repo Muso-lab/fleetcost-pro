@@ -11,7 +11,9 @@ import {
   getContractValidity,
   isRefrigeratedTrailer,
   calculateDriverDailyCost,
-  calculateAccessoriesDailyCost
+  calculateAccessoriesDailyCost,
+  OPERATING_UNITS,
+  getProjectOperatingUnit
 } from '../utils/cashFlowCalculations';
 import {
   Briefcase,
@@ -45,7 +47,11 @@ import {
   Sparkles,
   ArrowUpRight,
   Check,
-  Eye
+  Eye,
+  GripVertical,
+  ArrowUp,
+  ArrowDown,
+  MapPin
 } from 'lucide-react';
 
 const ProjectsPage = () => {
@@ -60,6 +66,9 @@ const ProjectsPage = () => {
   const [managementFilter, setManagementFilter] = useState('all');
   const [marginFilter, setMarginFilter] = useState('all');
   const [contractFilter, setContractFilter] = useState('all');
+  const [operatingUnitFilter, setOperatingUnitFilter] = useState('all');
+  const [sortBy, setSortBy] = useState(() => localStorage.getItem('four_projects_sort_by') || 'custom');
+  const [draggedProjectId, setDraggedProjectId] = useState(null);
   const [showModal, setShowModal] = useState(false);
   const [showNextYearModal, setShowNextYearModal] = useState(false);
   const [showPerItemTerms, setShowPerItemTerms] = useState(false);
@@ -71,6 +80,7 @@ const ProjectsPage = () => {
     name: '',
     client: '',
     route: '',
+    operatingUnit: 'auto',
     startDate: '2026-01-01',
     operatingMonths: 36, // Default 36 mesi standard contratti FOUR
     workingDaysMonth: 22,
@@ -211,6 +221,7 @@ const ProjectsPage = () => {
         name: project.name || '',
         client: project.client || '',
         route: project.route || '',
+        operatingUnit: project.operatingUnit || 'auto',
         startDate: project.startDate || '2026-01-01',
         operatingMonths: project.operatingMonths || 36,
         workingDaysMonth: project.workingDaysMonth || 22,
@@ -300,6 +311,7 @@ const ProjectsPage = () => {
           : (defaultVeh ? `Servizio con ${defaultVeh.name}` : ''),
         client: isPot ? 'Nuova Trattativa' : '',
         route: '',
+        operatingUnit: 'auto',
         startDate: '2026-01-01',
         operatingMonths: 36,
         workingDaysMonth: workingDays,
@@ -844,6 +856,81 @@ const ProjectsPage = () => {
     return matchesSearch && matchesClient && matchesManagement && matchesMargin && matchesContract;
   });
 
+  // Gestione riordino manuale delle commesse (Drag & Drop e pulsanti Sposta Su/Giù)
+  const handleMoveProject = (projectId, direction) => {
+    const currentIndex = projects.findIndex(p => p.id === projectId);
+    if (currentIndex === -1) return;
+    const targetIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
+    if (targetIndex < 0 || targetIndex >= projects.length) return;
+
+    const newProjects = [...projects];
+    const [moved] = newProjects.splice(currentIndex, 1);
+    newProjects.splice(targetIndex, 0, moved);
+
+    storageService.saveProjects(newProjects);
+    setProjects(newProjects);
+  };
+
+  const handleDragStart = (e, projectId) => {
+    setDraggedProjectId(projectId);
+    e.dataTransfer.setData('text/plain', projectId);
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handleDrop = (e, targetProjectId) => {
+    e.preventDefault();
+    const sourceId = e.dataTransfer.getData('text/plain') || draggedProjectId;
+    setDraggedProjectId(null);
+    if (!sourceId || sourceId === targetProjectId) return;
+
+    const sourceIndex = projects.findIndex(p => p.id === sourceId);
+    const targetIndex = projects.findIndex(p => p.id === targetProjectId);
+    if (sourceIndex === -1 || targetIndex === -1) return;
+
+    const newProjects = [...projects];
+    const [moved] = newProjects.splice(sourceIndex, 1);
+    newProjects.splice(targetIndex, 0, moved);
+
+    storageService.saveProjects(newProjects);
+    setProjects(newProjects);
+  };
+
+  // Ordinamento e filtro per Unità Operativa
+  const displayProjects = useMemo(() => {
+    let list = [...filteredProjects];
+
+    if (operatingUnitFilter !== 'all') {
+      list = list.filter(p => {
+        const v = fleet.find(item => item.id === p.vehicleId);
+        return getProjectOperatingUnit(p, v) === operatingUnitFilter;
+      });
+    }
+
+    if (sortBy === 'operatingUnit') {
+      const order = { 'Arborio': 1, 'Buccinasco': 2, 'Landriano': 3, 'Caorso': 4, 'Bologna': 5, 'Altro / Sede': 6 };
+      list.sort((a, b) => {
+        const vA = fleet.find(item => item.id === a.vehicleId);
+        const vB = fleet.find(item => item.id === b.vehicleId);
+        const uA = getProjectOperatingUnit(a, vA);
+        const uB = getProjectOperatingUnit(b, vB);
+        const orderA = order[uA] || 99;
+        const orderB = order[uB] || 99;
+        if (orderA !== orderB) return orderA - orderB;
+        return (a.name || '').localeCompare(b.name || '');
+      });
+    } else if (sortBy === 'client') {
+      list.sort((a, b) => (a.client || '').localeCompare(b.client || ''));
+    } else if (sortBy === 'molDesc') {
+      list.sort((a, b) => (b.monthlyMol || 0) - (a.monthlyMol || 0));
+    } else if (sortBy === 'revenueDesc') {
+      list.sort((a, b) => (b.monthlyRevenue || 0) - (a.monthlyRevenue || 0));
+    } else if (sortBy === 'marginDesc') {
+      list.sort((a, b) => (b.molPercent || 0) - (a.molPercent || 0));
+    }
+
+    return list;
+  }, [filteredProjects, operatingUnitFilter, sortBy, fleet]);
+
   // Calcoli live per la modal
   const liveModalMetrics = calculateSingleProjectMetrics(formData);
   const liveValidity = getContractValidity(formData);
@@ -1219,6 +1306,37 @@ const ProjectsPage = () => {
                 <option value="expiring">🟡 In Scadenza (≤ 60gg) ({contractStats.expiring})</option>
                 <option value="expired">🔴 Scaduti (&lt; 2026) ({contractStats.expired})</option>
               </select>
+
+              <select
+                value={operatingUnitFilter}
+                onChange={(e) => setOperatingUnitFilter(e.target.value)}
+                className="text-xs font-semibold py-2 px-3 rounded-xl border border-slate-300 bg-white text-slate-700 focus:ring-2 focus:ring-[#164e87] outline-none cursor-pointer"
+              >
+                <option value="all">Tutti i Poli / Unità</option>
+                {OPERATING_UNITS.map(hub => (
+                  <option key={hub} value={hub}>📍 Polo {hub}</option>
+                ))}
+              </select>
+
+              <div className="flex items-center space-x-1">
+                <ArrowUpDown className="w-3.5 h-3.5 text-[#164e87]" />
+                <select
+                  value={sortBy}
+                  onChange={(e) => {
+                    setSortBy(e.target.value);
+                    localStorage.setItem('four_projects_sort_by', e.target.value);
+                  }}
+                  className="text-xs font-bold py-2 px-3 rounded-xl border border-blue-300 bg-blue-50/60 text-[#164e87] focus:ring-2 focus:ring-[#164e87] outline-none cursor-pointer"
+                  title="Ordinamento delle commesse"
+                >
+                  <option value="custom">⇅ Ordine Manuale (Drag &amp; Drop)</option>
+                  <option value="operatingUnit">📍 Raggruppa per Unità Operativa (Arborio, Buccinasco...)</option>
+                  <option value="client">🏢 Ordina per Cliente (A-Z)</option>
+                  <option value="molDesc">💰 M.O.L. Mensile (dal più alto)</option>
+                  <option value="revenueDesc">📈 Fatturato (dal più alto)</option>
+                  <option value="marginDesc">🎯 Margine % (dal più alto)</option>
+                </select>
+              </div>
             </div>
           </div>
         </div>
@@ -1337,15 +1455,16 @@ const ProjectsPage = () => {
             <table className="w-full divide-y divide-slate-200 text-left text-xs">
               <thead className="bg-[#f0f4f9] text-[#164e87] font-extrabold uppercase tracking-wider text-[11px] border-b border-slate-200">
                 <tr>
+                  <th className="py-3 px-2 w-[4%] text-center">Pos.</th>
                   <th className="py-3 px-4 w-[28%]">Commessa, Cliente &amp; Stato</th>
-                  <th className="py-3 px-3 w-[26%]">Mezzo Assegnato &amp; Risorse</th>
-                  <th className="py-3 px-3 w-[20%] text-right">Conto Economico / Mese</th>
-                  <th className="py-3 px-3 w-[14%] text-right">Cassa &amp; Termini</th>
-                  <th className="py-3 px-4 w-[12%] text-center">Azioni</th>
+                  <th className="py-3 px-3 w-[25%]">Mezzo Assegnato &amp; Risorse</th>
+                  <th className="py-3 px-3 w-[19%] text-right">Conto Economico / Mese</th>
+                  <th className="py-3 px-3 w-[13%] text-right">Cassa &amp; Termini</th>
+                  <th className="py-3 px-3 w-[11%] text-center">Azioni</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {filteredProjects.map((project) => {
+                {displayProjects.map((project, idx) => {
                   const metrics = calculateSingleProjectMetrics(project);
                   const validity = getContractValidity(project);
                   const isNegative = metrics.monthlyMol < 0;
@@ -1353,10 +1472,15 @@ const ProjectsPage = () => {
                   const assignedVeh = fleet.find(v => v.id === project.vehicleId);
                   const assignedTrailer = trailers.find(t => t.id === project.trailerId);
                   const isPot = isFutureProject(project);
+                  const hubName = getProjectOperatingUnit(project, assignedVeh);
 
                   return (
                     <tr
                       key={project.id}
+                      draggable={sortBy === 'custom'}
+                      onDragStart={(e) => handleDragStart(e, project.id)}
+                      onDragOver={(e) => e.preventDefault()}
+                      onDrop={(e) => handleDrop(e, project.id)}
                       onClick={() => handleOpenModal(project)}
                       className={`cursor-pointer transition group ${
                         isPot
@@ -1368,10 +1492,39 @@ const ProjectsPage = () => {
                               : 'hover:bg-blue-50/40'
                       }`}
                     >
+                      {/* Colonna Posizione / Riordino Drag & Drop */}
+                      <td className="py-3.5 px-2 text-center" onClick={(e) => e.stopPropagation()}>
+                        {sortBy === 'custom' ? (
+                          <div className="flex items-center justify-center space-x-1">
+                            <GripVertical className="w-3.5 h-3.5 text-slate-400 group-hover:text-slate-700 cursor-grab active:cursor-grabbing" title="Trascina riga per riordinare" />
+                            <div className="flex flex-col text-[8px] leading-tight text-slate-400">
+                              <button
+                                type="button"
+                                onClick={() => handleMoveProject(project.id, 'up')}
+                                disabled={idx === 0}
+                                className="hover:text-blue-700 hover:bg-slate-200 px-0.5 rounded disabled:opacity-20"
+                                title="Sposta su"
+                              >▲</button>
+                              <button
+                                type="button"
+                                onClick={() => handleMoveProject(project.id, 'down')}
+                                disabled={idx === displayProjects.length - 1}
+                                className="hover:text-blue-700 hover:bg-slate-200 px-0.5 rounded disabled:opacity-20"
+                                title="Sposta giù"
+                              >▼</button>
+                            </div>
+                          </div>
+                        ) : (
+                          <span className="text-[10px] text-slate-400 font-mono font-bold">
+                            {idx + 1}
+                          </span>
+                        )}
+                      </td>
+
                       {/* Colonna 1: Commessa, Cliente & Stato */}
                       <td className="py-3.5 px-4 font-semibold text-slate-900">
-                        {/* Riga Superiore: Checkbox + Codice + Badge Stato + Tasto Attiva */}
-                        <div className="flex items-center space-x-2 flex-wrap gap-y-1 mb-1" onClick={(e) => e.stopPropagation()}>
+                        {/* Riga Superiore: Checkbox + Codice + Unità Operativa + Badge Stato + Tasto Attiva */}
+                        <div className="flex items-center space-x-1.5 flex-wrap gap-y-1 mb-1" onClick={(e) => e.stopPropagation()}>
                           {isPot && (
                             <input
                               type="checkbox"
@@ -1388,6 +1541,12 @@ const ProjectsPage = () => {
                               : 'bg-slate-100 text-slate-700 border-slate-200'
                           }`}>
                             {project.code || (isPot ? 'SIM' : 'PRJ')}
+                          </span>
+
+                          {/* Unità Operativa / Polo Badge */}
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-50 text-[#164e87] border border-blue-200 flex items-center gap-1">
+                            <MapPin className="w-2.5 h-2.5 text-blue-600" />
+                            <span>{hubName}</span>
                           </span>
 
                           {isPot ? (
@@ -1695,15 +1854,34 @@ const ProjectsPage = () => {
                   </div>
                 </div>
 
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Tratta / Punti di Carico & Scarico</label>
-                  <input
-                    type="text"
-                    placeholder="Es. Interporto BO - Negozi Decathlon Centro-Nord"
-                    value={formData.route}
-                    onChange={(e) => setFormData({ ...formData, route: e.target.value })}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500"
-                  />
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">Tratta / Punti di Carico &amp; Scarico</label>
+                    <input
+                      type="text"
+                      placeholder="Es. Interporto BO - Negozi Decathlon Centro-Nord"
+                      value={formData.route}
+                      onChange={(e) => setFormData({ ...formData, route: e.target.value })}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1 flex items-center justify-between">
+                      <span>Unità Operativa (Polo Logistico)</span>
+                      <span className="text-[10px] text-slate-400 font-normal">Arborio, Buccinasco, Landriano, Caorso, Bologna</span>
+                    </label>
+                    <select
+                      value={formData.operatingUnit || 'auto'}
+                      onChange={(e) => setFormData({ ...formData, operatingUnit: e.target.value })}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 bg-white"
+                    >
+                      <option value="auto">⚡ Rilevamento Automatico (da Mezzo o Tratta)</option>
+                      {OPERATING_UNITS.map(hub => (
+                        <option key={hub} value={hub}>📍 Polo di {hub}</option>
+                      ))}
+                      <option value="Altro / Sede">🏢 Altro / Sede Centrale</option>
+                    </select>
+                  </div>
                 </div>
 
                 {/* Selezione Mezzo dalla Flotta & Tipologia Gestione */}
@@ -1993,12 +2171,12 @@ const ProjectsPage = () => {
                             <label className="block font-bold text-emerald-900 mb-0.5">Ricavo Giornaliero Riconosciuto da Cliente (€/gg) *</label>
                             <input
                               type="number"
-                              step="10"
+                              step="any"
                               value={formData.revenueDaily}
                               onChange={(e) => {
                                 const rev = parseFloat(e.target.value) || 0;
                                 const cost = liveModalMetrics.totalCostDaily;
-                                const margin = rev > cost ? +(((rev - cost) / rev) * 100).toFixed(1) : 0;
+                                const margin = rev > 0 ? +(((rev - cost) / rev) * 100).toFixed(2) : (rev === 0 ? -100 : 0);
                                 setFormData({ ...formData, revenueDaily: rev, targetMarginPercent: margin });
                               }}
                               className="w-full px-3 py-1.5 border border-emerald-500 rounded-lg font-black text-emerald-800 bg-emerald-50 text-sm"
@@ -2006,25 +2184,32 @@ const ProjectsPage = () => {
                           </div>
                           <div>
                             <label className="block font-bold text-slate-800 mb-0.5 flex items-center justify-between">
-                              <span>Margine Target M.O.L. (%)</span>
-                              <span className="text-[10px] text-emerald-700 font-bold">sul Ricavo</span>
+                              <span>Margine M.O.L. (%)</span>
+                              <span className={`text-[10px] font-bold ${liveModalMetrics.molPercent < 0 ? 'text-rose-600' : 'text-emerald-700'}`}>
+                                {liveModalMetrics.molPercent < 0 ? 'In Perdita' : 'sul Ricavo'}
+                              </span>
                             </label>
                             <div className="flex items-center space-x-1">
                               <input
                                 type="number"
-                                min="1"
-                                max="60"
-                                step="0.5"
-                                value={formData.targetMarginPercent !== undefined ? formData.targetMarginPercent : +liveModalMetrics.molPercent.toFixed(1)}
+                                step="any"
+                                value={formData.targetMarginPercent !== undefined ? formData.targetMarginPercent : +liveModalMetrics.molPercent.toFixed(2)}
                                 onChange={(e) => {
-                                  const margin = parseFloat(e.target.value) || 0;
+                                  const val = e.target.value;
+                                  const margin = val === '' ? 0 : parseFloat(val);
                                   const cost = liveModalMetrics.totalCostDaily;
-                                  const rev = margin < 100 ? +(cost / (1 - (margin / 100))).toFixed(2) : cost * 1.2;
-                                  setFormData({ ...formData, targetMarginPercent: margin, revenueDaily: rev });
+                                  const rev = !isNaN(margin) && margin < 100 ? +(cost / (1 - (margin / 100))).toFixed(2) : cost * 1.2;
+                                  setFormData({ ...formData, targetMarginPercent: isNaN(margin) ? 0 : margin, revenueDaily: rev });
                                 }}
-                                className="w-full px-2 py-1.5 border border-emerald-400 rounded-lg font-black text-emerald-800 bg-white text-xs"
+                                className={`w-full px-2 py-1.5 border rounded-lg font-black text-xs ${
+                                  (formData.targetMarginPercent || 0) < 0
+                                    ? 'border-rose-400 text-rose-700 bg-rose-50'
+                                    : 'border-emerald-400 text-emerald-800 bg-white'
+                                }`}
                               />
-                              <span className="text-emerald-800 font-bold text-xs">%</span>
+                              <span className={`font-bold text-xs ${
+                                (formData.targetMarginPercent || 0) < 0 ? 'text-rose-600' : 'text-emerald-800'
+                              }`}>%</span>
                             </div>
                             <div className="flex gap-1 mt-1 flex-wrap">
                               {[15, 18, 21, 25].map(pct => (
@@ -2351,12 +2536,12 @@ const ProjectsPage = () => {
                           <label className="block font-bold text-slate-900 mb-0.5">Ricavo Giornaliero (€/gg) *</label>
                           <input
                             type="number"
-                            step="10"
+                            step="any"
                             value={formData.revenueDaily}
                             onChange={(e) => {
                               const rev = parseFloat(e.target.value) || 0;
                               const cost = liveModalMetrics.totalCostDaily;
-                              const margin = rev > cost ? +(((rev - cost) / rev) * 100).toFixed(1) : 0;
+                              const margin = rev > 0 ? +(((rev - cost) / rev) * 100).toFixed(2) : (rev === 0 ? -100 : 0);
                               setFormData({ ...formData, revenueDaily: rev, targetMarginPercent: margin });
                             }}
                             className="w-full px-3 py-2 border border-emerald-500 rounded-lg font-black text-emerald-800 bg-emerald-50 text-sm"
@@ -2364,25 +2549,32 @@ const ProjectsPage = () => {
                         </div>
                         <div>
                           <label className="block font-bold text-slate-900 mb-0.5 flex items-center justify-between">
-                            <span>Margine Target M.O.L. (%)</span>
-                            <span className="text-[10px] text-emerald-700 font-bold">sul Ricavo</span>
+                            <span>Margine M.O.L. (%)</span>
+                            <span className={`text-[10px] font-bold ${liveModalMetrics.molPercent < 0 ? 'text-rose-600' : 'text-emerald-700'}`}>
+                              {liveModalMetrics.molPercent < 0 ? 'In Perdita' : 'sul Ricavo'}
+                            </span>
                           </label>
                           <div className="flex items-center space-x-1">
                             <input
                               type="number"
-                              min="1"
-                              max="60"
-                              step="0.5"
-                              value={formData.targetMarginPercent !== undefined ? formData.targetMarginPercent : +liveModalMetrics.molPercent.toFixed(1)}
+                              step="any"
+                              value={formData.targetMarginPercent !== undefined ? formData.targetMarginPercent : +liveModalMetrics.molPercent.toFixed(2)}
                               onChange={(e) => {
-                                const margin = parseFloat(e.target.value) || 0;
+                                const val = e.target.value;
+                                const margin = val === '' ? 0 : parseFloat(val);
                                 const cost = liveModalMetrics.totalCostDaily;
-                                const rev = margin < 100 ? +(cost / (1 - (margin / 100))).toFixed(2) : cost * 1.2;
-                                setFormData({ ...formData, targetMarginPercent: margin, revenueDaily: rev });
+                                const rev = !isNaN(margin) && margin < 100 ? +(cost / (1 - (margin / 100))).toFixed(2) : cost * 1.2;
+                                setFormData({ ...formData, targetMarginPercent: isNaN(margin) ? 0 : margin, revenueDaily: rev });
                               }}
-                              className="w-full px-3 py-2 border border-emerald-400 rounded-lg font-black text-emerald-800 bg-white text-sm"
+                              className={`w-full px-3 py-2 border rounded-lg font-black text-sm ${
+                                (formData.targetMarginPercent || 0) < 0
+                                  ? 'border-rose-400 text-rose-700 bg-rose-50'
+                                  : 'border-emerald-400 text-emerald-800 bg-white'
+                              }`}
                             />
-                            <span className="text-emerald-800 font-bold text-sm">%</span>
+                            <span className={`font-bold text-sm ${
+                              (formData.targetMarginPercent || 0) < 0 ? 'text-rose-600' : 'text-emerald-800'
+                            }`}>%</span>
                           </div>
                           <div className="flex gap-1 mt-1 flex-wrap">
                             {[15, 18, 21, 25].map(pct => (

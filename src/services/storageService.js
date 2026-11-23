@@ -129,7 +129,26 @@ class StorageService {
   getFleet() {
     try {
       const data = localStorage.getItem(STORAGE_KEYS.FLEET);
-      return data ? JSON.parse(data) : DEFAULT_FLEET;
+      let fleet = data ? JSON.parse(data) : DEFAULT_FLEET;
+      let fleetUpdated = false;
+      fleet = fleet.map(v => {
+        // Daily 72 (7.2t) è un autocarro con obbligo di Patente C (o C1)
+        const isDaily72 = (v.name || '').includes('72') || (v.model || '').includes('72');
+        if (isDaily72 && (v.category === 'furgone' || !v.categoryLabel?.includes('Patente C'))) {
+          fleetUpdated = true;
+          return {
+            ...v,
+            category: 'motrice',
+            categoryLabel: 'Autocarro Elettrico 7.2t (Patente C)',
+            licenseTypeId: 'c_diurno'
+          };
+        }
+        return v;
+      });
+      if (fleetUpdated && data) {
+        localStorage.setItem(STORAGE_KEYS.FLEET, JSON.stringify(fleet));
+      }
+      return fleet;
     } catch (e) {
       console.error('Errore lettura flotta:', e);
       return DEFAULT_FLEET;
@@ -288,7 +307,10 @@ class StorageService {
         if (veh || trl) {
           const expectedVLease = veh && p.workingDaysMonth > 0 ? +(veh.monthlyLease / p.workingDaysMonth).toFixed(2) : p.vehicleLeaseDaily;
           const expectedTLease = trl && p.workingDaysMonth > 0 ? +(trl.monthlyLease / p.workingDaysMonth).toFixed(2) : p.trailerLeaseDaily;
-          if (p.managementType === 'D' && (expectedVLease !== p.vehicleLeaseDaily || expectedTLease !== p.trailerLeaseDaily)) {
+          const isDaily72 = veh && ((veh.name || '').includes('72') || (veh.model || '').includes('72'));
+          const daily72NeedsDriverUpdate = isDaily72 && p.driverCostDaily === 140 && !p.driverManualOverride;
+
+          if (p.managementType === 'D' && (expectedVLease !== p.vehicleLeaseDaily || expectedTLease !== p.trailerLeaseDaily || daily72NeedsDriverUpdate)) {
             needsSave = true;
             return recalculateProjectCost(p, fleet, trailers, settings);
           }

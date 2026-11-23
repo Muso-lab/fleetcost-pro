@@ -79,6 +79,10 @@ const SimulationPage = () => {
   const [extraCostAmount, setExtraCostAmount] = useState(0);
   const [extraCostFrequency, setExtraCostFrequency] = useState('monthly');
 
+  // Compenso Partner Coordinamento Operativo
+  const [partnerFeePerTrip, setPartnerFeePerTrip] = useState(0); // € / viaggio
+  const [tripsPerDay, setTripsPerDay] = useState(1); // viaggi previsti al giorno
+
   // Termini di Pagamento & Fabbisogno Ponderato (NOTA 1.1)
   const [paymentTermsClient, setPaymentTermsClient] = useState(60);
   const [paymentTermsSuppliers, setPaymentTermsSuppliers] = useState(30);
@@ -282,10 +286,14 @@ const SimulationPage = () => {
     const washingCostDaily = accCalc.washingDaily;
     const extraCostDaily = accCalc.extraDaily;
 
-    // Totale Costi Giornalieri Diretti + Noleggi + Refrigerazione + Accessori
+    // Compenso Partner Coordinamento (€/viaggio * viaggi/giorno)
+    const partnerFeeDaily = (Number(partnerFeePerTrip) || 0) * (Number(tripsPerDay) || 1);
+
+    // Totale Costi Giornalieri Diretti + Noleggi + Refrigerazione + Accessori + Compenso Partner
     const totalCostDaily = fuelDaily + tollsDaily + tiresDaily + driverDaily +
       vehicleLeaseDaily + trailerLeaseDaily +
-      refrigerationCostDaily + telematicsCostDaily + washingCostDaily + extraCostDaily;
+      refrigerationCostDaily + telematicsCostDaily + washingCostDaily + extraCostDaily +
+      partnerFeeDaily;
 
     // Prezzo con margine target
     const marginPct = Number(targetMarginPercent) || 20;
@@ -301,6 +309,7 @@ const SimulationPage = () => {
       fuelCostDaily: fuelDaily,
       tollsDaily,
       tiresDaily,
+      partnerMarginDaily: partnerFeeDaily,
       refrigerationCostDaily,
       telematicsCostDaily,
       washingCostDaily,
@@ -355,6 +364,9 @@ const SimulationPage = () => {
       extraCostAmount,
       extraCostFrequency,
       extraCostDaily,
+      partnerFeePerTrip: Number(partnerFeePerTrip) || 0,
+      tripsPerDay: Number(tripsPerDay) || 1,
+      partnerMarginDaily: partnerFeeDaily,
       totalCostDaily: financialMetrics.totalCostDaily,
       revenueDailyTarget,
       molDailyTarget,
@@ -420,7 +432,7 @@ const SimulationPage = () => {
       extraCostFrequency,
       extraCostDaily: +simulationResult.extraCostDaily.toFixed(2),
       otherCostsDaily: 0,
-      partnerMarginDaily: 0,
+      partnerMarginDaily: +(simulationResult.partnerMarginDaily || 0).toFixed(2),
       porterageDaily: 0,
       vehicleLeaseDaily: +simulationResult.vehicleLeaseDaily.toFixed(2),
       trailerLeaseDaily: +simulationResult.trailerLeaseDaily.toFixed(2),
@@ -507,6 +519,7 @@ const SimulationPage = () => {
       ...(simulationResult.telematicsCostDaily > 0 ? [[`Telematica GPS & Controllo Flotta (${formatEUR(simulationResult.telematicsMonthly)}/m)`, formatEUR(simulationResult.telematicsCostDaily)]] : []),
       ...(simulationResult.washingCostDaily > 0 ? [[`Lavaggi Automezzi (${formatEUR(simulationResult.washingMonthly)}/m)`, formatEUR(simulationResult.washingCostDaily)]] : []),
       ...(simulationResult.extraCostDaily > 0 ? [[`Costi Accessori Extra (${simulationResult.extraCostDescription || simulationResult.extraCostFrequency})`, formatEUR(simulationResult.extraCostDaily)]] : []),
+      ...(simulationResult.partnerMarginDaily > 0 ? [[`Compenso Partner Coordinamento (${formatEUR(simulationResult.partnerFeePerTrip)}/vg × ${simulationResult.tripsPerDay} vg/gg)`, formatEUR(simulationResult.partnerMarginDaily)]] : []),
       ['TOTALE COSTO OPERATIVO GIORNALIERO', formatEUR(simulationResult.totalCostDaily)],
       ['TARIFFA GIORNALIERA PROPOSTA AL CLIENTE', formatEUR(simulationResult.revenueDailyTarget)],
       ['M.O.L. GIORNALIERO (MARGINE SUL RICAVO)', `${formatEUR(simulationResult.molDailyTarget)} (${simulationResult.molPercent}%)`],
@@ -939,6 +952,68 @@ const SimulationPage = () => {
                     </select>
                   </div>
                 </div>
+
+                {/* Compenso Partner Coordinamento Operativo */}
+                <div className="p-3 bg-blue-50/70 rounded-xl border border-blue-200 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-1.5">
+                      <Briefcase className="w-4 h-4 text-[#164e87]" />
+                      <label className="font-bold text-slate-900 text-xs">
+                        Compenso Partner (Coordinamento Operativo)
+                      </label>
+                    </div>
+                    <span className="text-[10px] text-blue-800 font-bold bg-blue-100/70 px-2 py-0.5 rounded-full">
+                      € / viaggio
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-600 mb-0.5">
+                        Compenso Partner (€/viaggio):
+                      </label>
+                      <div className="flex items-center space-x-1">
+                        <input
+                          type="number"
+                          step="any"
+                          min="0"
+                          placeholder="0.00"
+                          value={partnerFeePerTrip}
+                          onChange={(e) => setPartnerFeePerTrip(parseFloat(e.target.value) || 0)}
+                          className="w-full px-2.5 py-1.5 border border-blue-300 rounded-lg font-bold text-xs bg-white text-slate-900"
+                        />
+                        <span className="text-slate-500 font-bold text-xs">€/vg</span>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-600 mb-0.5">
+                        Numero Viaggi al giorno:
+                      </label>
+                      <div className="flex items-center space-x-1">
+                        <input
+                          type="number"
+                          step="1"
+                          min="1"
+                          value={tripsPerDay}
+                          onChange={(e) => setTripsPerDay(Math.max(1, parseInt(e.target.value) || 1))}
+                          className="w-full px-2.5 py-1.5 border border-blue-300 rounded-lg font-bold text-xs bg-white text-slate-900"
+                        />
+                        <span className="text-slate-500 font-bold text-xs">vg/gg</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex justify-between items-center text-[11px] text-slate-600 pt-1.5 border-t border-blue-200/60">
+                    <span>Totale giornaliero compenso partner:</span>
+                    <strong className="text-[#164e87]">
+                      {formatEUR((Number(partnerFeePerTrip) || 0) * (Number(tripsPerDay) || 1))}/gg
+                      <span className="text-[10px] font-medium text-slate-500 ml-1">
+                        ({formatEUR((Number(partnerFeePerTrip) || 0) * (Number(tripsPerDay) || 1) * workingDaysMonth)}/m)
+                      </span>
+                    </strong>
+                  </div>
+                </div>
               </div>
 
               {/* Usura Pneumatici Differenziata FOUR */}
@@ -1354,6 +1429,15 @@ const SimulationPage = () => {
                           Costi Extra {simulationResult.extraCostDescription ? `(${simulationResult.extraCostDescription})` : ''}:
                         </span>
                         <span className="font-bold text-indigo-700">{formatEUR(simulationResult.extraCostDaily)}</span>
+                      </div>
+                    )}
+
+                    {simulationResult.partnerMarginDaily > 0 && (
+                      <div className="flex justify-between items-center py-1 border-b border-slate-100">
+                        <span className="text-[#164e87] font-medium">
+                          Compenso Partner Coordinamento ({formatEUR(simulationResult.partnerFeePerTrip)}/vg × {simulationResult.tripsPerDay} vg/gg):
+                        </span>
+                        <span className="font-bold text-[#164e87]">{formatEUR(simulationResult.partnerMarginDaily)}</span>
                       </div>
                     )}
 
