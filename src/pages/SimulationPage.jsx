@@ -31,7 +31,8 @@ import {
   Wifi,
   ChevronDown,
   ChevronUp,
-  Sparkles
+  Sparkles,
+  Briefcase
 } from 'lucide-react';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
