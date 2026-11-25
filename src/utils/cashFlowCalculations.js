@@ -411,64 +411,73 @@ export const calculateAnnualBudgetAndCashFlow = (projects, options = {}) => {
         const qIndex = Math.floor(m / 3);
         quarterlyAcciseAccrued[qIndex] += acciseCreditMonthly;
 
-        // 2. CASH FLOW ENTRATE (Incassi Clienti)
-        if (factoringEnabled) {
-          const advanceAmount = rev * (factoringAdvanceRate / 100);
-          const fee = rev * (factoringFeePercent / 100);
-          const remainingAmount = rev - advanceAmount - fee;
+        // 2. CASH FLOW ENTRATE (Incassi Clienti - supporta Multi-Commessa con scadenze DSO per singola entità di fatturazione)
+        const billingSlices = (project.isMultiClient && Array.isArray(project.billingEntities) && project.billingEntities.length > 1)
+          ? project.billingEntities.map(be => ({
+              revMonth: (Number(be.revenueDaily) || 0) * workingDays,
+              delayMonths: Math.max(1, Math.round(((be.paymentTermsClient !== undefined ? Number(be.paymentTermsClient) : (project.paymentTermsClient ?? 60)) + stressTestClientDays) / 30))
+            }))
+          : [{ revMonth: rev, delayMonths: clientDelayMonths }];
 
-          // Mensile
-          cashInflows[m] += (advanceAmount - fee);
-          cashInflowBreakdown[m].factoringAdvance += (advanceAmount - fee);
-          const collMonth = m + clientDelayMonths;
-          if (collMonth < totalMonthsHorizon) {
-            cashInflows[collMonth] += remainingAmount;
-            cashInflowBreakdown[collMonth].clientsRegular += remainingAmount;
-          }
+        billingSlices.forEach(({ revMonth, delayMonths }) => {
+          if (revMonth <= 0) return;
+          if (factoringEnabled) {
+            const advanceAmount = revMonth * (factoringAdvanceRate / 100);
+            const fee = revMonth * (factoringFeePercent / 100);
+            const remainingAmount = revMonth - advanceAmount - fee;
 
-          // Quindicinale
-          const biweeklyCurrent = m * 2 + 1; // Fine mese m
-          biweeklyCashInflows[biweeklyCurrent] += (advanceAmount - fee);
-          biweeklyInflowBreakdown[biweeklyCurrent].factoring += (advanceAmount - fee);
-          const biweeklyColl = (m + clientDelayMonths) * 2 + 1; // Fine mese di saldo
-          if (biweeklyColl < totalBiweeklyHorizon) {
-            biweeklyCashInflows[biweeklyColl] += remainingAmount;
-            biweeklyInflowBreakdown[biweeklyColl].clients += remainingAmount;
-          }
-        } else {
-          // Senza factoring: incasso a scadenza naturale
-          const collMonth = m + clientDelayMonths;
-          if (collMonth < totalMonthsHorizon) {
-            cashInflows[collMonth] += rev;
-            cashInflowBreakdown[collMonth].clientsRegular += rev;
-          }
-          // Nel quindicinale l'incasso arriva tipicamente al giorno 30/31 (2ª quindicina)
-          const biweeklyColl = (m + clientDelayMonths) * 2 + 1;
-          if (biweeklyColl < totalBiweeklyHorizon) {
-            biweeklyCashInflows[biweeklyColl] += rev;
-            biweeklyInflowBreakdown[biweeklyColl].clients += rev;
-          }
-        }
+            // Mensile
+            cashInflows[m] += (advanceAmount - fee);
+            cashInflowBreakdown[m].factoringAdvance += (advanceAmount - fee);
+            const collMonth = m + delayMonths;
+            if (collMonth < totalMonthsHorizon) {
+              cashInflows[collMonth] += remainingAmount;
+              cashInflowBreakdown[collMonth].clientsRegular += remainingAmount;
+            }
 
-        // Continuità dei flussi di cassa per anno a regime (es. 2027 da dati 2026)
-        if (rolloverPreviousYearBudget && m === 0) {
-          if (clientDelayMonths >= 2) {
-            cashInflows[0] += rev;
-            cashInflowBreakdown[0].clientsRegular += rev;
-            if (biweeklyCashInflows.length > 1) {
-              biweeklyCashInflows[1] += rev;
-              biweeklyInflowBreakdown[1].clients += rev;
+            // Quindicinale
+            const biweeklyCurrent = m * 2 + 1; // Fine mese m
+            biweeklyCashInflows[biweeklyCurrent] += (advanceAmount - fee);
+            biweeklyInflowBreakdown[biweeklyCurrent].factoring += (advanceAmount - fee);
+            const biweeklyColl = (m + delayMonths) * 2 + 1; // Fine mese di saldo
+            if (biweeklyColl < totalBiweeklyHorizon) {
+              biweeklyCashInflows[biweeklyColl] += remainingAmount;
+              biweeklyInflowBreakdown[biweeklyColl].clients += remainingAmount;
+            }
+          } else {
+            // Senza factoring: incasso a scadenza naturale della singola entità di fatturazione
+            const collMonth = m + delayMonths;
+            if (collMonth < totalMonthsHorizon) {
+              cashInflows[collMonth] += revMonth;
+              cashInflowBreakdown[collMonth].clientsRegular += revMonth;
+            }
+            const biweeklyColl = (m + delayMonths) * 2 + 1;
+            if (biweeklyColl < totalBiweeklyHorizon) {
+              biweeklyCashInflows[biweeklyColl] += revMonth;
+              biweeklyInflowBreakdown[biweeklyColl].clients += revMonth;
             }
           }
-          if (clientDelayMonths >= 1) {
-            cashInflows[1] += rev;
-            cashInflowBreakdown[1].clientsRegular += rev;
-            if (biweeklyCashInflows.length > 3) {
-              biweeklyCashInflows[3] += rev;
-              biweeklyInflowBreakdown[3].clients += rev;
+
+          // Continuità dei flussi di cassa per anno a regime (es. 2027 da dati 2026)
+          if (rolloverPreviousYearBudget && m === 0) {
+            if (delayMonths >= 2) {
+              cashInflows[0] += revMonth;
+              cashInflowBreakdown[0].clientsRegular += revMonth;
+              if (biweeklyCashInflows.length > 1) {
+                biweeklyCashInflows[1] += revMonth;
+                biweeklyInflowBreakdown[1].clients += revMonth;
+              }
+            }
+            if (delayMonths >= 1) {
+              cashInflows[1] += revMonth;
+              cashInflowBreakdown[1].clientsRegular += revMonth;
+              if (biweeklyCashInflows.length > 3) {
+                biweeklyCashInflows[3] += revMonth;
+                biweeklyInflowBreakdown[3].clients += revMonth;
+              }
             }
           }
-        }
+        });
 
         // 3. CASH FLOW USCITE - REGOLE DI TESORERIA REALI FOUR
 
@@ -1006,7 +1015,184 @@ export const calculateAccessoriesDailyCost = (project = {}, vehicle = null, trai
 };
 
 /**
- * Calcola metriche economiche e finanziarie ponderate per una singola commessa
+ * Modelli di ribaltamento costi per sistema Multi-Commessa (da 1 a 4 Clienti con costi a fattor comune)
+ */
+export const COST_ALLOCATION_MODES = {
+  equal: {
+    id: 'equal',
+    label: 'Automatico • Equo (Parti Uguali)',
+    shortLabel: 'Parti Uguali',
+    description: 'Suddivide i costi comuni in quote identiche tra i clienti attivi (es. 50%/50% per 2 clienti)'
+  },
+  proportional_metric: {
+    id: 'proportional_metric',
+    label: 'Automatico • Proporzionale a Km / Pallets / Volumi',
+    shortLabel: 'Proporzionale Km/Volumi',
+    description: 'Ribalta i costi comuni in proporzione automatica ai Km, Pallets o Ore assegnati a ciascun cliente'
+  },
+  proportional_revenue: {
+    id: 'proportional_revenue',
+    label: 'Automatico • Proporzionale al Fatturato (Tariffa Attiva)',
+    shortLabel: 'Proporzionale Ricavi',
+    description: 'Ribalta i costi comuni in base al peso percentuale della tariffa attiva di ciascun cliente'
+  },
+  manual_percent: {
+    id: 'manual_percent',
+    label: 'Manuale • Quote % o Importi Personalizzati',
+    shortLabel: 'Manuale %',
+    description: 'Consente di impostare liberamente la percentuale o quota di costo ribaltata su ogni singolo cliente'
+  }
+};
+
+/**
+ * Calcola il ribaltamento dei costi comuni e le singole marginalità per 1..4 entità di fatturazione
+ */
+export const computeMultiClientAllocation = (
+  totalCostDaily = 0,
+  workingDaysMonth = 22,
+  billingEntities = [],
+  allocationMode = 'equal'
+) => {
+  const safeCost = Number(totalCostDaily) || 0;
+  const safeDays = Number(workingDaysMonth) || 22;
+  const rawList = Array.isArray(billingEntities) && billingEntities.length > 0
+    ? billingEntities.slice(0, 4)
+    : [{ id: 'c1', clientName: '', route: '', driverMetric: 100, costSharePercent: 100, targetMarginPercent: 21, revenueDaily: 0, paymentTermsClient: 60 }];
+
+  const count = rawList.length;
+
+  // 1. Determina le percentuali di ribaltamento costi (costSharePercent) in base al modello scelto
+  let shares = [];
+  if (count === 1) {
+    shares = [100];
+  } else if (allocationMode === 'equal') {
+    const base = +(100 / count).toFixed(2);
+    shares = rawList.map((_, i) => (i === count - 1 ? +(100 - base * (count - 1)).toFixed(2) : base));
+  } else if (allocationMode === 'proportional_metric') {
+    const metrics = rawList.map(item => Math.max(0, Number(item.driverMetric) || 0));
+    const sumMetrics = metrics.reduce((a, b) => a + b, 0);
+    if (sumMetrics > 0) {
+      let running = 0;
+      shares = metrics.map((m, i) => {
+        if (i === count - 1) return +Math.max(0, 100 - running).toFixed(2);
+        const s = +((m / sumMetrics) * 100).toFixed(2);
+        running += s;
+        return s;
+      });
+    } else {
+      const base = +(100 / count).toFixed(2);
+      shares = rawList.map((_, i) => (i === count - 1 ? +(100 - base * (count - 1)).toFixed(2) : base));
+    }
+  } else if (allocationMode === 'proportional_revenue') {
+    const revs = rawList.map(item => Math.max(0, Number(item.revenueDaily) || 0));
+    const sumRevs = revs.reduce((a, b) => a + b, 0);
+    if (sumRevs > 0) {
+      let running = 0;
+      shares = revs.map((r, i) => {
+        if (i === count - 1) return +Math.max(0, 100 - running).toFixed(2);
+        const s = +((r / sumRevs) * 100).toFixed(2);
+        running += s;
+        return s;
+      });
+    } else {
+      const base = +(100 / count).toFixed(2);
+      shares = rawList.map((_, i) => (i === count - 1 ? +(100 - base * (count - 1)).toFixed(2) : base));
+    }
+  } else {
+    // manual_percent
+    shares = rawList.map(item => +(Number(item.costSharePercent) || 0).toFixed(2));
+  }
+
+  // 2. Calcola per ciascuna entità di fatturazione: costo ribaltato, tariffa attiva, MOL e marginalità %
+  let runningAllocatedCost = 0;
+  const totalSharePercent = +shares.reduce((a, b) => a + b, 0).toFixed(2);
+
+  const entities = rawList.map((item, idx) => {
+    const sharePct = shares[idx];
+    // Se la somma delle quote è ~100%, l'ultimo assorbe eventuali centesimi di arrotondamento
+    let allocatedCostDaily = +(safeCost * (sharePct / 100)).toFixed(2);
+    if (idx === count - 1 && Math.abs(totalSharePercent - 100) < 0.05) {
+      allocatedCostDaily = +Math.max(0, safeCost - runningAllocatedCost).toFixed(2);
+    }
+    runningAllocatedCost += allocatedCostDaily;
+
+    const pricingLockedBy = item.pricingMode || 'revenue'; // 'revenue' | 'margin'
+    const targetMargin = item.targetMarginPercent !== undefined && item.targetMarginPercent !== ''
+      ? Number(item.targetMarginPercent)
+      : 21;
+
+    let revenueDaily = Number(item.revenueDaily) || 0;
+    if (pricingLockedBy === 'margin' || (revenueDaily === 0 && allocatedCostDaily > 0 && item.revenueDaily === undefined)) {
+      revenueDaily = targetMargin < 100
+        ? +(allocatedCostDaily / (1 - (targetMargin / 100))).toFixed(2)
+        : +(allocatedCostDaily * 1.25).toFixed(2);
+    }
+
+    const molDaily = +(revenueDaily - allocatedCostDaily).toFixed(2);
+    const molPercent = revenueDaily > 0
+      ? +((molDaily / revenueDaily) * 100).toFixed(2)
+      : (allocatedCostDaily > 0 ? -100 : 0);
+
+    const allocatedCostMonthly = +(allocatedCostDaily * safeDays).toFixed(2);
+    const revenueMonthly = +(revenueDaily * safeDays).toFixed(2);
+    const molMonthly = +(revenueMonthly - allocatedCostMonthly).toFixed(2);
+    const paymentTermsClient = item.paymentTermsClient !== undefined ? Number(item.paymentTermsClient) : 60;
+
+    return {
+      ...item,
+      id: item.id || `c${idx + 1}`,
+      clientName: item.clientName ?? '',
+      route: item.route ?? '',
+      driverMetric: Number(item.driverMetric) || 0,
+      costSharePercent: sharePct,
+      allocatedCostDaily,
+      allocatedCostMonthly,
+      revenueDaily,
+      revenueMonthly,
+      molDaily,
+      molMonthly,
+      molPercent,
+      targetMarginPercent: pricingLockedBy === 'margin' ? targetMargin : molPercent,
+      pricingMode: pricingLockedBy,
+      paymentTermsClient
+    };
+  });
+
+  const totalRevenueDaily = +entities.reduce((s, e) => s + e.revenueDaily, 0).toFixed(2);
+  const totalRevenueMonthly = +entities.reduce((s, e) => s + e.revenueMonthly, 0).toFixed(2);
+  const totalAllocatedCostDaily = +entities.reduce((s, e) => s + e.allocatedCostDaily, 0).toFixed(2);
+  const totalMolDaily = +(totalRevenueDaily - safeCost).toFixed(2);
+  const totalMolMonthly = +(totalRevenueMonthly - +(safeCost * safeDays).toFixed(2)).toFixed(2);
+  const totalMolPercent = totalRevenueDaily > 0
+    ? +((totalMolDaily / totalRevenueDaily) * 100).toFixed(2)
+    : (safeCost > 0 ? -100 : 0);
+
+  const weightedClientDso = totalRevenueDaily > 0
+    ? Math.round(entities.reduce((s, e) => s + (e.revenueDaily * e.paymentTermsClient), 0) / totalRevenueDaily)
+    : Math.round(entities.reduce((s, e) => s + e.paymentTermsClient, 0) / count);
+
+  const validNames = entities.map((e, i) => (e.clientName || '').trim() || `Cliente ${i + 1}`);
+  const combinedClientLabel = validNames.join(' + ');
+
+  return {
+    entities,
+    count,
+    allocationMode,
+    totalSharePercent,
+    totalCostDaily: safeCost,
+    totalAllocatedCostDaily,
+    totalRevenueDaily,
+    totalRevenueMonthly,
+    totalMolDaily,
+    totalMolMonthly,
+    totalMolPercent,
+    weightedClientDso,
+    combinedClientLabel
+  };
+};
+
+/**
+ * Calcola metriche economiche e finanziarie ponderate per una singola commessa o Multi-Commessa (1..4 clienti)
  * (Fabbisogno finanziario reale calcolato per componente e relativa scadenza di pagamento)
  */
 export const calculateSingleProjectMetrics = (project) => {
@@ -1043,9 +1229,17 @@ export const calculateSingleProjectMetrics = (project) => {
     trailerLease
   ).toFixed(2);
 
-  const revenueDaily = Number(project.revenueDaily) || 0;
+  // Gestione Multi-Commessa (da 1 a 4 Clienti con costi a fattor comune e tariffe attive separate)
+  const hasMultiClient = Boolean(project.isMultiClient) && Array.isArray(project.billingEntities) && project.billingEntities.length > 1;
+  const multiAllocation = hasMultiClient
+    ? computeMultiClientAllocation(totalCostDaily, workingDays, project.billingEntities, project.costAllocationMode || 'equal')
+    : null;
+
+  const revenueDaily = hasMultiClient
+    ? multiAllocation.totalRevenueDaily
+    : (Number(project.revenueDaily) || 0);
   const molDaily = +(revenueDaily - totalCostDaily).toFixed(2);
-  const molPercent = revenueDaily > 0 ? (molDaily / revenueDaily) * 100 : 0;
+  const molPercent = revenueDaily > 0 ? (molDaily / revenueDaily) * 100 : (totalCostDaily > 0 && revenueDaily === 0 ? -100 : 0);
 
   const monthlyCost = +(totalCostDaily * workingDays).toFixed(2);
   const monthlyRevenue = +(revenueDaily * workingDays).toFixed(2);
@@ -1056,7 +1250,9 @@ export const calculateSingleProjectMetrics = (project) => {
   const totalProjectMol = +(monthlyMol * operatingMonths).toFixed(2);
 
   // Calcolo Fabbisogno Finanziario Reale Ponderato per Voce di Costo e Scadenza
-  const clientDso = project.paymentTermsClient !== undefined ? Number(project.paymentTermsClient) : 60;
+  const clientDso = hasMultiClient
+    ? multiAllocation.weightedClientDso
+    : (project.paymentTermsClient !== undefined ? Number(project.paymentTermsClient) : 60);
   const supplierTerms = project.paymentTermsSuppliers !== undefined ? Number(project.paymentTermsSuppliers) : 30;
   const driverTerms = project.paymentTermsDriver !== undefined ? Number(project.paymentTermsDriver) : 16; // giorno 16 mese successivo T1
   const fuelTerms = project.paymentTermsFuel !== undefined ? Number(project.paymentTermsFuel) : 30;
@@ -1150,6 +1346,11 @@ export const calculateSingleProjectMetrics = (project) => {
     gapDays,
     gapMonths,
     weightedDpoDays: clientDso - gapDays,
+    clientDso,
+    isMultiClient: hasMultiClient,
+    costAllocationMode: project.costAllocationMode || 'equal',
+    multiAllocation,
+    billingEntities: hasMultiClient ? multiAllocation.entities : (project.billingEntities || []),
     estimatedWorkingCapitalGap,
     workingCapitalBreakdown: {
       leases: +needLease.toFixed(2),
@@ -1393,6 +1594,11 @@ export const recalculateProjectCost = (project, fleet = [], trailers = [], setti
 
   return {
     ...enrichedProject,
+    ...(metrics.isMultiClient ? {
+      billingEntities: metrics.billingEntities,
+      client: metrics.multiAllocation?.combinedClientLabel || enrichedProject.client,
+      paymentTermsClient: metrics.clientDso
+    } : {}),
     totalCostDaily: metrics.totalCostDaily,
     revenueDaily: metrics.revenueDaily,
     molDaily: metrics.molDaily,

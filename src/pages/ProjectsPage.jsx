@@ -13,7 +13,9 @@ import {
   calculateDriverDailyCost,
   calculateAccessoriesDailyCost,
   OPERATING_UNITS,
-  getProjectOperatingUnit
+  getProjectOperatingUnit,
+  COST_ALLOCATION_MODES,
+  computeMultiClientAllocation
 } from '../utils/cashFlowCalculations';
 import {
   Briefcase,
@@ -51,7 +53,9 @@ import {
   GripVertical,
   ArrowUp,
   ArrowDown,
-  MapPin
+  MapPin,
+  Users,
+  Wallet
 } from 'lucide-react';
 
 const ProjectsPage = () => {
@@ -74,13 +78,21 @@ const ProjectsPage = () => {
   const [showPerItemTerms, setShowPerItemTerms] = useState(false);
   const [editingProject, setEditingProject] = useState(null);
 
-  // Form State per Nuovo/Modifica Progetto
+  // Form State per Nuovo/Modifica Progetto (supporta Singola Commessa e Multi-Commessa da 1 a 4 Clienti)
+  const defaultBillingEntities = [
+    { id: 'c1', clientName: 'Cliente 1', route: '', driverMetric: 125, costSharePercent: 50, pricingMode: 'margin', targetMarginPercent: 21, revenueDaily: 375, paymentTermsClient: 60 },
+    { id: 'c2', clientName: 'Cliente 2', route: '', driverMetric: 125, costSharePercent: 50, pricingMode: 'margin', targetMarginPercent: 21, revenueDaily: 375, paymentTermsClient: 60 }
+  ];
+
   const [formData, setFormData] = useState({
     code: '',
     name: '',
     client: '',
     route: '',
     operatingUnit: 'auto',
+    isMultiClient: false,
+    costAllocationMode: 'equal',
+    billingEntities: defaultBillingEntities,
     startDate: '2026-01-01',
     operatingMonths: 36, // Default 36 mesi standard contratti FOUR
     workingDaysMonth: 22,
@@ -216,12 +228,23 @@ const ProjectsPage = () => {
       const telDef = curSettings?.accessoryParams?.telematics || { tractorMonthly: 14, trailerMonthly: 13, rigidMonthly: 12 };
       const washDef = curSettings?.accessoryParams?.washing || { costPerWash: 80, washesPerMonth: 2 };
 
+      const hasMulti = Boolean(project.isMultiClient) && Array.isArray(project.billingEntities) && project.billingEntities.length > 1;
+      const existingEntities = hasMulti
+        ? project.billingEntities
+        : [
+            { id: 'c1', clientName: project.client || 'Cliente 1', route: project.route || '', driverMetric: Math.round((project.kmDaily || 250) / 2), costSharePercent: 50, pricingMode: 'revenue', targetMarginPercent: project.molPercent || 21, revenueDaily: +((project.revenueDaily || 750) / 2).toFixed(2), paymentTermsClient: project.paymentTermsClient ?? 60 },
+            { id: 'c2', clientName: 'Cliente 2', route: '', driverMetric: Math.round((project.kmDaily || 250) / 2), costSharePercent: 50, pricingMode: 'margin', targetMarginPercent: 21, revenueDaily: +((project.revenueDaily || 750) / 2).toFixed(2), paymentTermsClient: project.paymentTermsClient ?? 60 }
+          ];
+
       setFormData({
         code: project.code || '',
         name: project.name || '',
         client: project.client || '',
         route: project.route || '',
         operatingUnit: project.operatingUnit || 'auto',
+        isMultiClient: hasMulti,
+        costAllocationMode: project.costAllocationMode || 'equal',
+        billingEntities: existingEntities,
         startDate: project.startDate || '2026-01-01',
         operatingMonths: project.operatingMonths || 36,
         workingDaysMonth: project.workingDaysMonth || 22,
@@ -312,6 +335,9 @@ const ProjectsPage = () => {
         client: isPot ? 'Nuova Trattativa' : '',
         route: '',
         operatingUnit: 'auto',
+        isMultiClient: false,
+        costAllocationMode: 'equal',
+        billingEntities: defaultBillingEntities,
         startDate: '2026-01-01',
         operatingMonths: 36,
         workingDaysMonth: workingDays,
@@ -479,25 +505,117 @@ const ProjectsPage = () => {
     setFormData(updated);
   };
 
+  // Gestione Multi-Commessa (1..4 Clienti) nel Modal Commessa
+  const handleModalClientCountChange = (count) => {
+    if (count <= 1) {
+      setFormData(prev => ({
+        ...prev,
+        isMultiClient: false
+      }));
+      return;
+    }
+    setFormData(prev => {
+      const currentList = Array.isArray(prev.billingEntities) ? [...prev.billingEntities] : [];
+      const eqShare = +(100 / count).toFixed(2);
+      const nextEntities = Array.from({ length: count }, (_, idx) => {
+        const existing = currentList[idx];
+        const share = idx === count - 1 ? +(100 - eqShare * (count - 1)).toFixed(2) : eqShare;
+        if (existing) {
+          return {
+            ...existing,
+            costSharePercent: prev.costAllocationMode === 'manual_percent' ? share : existing.costSharePercent
+          };
+        }
+        return {
+          id: `c${idx + 1}`,
+          clientName: idx === 0 && prev.client && !prev.client.includes('+') ? prev.client : `Cliente ${idx + 1}`,
+          route: idx === 0 ? (prev.route || '') : '',
+          driverMetric: Math.round((Number(prev.kmDaily) || 250) / count),
+          costSharePercent: share,
+          pricingMode: 'margin',
+          targetMarginPercent: 21,
+          revenueDaily: 0,
+          paymentTermsClient: prev.paymentTermsClient ?? 60
+        };
+      });
+      return {
+        ...prev,
+        isMultiClient: true,
+        billingEntities: nextEntities
+      };
+    });
+  };
+
+  const handleModalUpdateBillingEntity = (idx, patch) => {
+    setFormData(prev => {
+      const list = Array.isArray(prev.billingEntities) ? [...prev.billingEntities] : [];
+      const next = list.map((item, i) => (i === idx ? { ...item, ...patch } : item));
+      return {
+        ...prev,
+        billingEntities: next
+      };
+    });
+  };
+
+  const handleModalNormalizeShares = () => {
+    setFormData(prev => {
+      const list = Array.isArray(prev.billingEntities) ? [...prev.billingEntities] : [];
+      const count = list.length || 1;
+      const sum = list.reduce((s, e) => s + (Number(e.costSharePercent) || 0), 0);
+      if (sum <= 0) {
+        const eq = +(100 / count).toFixed(2);
+        return {
+          ...prev,
+          billingEntities: list.map((e, i) => ({
+            ...e,
+            costSharePercent: i === count - 1 ? +(100 - eq * (count - 1)).toFixed(2) : eq
+          }))
+        };
+      }
+      let running = 0;
+      return {
+        ...prev,
+        billingEntities: list.map((e, i) => {
+          if (i === count - 1) return { ...e, costSharePercent: +Math.max(0, 100 - running).toFixed(2) };
+          const norm = +(((Number(e.costSharePercent) || 0) / sum) * 100).toFixed(2);
+          running += norm;
+          return { ...e, costSharePercent: norm };
+        })
+      };
+    });
+  };
+
   const handleSaveProject = (e) => {
     e.preventDefault();
-    if (!formData.name || !formData.client) return;
+    if (!formData.name) return;
+    if (!formData.isMultiClient && !formData.client) return;
 
-    // Ricalcola totali di competenza
+    // Ricalcola totali di competenza (supporta Multi-Commessa 1-4 clienti)
     const metrics = calculateSingleProjectMetrics(formData);
 
     const isPot = formData.contractStatus === 'potential' || Boolean(formData.isPipelineFuture);
+    const hasMulti = Boolean(formData.isMultiClient) && Array.isArray(formData.billingEntities) && formData.billingEntities.length > 1;
+    const resolvedClient = hasMulti
+      ? (metrics.multiAllocation?.combinedClientLabel || formData.client || 'Multi-Commessa')
+      : formData.client;
 
     const projectDataToSave = {
       ...formData,
+      client: resolvedClient,
+      isMultiClient: hasMulti,
+      costAllocationMode: formData.costAllocationMode || 'equal',
+      billingEntities: hasMulti ? metrics.billingEntities : [],
+      paymentTermsClient: hasMulti ? metrics.clientDso : formData.paymentTermsClient,
       contractStatus: isPot ? 'potential' : 'active',
       isPipelineFuture: isPot,
+      revenueDaily: metrics.revenueDaily,
       totalCostDaily: metrics.totalCostDaily,
       molDaily: metrics.molDaily,
       monthlyCost: metrics.monthlyCost,
       monthlyRevenue: metrics.monthlyRevenue,
       monthlyMol: metrics.monthlyMol,
-      molPercent: metrics.molPercent,
+      molPercent: +metrics.molPercent.toFixed(2),
+      targetMarginPercent: +metrics.molPercent.toFixed(2),
       cashAdvanceRequired: metrics.estimatedWorkingCapitalGap
     };
 
@@ -772,8 +890,14 @@ const ProjectsPage = () => {
 
   const calcPortfolioTotals = (projList) => {
     const count = projList.length;
-    const revenueMonthly = projList.reduce((sum, p) => sum + (Number(p.monthlyRevenue) || 0), 0);
-    const costMonthly = projList.reduce((sum, p) => sum + (Number(p.monthlyCost) || 0), 0);
+    const revenueMonthly = projList.reduce((sum, p) => {
+      const m = calculateSingleProjectMetrics(p);
+      return sum + (Number(m.monthlyRevenue) || 0);
+    }, 0);
+    const costMonthly = projList.reduce((sum, p) => {
+      const m = calculateSingleProjectMetrics(p);
+      return sum + (Number(m.monthlyCost) || 0);
+    }, 0);
     const molMonthly = revenueMonthly - costMonthly;
     const molPercent = revenueMonthly > 0 ? (molMonthly / revenueMonthly) * 100 : 0;
     const workingCapital = projList.reduce((sum, p) => {
@@ -781,7 +905,74 @@ const ProjectsPage = () => {
       return sum + (m.estimatedWorkingCapitalGap || 0);
     }, 0);
     const creditLine = workingCapital > 0 ? Math.ceil((workingCapital * 1.15) / 5000) * 5000 : 15000;
-    return { count, revenueMonthly, costMonthly, molMonthly, molPercent, workingCapital, creditLine };
+
+    // Metriche operative e di flotta aggregabili
+    const uniqueVehicleIds = new Set(projList.map(p => p.vehicleId).filter(Boolean));
+    const uniqueTrailerIds = new Set(projList.map(p => p.trailerId).filter(Boolean));
+    let electricVehiclesCount = 0;
+    let biolngVehiclesCount = 0;
+    uniqueVehicleIds.forEach(vId => {
+      const v = fleet.find(item => item.id === vId);
+      if (v) {
+        if (v.fuelTypeId === 'elettrico') electricVehiclesCount++;
+        else if (v.fuelTypeId === 'biolng') biolngVehiclesCount++;
+      }
+    });
+
+    const directCount = projList.filter(p => (p.managementType || 'D') === 'D').length;
+    const thirdPartyCount = projList.filter(p => p.managementType === 'T').length;
+    const multiCommessaCount = projList.filter(p => p.isMultiClient && Array.isArray(p.billingEntities) && p.billingEntities.length > 1).length;
+
+    const clientEntitiesSet = new Set();
+    let totalBillingSlices = 0;
+    projList.forEach(p => {
+      if (p.isMultiClient && Array.isArray(p.billingEntities) && p.billingEntities.length > 1) {
+        p.billingEntities.forEach(be => {
+          totalBillingSlices++;
+          if (be.clientName) clientEntitiesSet.add(be.clientName.trim());
+        });
+      } else {
+        totalBillingSlices++;
+        if (p.client) clientEntitiesSet.add(p.client.trim());
+      }
+    });
+
+    const totalKmDaily = projList.reduce((sum, p) => sum + (Number(p.kmDaily) || 0), 0);
+    const totalKmMonthly = projList.reduce((sum, p) => sum + ((Number(p.kmDaily) || 0) * (Number(p.workingDaysMonth) || 22)), 0);
+    const avgRevenuePerKm = totalKmMonthly > 0 ? revenueMonthly / totalKmMonthly : 0;
+    const avgCostPerKm = totalKmMonthly > 0 ? costMonthly / totalKmMonthly : 0;
+
+    const hubsSet = new Set(projList.map(p => {
+      const v = fleet.find(item => item.id === p.vehicleId);
+      return getProjectOperatingUnit(p, v);
+    }).filter(Boolean));
+
+    return {
+      count,
+      revenueMonthly,
+      revenueAnnual: revenueMonthly * 12,
+      costMonthly,
+      costAnnual: costMonthly * 12,
+      molMonthly,
+      molAnnual: molMonthly * 12,
+      molPercent,
+      workingCapital,
+      creditLine,
+      vehiclesUsedCount: uniqueVehicleIds.size,
+      trailersUsedCount: uniqueTrailerIds.size,
+      electricVehiclesCount,
+      biolngVehiclesCount,
+      directCount,
+      thirdPartyCount,
+      multiCommessaCount,
+      uniqueClientsCount: clientEntitiesSet.size,
+      totalBillingSlices,
+      totalKmDaily,
+      totalKmMonthly,
+      avgRevenuePerKm,
+      avgCostPerKm,
+      activeHubsCount: hubsSet.size
+    };
   };
 
   // Progetti appartenenti allo scenario attivo della vista tabellare
@@ -798,10 +989,10 @@ const ProjectsPage = () => {
     return combinedProjects; // consolidated
   }, [projects, selectedScenario, whatIfIncludedIds, statusQuoProjects, allPotentialProjects, combinedProjects]);
 
-  const scenarioTotals = useMemo(() => calcPortfolioTotals(effectiveScenarioProjects), [effectiveScenarioProjects]);
-  const statusQuoTotals = useMemo(() => calcPortfolioTotals(statusQuoProjects), [statusQuoProjects]);
-  const potentialTotals = useMemo(() => calcPortfolioTotals(simulatedPotentialProjects), [simulatedPotentialProjects]);
-  const combinedTotals = useMemo(() => calcPortfolioTotals(combinedProjects), [combinedProjects]);
+  const scenarioTotals = useMemo(() => calcPortfolioTotals(effectiveScenarioProjects), [effectiveScenarioProjects, fleet]);
+  const statusQuoTotals = useMemo(() => calcPortfolioTotals(statusQuoProjects), [statusQuoProjects, fleet]);
+  const potentialTotals = useMemo(() => calcPortfolioTotals(simulatedPotentialProjects), [simulatedPotentialProjects, fleet]);
+  const combinedTotals = useMemo(() => calcPortfolioTotals(combinedProjects), [combinedProjects, fleet]);
 
   // Calcolo differenziali delta
   const deltaRevenueMonthly = potentialTotals.revenueMonthly;
@@ -821,8 +1012,19 @@ const ProjectsPage = () => {
   const averageMolPercent = scenarioTotals.molPercent;
   const totalWorkingCapitalRequired = scenarioTotals.workingCapital;
 
-  // Lista clienti unici per filtro
-  const uniqueClients = Array.from(new Set(projects.map(p => p.client).filter(Boolean)));
+  // Lista clienti unici per filtro (include sia i clienti singoli sia le singole entità delle Multi-Commesse)
+  const uniqueClients = useMemo(() => {
+    const set = new Set();
+    projects.forEach(p => {
+      if (p.client) set.add(p.client);
+      if (p.isMultiClient && Array.isArray(p.billingEntities)) {
+        p.billingEntities.forEach(be => {
+          if (be.clientName && be.clientName.trim()) set.add(be.clientName.trim());
+        });
+      }
+    });
+    return Array.from(set);
+  }, [projects]);
 
   // Filtro progetti
   const filteredProjects = projects.filter(p => {
@@ -834,12 +1036,22 @@ const ProjectsPage = () => {
       if (!isFutureProject(p)) return false;
     }
 
-    const matchesSearch = p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (p.client && p.client.toLowerCase().includes(searchQuery.toLowerCase())) ||
-      (p.route && p.route.toLowerCase().includes(searchQuery.toLowerCase())) ||
-      (p.code && p.code.toLowerCase().includes(searchQuery.toLowerCase()));
+    const q = searchQuery.toLowerCase();
+    const matchesEntitySearch = p.isMultiClient && Array.isArray(p.billingEntities) &&
+      p.billingEntities.some(be =>
+        (be.clientName && be.clientName.toLowerCase().includes(q)) ||
+        (be.route && be.route.toLowerCase().includes(q))
+      );
 
-    const matchesClient = clientFilter === 'all' || p.client === clientFilter;
+    const matchesSearch = p.name.toLowerCase().includes(q) ||
+      (p.client && p.client.toLowerCase().includes(q)) ||
+      (p.route && p.route.toLowerCase().includes(q)) ||
+      (p.code && p.code.toLowerCase().includes(q)) ||
+      matchesEntitySearch;
+
+    const matchesClient = clientFilter === 'all' ||
+      p.client === clientFilter ||
+      (p.isMultiClient && Array.isArray(p.billingEntities) && p.billingEntities.some(be => be.clientName && be.clientName.trim() === clientFilter));
     const matchesManagement = managementFilter === 'all' || p.managementType === managementFilter;
 
     let matchesMargin = true;
@@ -930,6 +1142,38 @@ const ProjectsPage = () => {
 
     return list;
   }, [filteredProjects, operatingUnitFilter, sortBy, fleet]);
+
+  // Progetti attivi nello scenario E nei filtri correnti (per ricalcolare dinamicamente tutti i KPI della Vista Scenario)
+  const activeFilteredScenarioProjects = useMemo(() => {
+    return displayProjects.filter(p => {
+      if (selectedScenario === 'futureOnly') return true;
+      if (isFutureProject(p)) return whatIfIncludedIds.has(p.id);
+      return true;
+    });
+  }, [displayProjects, selectedScenario, whatIfIncludedIds]);
+
+  const activeFilteredTotals = useMemo(
+    () => calcPortfolioTotals(activeFilteredScenarioProjects),
+    [activeFilteredScenarioProjects, fleet]
+  );
+
+  const hasActiveFilters = Boolean(
+    searchQuery.trim() !== '' ||
+    clientFilter !== 'all' ||
+    managementFilter !== 'all' ||
+    marginFilter !== 'all' ||
+    contractFilter !== 'all' ||
+    operatingUnitFilter !== 'all'
+  );
+
+  const handleResetFilters = () => {
+    setSearchQuery('');
+    setClientFilter('all');
+    setManagementFilter('all');
+    setMarginFilter('all');
+    setContractFilter('all');
+    setOperatingUnitFilter('all');
+  };
 
   // Calcoli live per la modal
   const liveModalMetrics = calculateSingleProjectMetrics(formData);
@@ -1342,21 +1586,33 @@ const ProjectsPage = () => {
         </div>
 
         {/* Helper di Usabilità per l'utente */}
-        <div className="flex items-center justify-between px-1 text-xs text-slate-500">
+        <div className="flex flex-wrap items-center justify-between px-1 text-xs text-slate-500 gap-2">
           <div className="flex items-center space-x-1.5 font-medium">
             <span className="text-blue-600 font-bold">💡 Gestione rapida:</span>
-            <span>Clicca su qualsiasi riga o sul pulsante <strong>Modifica</strong> per cambiare il mezzo o i parametri. Per le trattative, clicca <strong>Converti in Attiva</strong> per trasformarle al volo in contratti reali.</span>
+            <span>Clicca su qualsiasi riga o sul pulsante <strong>Modifica</strong> per cambiare mezzo, parametri o configurare una <strong>Multi-Commessa (1-4 Clienti)</strong>.</span>
           </div>
-          <span className="font-bold text-slate-600 hidden sm:inline">
-            {filteredProjects.length} commesse visualizzate
-          </span>
+          <div className="flex items-center space-x-2">
+            {hasActiveFilters && (
+              <button
+                type="button"
+                onClick={handleResetFilters}
+                className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100 transition"
+              >
+                ✕ Reset Filtri Attivi
+              </button>
+            )}
+            <span className="font-bold text-slate-700">
+              {displayProjects.length} commesse visualizzate ({activeFilteredTotals.totalBillingSlices} entità fatturate)
+            </span>
+          </div>
         </div>
 
-        {/* BARRA STICKY DI CONTROLLO SCENARI & WHAT-IF (Stile pulito e coerente con Cash Flow, sempre visibile a top-16) */}
-        <div className="sticky top-16 z-30 bg-white/95 backdrop-blur-md shadow-md border border-slate-200/90 rounded-2xl p-2.5 sm:p-3 transition-all text-slate-800">
-          <div className="flex flex-wrap items-center justify-between gap-2.5">
+        {/* BARRA STICKY DI CONTROLLO SCENARI & KPI AGGREGATI LEGATI AI FILTRI ATTIVATI */}
+        <div className="sticky top-16 z-30 bg-white/95 backdrop-blur-md shadow-md border border-slate-200/90 rounded-2xl p-3 transition-all text-slate-800 space-y-2.5">
+          {/* Riga Superiore: Selettori Scenario, What-If e Azioni Rapide */}
+          <div className="flex flex-wrap items-center justify-between gap-2">
             {/* Selettore Vista Scenario */}
-            <div className="flex items-center space-x-1.5 flex-wrap">
+            <div className="flex items-center space-x-1.5 flex-wrap gap-y-1">
               <span className="text-slate-500 text-xs font-bold mr-1 hidden sm:inline">Scenario:</span>
               <div className="inline-flex rounded-xl bg-slate-100 p-1 border border-slate-200 text-xs flex-shrink-0">
                 <button
@@ -1418,33 +1674,134 @@ const ProjectsPage = () => {
                   </span>
                 </div>
               )}
+
+              {hasActiveFilters && (
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-blue-100 text-[#164e87] border border-blue-300">
+                  ⚡ Valori calcolati sui filtri attivi ({activeFilteredTotals.count} commesse)
+                </span>
+              )}
             </div>
 
-            {/* Indicatori Live & Azioni Rapide */}
+            {/* Bottoni Creazione Rapida */}
             <div className="flex items-center space-x-2 text-xs">
-              <div className="bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-200 flex items-center space-x-1.5">
-                <span className="text-slate-500">M.O.L.:</span>
-                <span className="font-black text-emerald-600">{formatEUR(combinedTotals.molMonthly)}/m</span>
-                <span className="text-[10px] text-emerald-700 font-bold">({formatPercent(combinedTotals.molPercent)})</span>
-              </div>
-              <div className="bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-200 flex items-center space-x-1.5 hidden sm:flex">
-                <span className="text-slate-500">Cassa:</span>
-                <span className="font-black text-amber-700">{formatEUR(combinedTotals.workingCapital)}</span>
-              </div>
               <button
                 type="button"
                 onClick={() => handleOpenModal(null, null, 'active')}
                 className="bg-[#164e87] hover:bg-[#0e3a6c] text-white px-3 py-1.5 rounded-xl font-bold text-xs shadow-sm transition whitespace-nowrap"
               >
-                + Nuova
+                + Nuova Commessa
               </button>
               <button
                 type="button"
                 onClick={() => handleOpenModal(null, null, 'potential')}
                 className="bg-amber-500 hover:bg-amber-600 text-slate-950 px-3 py-1.5 rounded-xl font-black text-xs shadow-sm transition whitespace-nowrap"
               >
-                + Simulazione
+                + Simulazione / Multi
               </button>
+            </div>
+          </div>
+
+          {/* Riga Inferiore: Griglia Completa Indicatori Aggregati dello Scenario & Filtri Attivi */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 pt-2 border-t border-slate-200/80 text-xs">
+            {/* 1. FATTURATO */}
+            <div className="bg-blue-50/70 px-3 py-2 rounded-xl border border-blue-200/80">
+              <div className="flex items-center justify-between text-[10px] font-bold text-slate-500 uppercase">
+                <span>Fatturato</span>
+                <span className="text-[#164e87] font-black">{formatEUR(activeFilteredTotals.avgRevenuePerKm)}/km</span>
+              </div>
+              <div className="font-black text-[#164e87] text-sm mt-0.5">
+                {formatEUR(activeFilteredTotals.revenueMonthly)}<span className="text-[10px] font-semibold">/m</span>
+              </div>
+              <div className="text-[10px] text-slate-500 font-medium">
+                Annuo: <strong className="text-slate-700">{formatEUR(activeFilteredTotals.revenueAnnual)}</strong>
+              </div>
+            </div>
+
+            {/* 2. COSTI OPERATIVI */}
+            <div className="bg-slate-50 px-3 py-2 rounded-xl border border-slate-200">
+              <div className="flex items-center justify-between text-[10px] font-bold text-slate-500 uppercase">
+                <span>Costi Totali</span>
+                <span className="text-slate-700 font-bold">{formatEUR(activeFilteredTotals.avgCostPerKm)}/km</span>
+              </div>
+              <div className="font-black text-slate-800 text-sm mt-0.5">
+                {formatEUR(activeFilteredTotals.costMonthly)}<span className="text-[10px] font-semibold">/m</span>
+              </div>
+              <div className="text-[10px] text-slate-500 font-medium">
+                Annuo: <strong className="text-slate-700">{formatEUR(activeFilteredTotals.costAnnual)}</strong>
+              </div>
+            </div>
+
+            {/* 3. M.O.L. & MARGINALITÀ % */}
+            <div className="bg-emerald-50/70 px-3 py-2 rounded-xl border border-emerald-200/80">
+              <div className="flex items-center justify-between text-[10px] font-bold text-emerald-800 uppercase">
+                <span>M.O.L. &amp; Margine</span>
+                <span className={`px-1.5 py-0.2 rounded font-black ${
+                  activeFilteredTotals.molPercent >= 15
+                    ? 'bg-emerald-200/80 text-emerald-900'
+                    : activeFilteredTotals.molPercent >= 0
+                      ? 'bg-amber-200 text-amber-900'
+                      : 'bg-rose-200 text-rose-900'
+                }`}>
+                  {formatPercent(activeFilteredTotals.molPercent)}
+                </span>
+              </div>
+              <div className={`font-black text-sm mt-0.5 ${activeFilteredTotals.molMonthly >= 0 ? 'text-emerald-700' : 'text-rose-600'}`}>
+                {formatEUR(activeFilteredTotals.molMonthly)}<span className="text-[10px] font-semibold">/m</span>
+              </div>
+              <div className="text-[10px] text-slate-500 font-medium">
+                Annuo: <strong className="text-emerald-800">{formatEUR(activeFilteredTotals.molAnnual)}</strong>
+              </div>
+            </div>
+
+            {/* 4. CASSA & FABBISOGNO CIRCOLANTE */}
+            <div className="bg-amber-50/70 px-3 py-2 rounded-xl border border-amber-200/80">
+              <div className="flex items-center justify-between text-[10px] font-bold text-amber-900 uppercase">
+                <span>Fabbisogno Cassa</span>
+                <Clock className="w-3 h-3 text-amber-700" />
+              </div>
+              <div className="font-black text-amber-800 text-sm mt-0.5">
+                {formatEUR(activeFilteredTotals.workingCapital)}
+              </div>
+              <div className="text-[10px] text-amber-900/80 font-medium">
+                Fido cons.: <strong>{formatEUR(activeFilteredTotals.creditLine)}</strong>
+              </div>
+            </div>
+
+            {/* 5. MEZZI UTILIZZATI & RISORSE */}
+            <div className="bg-indigo-50/60 px-3 py-2 rounded-xl border border-indigo-200/80">
+              <div className="flex items-center justify-between text-[10px] font-bold text-indigo-900 uppercase">
+                <span>Mezzi Utilizzati</span>
+                <Truck className="w-3 h-3 text-indigo-700" />
+              </div>
+              <div className="font-black text-indigo-950 text-sm mt-0.5 flex items-baseline space-x-1.5">
+                <span>{activeFilteredTotals.vehiclesUsedCount} <span className="text-[10px] font-semibold text-slate-500">/ {fleet.length} Mezzi</span></span>
+                {activeFilteredTotals.trailersUsedCount > 0 && (
+                  <span className="text-[10px] font-bold text-indigo-700">• {activeFilteredTotals.trailersUsedCount} Rim.</span>
+                )}
+              </div>
+              <div className="text-[10px] text-slate-600 font-medium flex items-center justify-between">
+                <span>⚡{activeFilteredTotals.electricVehiclesCount} BEV • 🔥{activeFilteredTotals.biolngVehiclesCount} LNG</span>
+                <span className="font-bold text-indigo-800">{activeFilteredTotals.directCount}D / {activeFilteredTotals.thirdPartyCount}T</span>
+              </div>
+            </div>
+
+            {/* 6. CLIENTI, MULTI-COMMESSE & VOLUMI KM */}
+            <div className="bg-slate-50 px-3 py-2 rounded-xl border border-slate-200">
+              <div className="flex items-center justify-between text-[10px] font-bold text-slate-500 uppercase">
+                <span>Commesse &amp; Km</span>
+                <span className="text-[#164e87] font-black">{activeFilteredTotals.activeHubsCount} Poli</span>
+              </div>
+              <div className="font-black text-slate-900 text-sm mt-0.5">
+                {activeFilteredTotals.count} <span className="text-[10px] font-semibold text-slate-500">Linee</span> • {activeFilteredTotals.uniqueClientsCount} <span className="text-[10px] font-semibold text-slate-500">Clienti</span>
+              </div>
+              <div className="text-[10px] text-slate-500 font-medium flex items-center justify-between">
+                <span>{activeFilteredTotals.totalKmDaily.toLocaleString('it-IT')} km/gg</span>
+                {activeFilteredTotals.multiCommessaCount > 0 ? (
+                  <span className="text-[#164e87] font-bold">{activeFilteredTotals.multiCommessaCount} Multi</span>
+                ) : (
+                  <span>{(activeFilteredTotals.totalKmMonthly / 1000).toFixed(1)}k km/m</span>
+                )}
+              </div>
             </div>
           </div>
         </div>
@@ -1549,6 +1906,17 @@ const ProjectsPage = () => {
                             <span>{hubName}</span>
                           </span>
 
+                          {/* Badge Multi-Commessa (2-4 Clienti con Costi Condivisi) */}
+                          {metrics.isMultiClient && (
+                            <span
+                              className="text-[10px] font-black px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-900 border border-indigo-300 flex items-center gap-1"
+                              title={`Costi a fattor comune ribaltati su ${metrics.billingEntities.length} clienti (${COST_ALLOCATION_MODES[project.costAllocationMode]?.shortLabel || 'Condiviso'})`}
+                            >
+                              <Users className="w-2.5 h-2.5 text-indigo-700" />
+                              <span>Multi-Commessa ({metrics.billingEntities.length} Clienti • {COST_ALLOCATION_MODES[project.costAllocationMode]?.shortLabel || 'Riparto'})</span>
+                            </span>
+                          )}
+
                           {isPot ? (
                             <div className="inline-flex items-center space-x-1.5 flex-wrap gap-y-1">
                               <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300 flex items-center gap-1">
@@ -1605,6 +1973,36 @@ const ProjectsPage = () => {
                             </>
                           )}
                         </div>
+
+                        {/* Breakdown Entità di Fatturazione se Multi-Commessa */}
+                        {metrics.isMultiClient && Array.isArray(metrics.billingEntities) && (
+                          <div className="mt-2 p-2 bg-indigo-50/50 rounded-xl border border-indigo-200/80 space-y-1">
+                            {metrics.billingEntities.map((be, bIdx) => (
+                              <div key={be.id || bIdx} className="flex flex-wrap items-center justify-between gap-2 text-[10px]">
+                                <div className="flex items-center space-x-1.5">
+                                  <span className="font-mono font-black text-indigo-800 bg-white px-1.5 py-0.2 rounded border border-indigo-200">
+                                    {formatPercent(be.costSharePercent)}
+                                  </span>
+                                  <span className="font-bold text-slate-800">{be.clientName || `Cliente ${bIdx + 1}`}</span>
+                                  {be.route && <span className="text-slate-400">({be.route})</span>}
+                                </div>
+                                <div className="flex items-center space-x-2">
+                                  <span className="text-slate-500">Costo: <strong>{formatEUR(be.allocatedCostMonthly)}/m</strong></span>
+                                  <span className="text-[#164e87] font-bold">Ricavo: {formatEUR(be.revenueMonthly)}/m</span>
+                                  <span className={`font-black px-1.5 py-0.2 rounded border ${
+                                    be.molPercent < 0
+                                      ? 'bg-rose-100 text-rose-800 border-rose-200'
+                                      : be.molPercent < 15
+                                        ? 'bg-amber-100 text-amber-800 border-amber-200'
+                                        : 'bg-emerald-100 text-emerald-800 border-emerald-200'
+                                  }`}>
+                                    MOL {formatPercent(be.molPercent)}
+                                  </span>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </td>
 
                       {/* Colonna 2: Mezzo Assegnato & Risorse */}
@@ -1828,30 +2226,241 @@ const ProjectsPage = () => {
                     </button>
                   </div>
                 </div>
-                {/* Dati Generali */}
+                {/* Dati Generali & Sistema Multi-Commessa (1-4 Clienti con Costi a Fattor Comune) */}
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                  <div className="md:col-span-2">
+                  <div className={formData.isMultiClient ? 'md:col-span-3' : 'md:col-span-2'}>
                     <label className="block font-semibold text-slate-700 mb-1">Nome / Descrizione Linea *</label>
                     <input
                       type="text"
                       required
-                      placeholder="Es. Bilico Elettrico 33 plt x Decathlon BO"
+                      placeholder="Es. Bilico Elettrico 33 plt x Decathlon BO (o Giro Condiviso Multi-Cliente)"
                       value={formData.name}
                       onChange={(e) => setFormData({ ...formData, name: e.target.value })}
                       className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 font-bold"
                     />
                   </div>
-                  <div>
-                    <label className="block font-semibold text-slate-700 mb-1">Cliente *</label>
-                    <input
-                      type="text"
-                      required
-                      placeholder="Es. Decathlon Italia"
-                      value={formData.client}
-                      onChange={(e) => setFormData({ ...formData, client: e.target.value })}
-                      className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500"
-                    />
+                  {!formData.isMultiClient && (
+                    <div>
+                      <label className="block font-semibold text-slate-700 mb-1">Cliente *</label>
+                      <input
+                        type="text"
+                        required={!formData.isMultiClient}
+                        placeholder="Es. Decathlon Italia"
+                        value={formData.client}
+                        onChange={(e) => setFormData({ ...formData, client: e.target.value })}
+                        className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500"
+                      />
+                    </div>
+                  )}
+                </div>
+
+                {/* BOX SISTEMA MULTI-COMMESSA: DA 1 A 4 CLIENTI CON COSTI A FATTOR COMUNE */}
+                <div className="p-4 bg-gradient-to-br from-blue-50/80 to-indigo-50/40 rounded-xl border border-blue-200 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center space-x-2">
+                      <Users className="w-4 h-4 text-[#164e87]" />
+                      <span className="font-extrabold text-[#164e87] text-xs uppercase tracking-wider">
+                        Sistema Multi-Commessa (1 - 4 Clienti con Costi a Fattor Comune)
+                      </span>
+                    </div>
+                    <div className="inline-flex rounded-xl bg-white p-1 border border-blue-200 gap-1">
+                      {[1, 2, 3, 4].map(n => {
+                        const activeCount = formData.isMultiClient ? (formData.billingEntities?.length || 2) : 1;
+                        return (
+                          <button
+                            key={n}
+                            type="button"
+                            onClick={() => handleModalClientCountChange(n)}
+                            className={`px-2.5 py-1 rounded-lg font-black text-xs transition ${
+                              activeCount === n
+                                ? 'bg-[#164e87] text-white shadow-xs'
+                                : 'text-slate-600 hover:bg-blue-50'
+                            }`}
+                          >
+                            {n === 1 ? '1 Cliente (Singola)' : `${n} Clienti`}
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
+
+                  {formData.isMultiClient && Array.isArray(formData.billingEntities) && (
+                    <div className="space-y-3 pt-2 border-t border-blue-200/70">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 items-center">
+                        <div>
+                          <label className="block font-bold text-[#164e87] mb-1">
+                            Modello di Ribaltamento Costi Comuni ({formatEUR(liveModalMetrics.totalCostDaily)}/gg)
+                          </label>
+                          <select
+                            value={formData.costAllocationMode || 'equal'}
+                            onChange={(e) => setFormData({ ...formData, costAllocationMode: e.target.value })}
+                            className="w-full px-3 py-2 border border-blue-300 rounded-xl bg-white font-bold text-slate-800 text-xs"
+                          >
+                            {Object.values(COST_ALLOCATION_MODES).map(mode => (
+                              <option key={mode.id} value={mode.id}>{mode.label}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="text-[11px] text-slate-600 bg-white/80 p-2.5 rounded-xl border border-blue-200">
+                          <div className="font-bold text-slate-800 mb-0.5">
+                            {COST_ALLOCATION_MODES[formData.costAllocationMode || 'equal']?.shortLabel}:
+                          </div>
+                          <div>{COST_ALLOCATION_MODES[formData.costAllocationMode || 'equal']?.description}</div>
+                          {formData.costAllocationMode === 'manual_percent' && (
+                            <div className="mt-1 flex items-center justify-between">
+                              <span className={`font-black ${Math.abs((liveModalMetrics.multiAllocation?.totalSharePercent || 100) - 100) > 0.1 ? 'text-rose-600' : 'text-emerald-700'}`}>
+                                Somma quote attuali: {formatPercent(liveModalMetrics.multiAllocation?.totalSharePercent || 100)}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={handleModalNormalizeShares}
+                                className="px-2 py-0.5 bg-[#164e87] text-white rounded font-bold text-[10px]"
+                              >
+                                Normalizza a 100%
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Tabella Entità di Fatturazione Separate (Tariffa Attiva & Marginalità per Cliente) */}
+                      <div className="space-y-2">
+                        {(liveModalMetrics.billingEntities || formData.billingEntities).map((entity, idx) => (
+                          <div key={entity.id || idx} className="p-3 bg-white rounded-xl border border-blue-200 shadow-2xs space-y-2">
+                            <div className="flex flex-wrap items-center justify-between gap-2 pb-1.5 border-b border-slate-100">
+                              <div className="flex items-center space-x-2">
+                                <span className="px-2 py-0.5 rounded bg-[#164e87] text-white font-black text-[10px]">
+                                  Entità Fatturazione #{idx + 1}
+                                </span>
+                                <span className="text-[11px] font-bold text-slate-600">
+                                  Quota Costo Ribaltata: <strong className="text-slate-900">{formatEUR(entity.allocatedCostDaily)}/gg</strong> ({formatEUR(entity.allocatedCostMonthly)}/m • {formatPercent(entity.costSharePercent)})
+                                </span>
+                              </div>
+                              <div className="flex items-center space-x-2">
+                                <span className={`px-2 py-0.5 rounded-full text-[10px] font-black border ${
+                                  entity.molPercent < 0
+                                    ? 'bg-rose-100 text-rose-800 border-rose-200'
+                                    : entity.molPercent < 15
+                                      ? 'bg-amber-100 text-amber-800 border-amber-200'
+                                      : 'bg-emerald-100 text-emerald-800 border-emerald-200'
+                                }`}>
+                                  M.O.L.: {formatEUR(entity.molDaily)}/gg ({formatEUR(entity.molMonthly)}/m • {formatPercent(entity.molPercent)})
+                                </span>
+                              </div>
+                            </div>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-6 gap-2">
+                              <div className="md:col-span-2">
+                                <label className="block text-[10px] font-bold text-slate-600 mb-0.5">Cliente / Ragione Sociale *</label>
+                                <input
+                                  type="text"
+                                  required
+                                  placeholder={`Cliente ${idx + 1}`}
+                                  value={formData.billingEntities[idx]?.clientName || ''}
+                                  onChange={(e) => handleModalUpdateBillingEntity(idx, { clientName: e.target.value })}
+                                  className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg font-bold text-xs"
+                                />
+                              </div>
+
+                              <div>
+                                <label className="block text-[10px] font-bold text-slate-600 mb-0.5">Sub-Tratta / Note</label>
+                                <input
+                                  type="text"
+                                  placeholder="Tratta o Pallets"
+                                  value={formData.billingEntities[idx]?.route || ''}
+                                  onChange={(e) => handleModalUpdateBillingEntity(idx, { route: e.target.value })}
+                                  className="w-full px-2 py-1.5 border border-slate-300 rounded-lg text-xs"
+                                />
+                              </div>
+
+                              {formData.costAllocationMode === 'proportional_metric' ? (
+                                <div>
+                                  <label className="block text-[10px] font-bold text-blue-800 mb-0.5">Km / Pallets / Quota</label>
+                                  <input
+                                    type="number"
+                                    step="any"
+                                    min="0"
+                                    value={formData.billingEntities[idx]?.driverMetric ?? 100}
+                                    onChange={(e) => handleModalUpdateBillingEntity(idx, { driverMetric: parseFloat(e.target.value) || 0 })}
+                                    className="w-full px-2 py-1.5 border border-blue-400 bg-blue-50/50 rounded-lg font-black text-blue-950 text-xs"
+                                  />
+                                </div>
+                              ) : (
+                                <div>
+                                  <label className="block text-[10px] font-bold text-slate-600 mb-0.5">% Costo Ribaltato</label>
+                                  <div className="flex items-center space-x-1">
+                                    <input
+                                      type="number"
+                                      step="any"
+                                      min="0"
+                                      max="100"
+                                      disabled={formData.costAllocationMode !== 'manual_percent'}
+                                      value={formData.costAllocationMode === 'manual_percent' ? (formData.billingEntities[idx]?.costSharePercent ?? 0) : entity.costSharePercent}
+                                      onChange={(e) => handleModalUpdateBillingEntity(idx, { costSharePercent: parseFloat(e.target.value) || 0 })}
+                                      className={`w-full px-2 py-1.5 border rounded-lg font-black text-xs ${
+                                        formData.costAllocationMode === 'manual_percent'
+                                          ? 'border-blue-400 bg-white text-slate-900'
+                                          : 'border-slate-200 bg-slate-100 text-slate-500 cursor-not-allowed'
+                                      }`}
+                                    />
+                                    <span className="text-[10px] font-bold text-slate-500">%</span>
+                                  </div>
+                                </div>
+                              )}
+
+                              <div>
+                                <label className="block text-[10px] font-bold text-emerald-900 mb-0.5">Tariffa Attiva (€/gg) *</label>
+                                <input
+                                  type="number"
+                                  step="any"
+                                  value={formData.billingEntities[idx]?.pricingMode === 'revenue' ? (formData.billingEntities[idx]?.revenueDaily ?? entity.revenueDaily) : entity.revenueDaily}
+                                  onChange={(e) => {
+                                    const rev = parseFloat(e.target.value) || 0;
+                                    const alloc = entity.allocatedCostDaily;
+                                    const mPct = rev > 0 ? +(((rev - alloc) / rev) * 100).toFixed(2) : (alloc > 0 ? -100 : 0);
+                                    handleModalUpdateBillingEntity(idx, {
+                                      pricingMode: 'revenue',
+                                      revenueDaily: rev,
+                                      targetMarginPercent: mPct
+                                    });
+                                  }}
+                                  className="w-full px-2 py-1.5 border border-emerald-500 bg-emerald-50 rounded-lg font-black text-emerald-900 text-xs"
+                                />
+                              </div>
+
+                              <div>
+                                <label className="block text-[10px] font-bold text-slate-700 mb-0.5">Margine Cliente (%)</label>
+                                <div className="flex items-center space-x-1">
+                                  <input
+                                    type="number"
+                                    step="any"
+                                    value={formData.billingEntities[idx]?.pricingMode === 'margin' ? (formData.billingEntities[idx]?.targetMarginPercent ?? entity.molPercent) : entity.molPercent}
+                                    onChange={(e) => {
+                                      const raw = e.target.value;
+                                      const mPct = raw === '' ? 0 : parseFloat(raw);
+                                      const alloc = entity.allocatedCostDaily;
+                                      const rev = !isNaN(mPct) && mPct < 100 ? +(alloc / (1 - (mPct / 100))).toFixed(2) : +(alloc * 1.25).toFixed(2);
+                                      handleModalUpdateBillingEntity(idx, {
+                                        pricingMode: 'margin',
+                                        targetMarginPercent: isNaN(mPct) ? 0 : mPct,
+                                        revenueDaily: rev
+                                      });
+                                    }}
+                                    className={`w-full px-2 py-1.5 border rounded-lg font-black text-xs ${
+                                      entity.molPercent < 0
+                                        ? 'border-rose-400 bg-rose-50 text-rose-700'
+                                        : 'border-emerald-400 bg-white text-emerald-800'
+                                    }`}
+                                  />
+                                  <span className="text-[10px] font-bold text-slate-500">%</span>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -2531,72 +3140,98 @@ const ProjectsPage = () => {
 
                   {formData.managementType !== 'T' && (
                     <div className="pt-2 border-t border-slate-200 space-y-1.5">
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        <div>
-                          <label className="block font-bold text-slate-900 mb-0.5">Ricavo Giornaliero (€/gg) *</label>
-                          <input
-                            type="number"
-                            step="any"
-                            value={formData.revenueDaily}
-                            onChange={(e) => {
-                              const rev = parseFloat(e.target.value) || 0;
-                              const cost = liveModalMetrics.totalCostDaily;
-                              const margin = rev > 0 ? +(((rev - cost) / rev) * 100).toFixed(2) : (rev === 0 ? -100 : 0);
-                              setFormData({ ...formData, revenueDaily: rev, targetMarginPercent: margin });
-                            }}
-                            className="w-full px-3 py-2 border border-emerald-500 rounded-lg font-black text-emerald-800 bg-emerald-50 text-sm"
-                          />
-                        </div>
-                        <div>
-                          <label className="block font-bold text-slate-900 mb-0.5 flex items-center justify-between">
-                            <span>Margine M.O.L. (%)</span>
-                            <span className={`text-[10px] font-bold ${liveModalMetrics.molPercent < 0 ? 'text-rose-600' : 'text-emerald-700'}`}>
-                              {liveModalMetrics.molPercent < 0 ? 'In Perdita' : 'sul Ricavo'}
+                      {formData.isMultiClient ? (
+                        <div className="p-3 bg-blue-50/80 border border-blue-200 rounded-xl flex flex-wrap items-center justify-between gap-2 text-xs">
+                          <div>
+                            <span className="font-black text-[#164e87] block">
+                              Fatturazione Aggregata Multi-Commessa ({formData.billingEntities?.length || 2} Clienti):
                             </span>
-                          </label>
-                          <div className="flex items-center space-x-1">
-                            <input
-                              type="number"
-                              step="any"
-                              value={formData.targetMarginPercent !== undefined ? formData.targetMarginPercent : +liveModalMetrics.molPercent.toFixed(2)}
-                              onChange={(e) => {
-                                const val = e.target.value;
-                                const margin = val === '' ? 0 : parseFloat(val);
-                                const cost = liveModalMetrics.totalCostDaily;
-                                const rev = !isNaN(margin) && margin < 100 ? +(cost / (1 - (margin / 100))).toFixed(2) : cost * 1.2;
-                                setFormData({ ...formData, targetMarginPercent: isNaN(margin) ? 0 : margin, revenueDaily: rev });
-                              }}
-                              className={`w-full px-3 py-2 border rounded-lg font-black text-sm ${
-                                (formData.targetMarginPercent || 0) < 0
-                                  ? 'border-rose-400 text-rose-700 bg-rose-50'
-                                  : 'border-emerald-400 text-emerald-800 bg-white'
-                              }`}
-                            />
-                            <span className={`font-bold text-sm ${
-                              (formData.targetMarginPercent || 0) < 0 ? 'text-rose-600' : 'text-emerald-800'
-                            }`}>%</span>
+                            <span className="text-[10px] text-slate-600">
+                              Le tariffe attive e le marginalità sono gestite separatamente per ciascun cliente nel box Multi-Commessa in alto.
+                            </span>
                           </div>
-                          <div className="flex gap-1 mt-1 flex-wrap">
-                            {[15, 18, 21, 25].map(pct => (
-                              <button
-                                key={pct}
-                                type="button"
-                                onClick={() => {
-                                  const cost = liveModalMetrics.totalCostDaily;
-                                  const rev = +(cost / (1 - (pct / 100))).toFixed(2);
-                                  setFormData({ ...formData, targetMarginPercent: pct, revenueDaily: rev });
-                                }}
-                                className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800 hover:bg-emerald-200"
-                              >
-                                {pct}%{pct === 21 ? ' (Std)' : ''}
-                              </button>
-                            ))}
+                          <div className="flex items-center space-x-3">
+                            <span className="font-bold text-slate-700">
+                              Costo Comune: <strong>{formatEUR(liveModalMetrics.totalCostDaily)}/gg</strong>
+                            </span>
+                            <span className="font-black text-[#164e87]">
+                              Ricavo Tot.: {formatEUR(liveModalMetrics.revenueDaily)}/gg
+                            </span>
+                            <span className="px-2 py-0.5 rounded-full font-black bg-emerald-100 text-emerald-800 border border-emerald-300">
+                              M.O.L. {formatEUR(liveModalMetrics.molDaily)}/gg ({formatPercent(liveModalMetrics.molPercent)})
+                            </span>
                           </div>
                         </div>
-                      </div>
-                      <p className="text-[10px] text-slate-500">
-                        Costo totale calcolato: <strong className="text-slate-800">{formatEUR(liveModalMetrics.totalCostDaily)}/gg</strong> • Ricarico sui costi corrispondente: <strong className="text-slate-800">+{liveModalMetrics.totalCostDaily > 0 ? (((liveModalMetrics.revenueDaily - liveModalMetrics.totalCostDaily) / liveModalMetrics.totalCostDaily) * 100).toFixed(1) : 0}%</strong>
-                      </p>
+                      ) : (
+                        <>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            <div>
+                              <label className="block font-bold text-slate-900 mb-0.5">Ricavo Giornaliero (€/gg) *</label>
+                              <input
+                                type="number"
+                                step="any"
+                                value={formData.revenueDaily}
+                                onChange={(e) => {
+                                  const rev = parseFloat(e.target.value) || 0;
+                                  const cost = liveModalMetrics.totalCostDaily;
+                                  const margin = rev > 0 ? +(((rev - cost) / rev) * 100).toFixed(2) : (rev === 0 ? -100 : 0);
+                                  setFormData({ ...formData, revenueDaily: rev, targetMarginPercent: margin });
+                                }}
+                                className="w-full px-3 py-2 border border-emerald-500 rounded-lg font-black text-emerald-800 bg-emerald-50 text-sm"
+                              />
+                            </div>
+                            <div>
+                              <label className="block font-bold text-slate-900 mb-0.5 flex items-center justify-between">
+                                <span>Margine M.O.L. (%)</span>
+                                <span className={`text-[10px] font-bold ${liveModalMetrics.molPercent < 0 ? 'text-rose-600' : 'text-emerald-700'}`}>
+                                  {liveModalMetrics.molPercent < 0 ? 'In Perdita' : 'sul Ricavo'}
+                                </span>
+                              </label>
+                              <div className="flex items-center space-x-1">
+                                <input
+                                  type="number"
+                                  step="any"
+                                  value={formData.targetMarginPercent !== undefined ? formData.targetMarginPercent : +liveModalMetrics.molPercent.toFixed(2)}
+                                  onChange={(e) => {
+                                    const val = e.target.value;
+                                    const margin = val === '' ? 0 : parseFloat(val);
+                                    const cost = liveModalMetrics.totalCostDaily;
+                                    const rev = !isNaN(margin) && margin < 100 ? +(cost / (1 - (margin / 100))).toFixed(2) : cost * 1.2;
+                                    setFormData({ ...formData, targetMarginPercent: isNaN(margin) ? 0 : margin, revenueDaily: rev });
+                                  }}
+                                  className={`w-full px-3 py-2 border rounded-lg font-black text-sm ${
+                                    (formData.targetMarginPercent || 0) < 0
+                                      ? 'border-rose-400 text-rose-700 bg-rose-50'
+                                      : 'border-emerald-400 text-emerald-800 bg-white'
+                                  }`}
+                                />
+                                <span className={`font-bold text-sm ${
+                                  (formData.targetMarginPercent || 0) < 0 ? 'text-rose-600' : 'text-emerald-800'
+                                }`}>%</span>
+                              </div>
+                              <div className="flex gap-1 mt-1 flex-wrap">
+                                {[15, 18, 21, 25].map(pct => (
+                                  <button
+                                    key={pct}
+                                    type="button"
+                                    onClick={() => {
+                                      const cost = liveModalMetrics.totalCostDaily;
+                                      const rev = +(cost / (1 - (pct / 100))).toFixed(2);
+                                      setFormData({ ...formData, targetMarginPercent: pct, revenueDaily: rev });
+                                    }}
+                                    className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800 hover:bg-emerald-200"
+                                  >
+                                    {pct}%{pct === 21 ? ' (Std)' : ''}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+                          <p className="text-[10px] text-slate-500">
+                            Costo totale calcolato: <strong className="text-slate-800">{formatEUR(liveModalMetrics.totalCostDaily)}/gg</strong> • Ricarico sui costi corrispondente: <strong className="text-slate-800">+{liveModalMetrics.totalCostDaily > 0 ? (((liveModalMetrics.revenueDaily - liveModalMetrics.totalCostDaily) / liveModalMetrics.totalCostDaily) * 100).toFixed(1) : 0}%</strong>
+                          </p>
+                        </>
+                      )}
                     </div>
                   )}
                 </div>

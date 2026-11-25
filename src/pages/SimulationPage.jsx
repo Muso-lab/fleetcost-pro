@@ -10,7 +10,9 @@ import {
   calculateAccessoriesDailyCost,
   calculateSingleProjectMetrics,
   LEASE_PAYMENT_TIMINGS,
-  normalizeLeaseTiming
+  normalizeLeaseTiming,
+  COST_ALLOCATION_MODES,
+  computeMultiClientAllocation
 } from '../utils/cashFlowCalculations';
 import {
   Calculator,
@@ -32,7 +34,8 @@ import {
   ChevronDown,
   ChevronUp,
   Sparkles,
-  Briefcase
+  Briefcase,
+  Users
 } from 'lucide-react';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -50,6 +53,55 @@ const SimulationPage = () => {
   const [selectedTrailerId, setSelectedTrailerId] = useState('');
   const [clientName, setClientName] = useState('');
   const [routeName, setRouteName] = useState('');
+
+  // Sistema Multi-Commessa (da 1 a 4 Clienti con Costi a Fattor Comune)
+  const [clientCount, setClientCount] = useState(1); // 1 | 2 | 3 | 4
+  const [costAllocationMode, setCostAllocationMode] = useState('equal'); // 'equal' | 'proportional_metric' | 'proportional_revenue' | 'manual_percent'
+  const [billingEntities, setBillingEntities] = useState([
+    { id: 'c1', clientName: 'Cliente 1', route: '', driverMetric: 125, costSharePercent: 50, pricingMode: 'margin', targetMarginPercent: 21, revenueDaily: 0, paymentTermsClient: 60 },
+    { id: 'c2', clientName: 'Cliente 2', route: '', driverMetric: 125, costSharePercent: 50, pricingMode: 'margin', targetMarginPercent: 21, revenueDaily: 0, paymentTermsClient: 60 },
+    { id: 'c3', clientName: 'Cliente 3', route: '', driverMetric: 100, costSharePercent: 0, pricingMode: 'margin', targetMarginPercent: 21, revenueDaily: 0, paymentTermsClient: 60 },
+    { id: 'c4', clientName: 'Cliente 4', route: '', driverMetric: 100, costSharePercent: 0, pricingMode: 'margin', targetMarginPercent: 21, revenueDaily: 0, paymentTermsClient: 60 }
+  ]);
+
+  const handleClientCountChange = (newCount) => {
+    setClientCount(newCount);
+    const eqShare = +(100 / newCount).toFixed(2);
+    setBillingEntities(prev => prev.map((item, idx) => {
+      if (idx >= newCount) return item;
+      const share = idx === newCount - 1 ? +(100 - eqShare * (newCount - 1)).toFixed(2) : eqShare;
+      return {
+        ...item,
+        costSharePercent: costAllocationMode === 'manual_percent' ? share : item.costSharePercent
+      };
+    }));
+  };
+
+  const handleUpdateBillingEntity = (idx, patch) => {
+    setBillingEntities(prev => {
+      const updated = prev.map((item, i) => (i === idx ? { ...item, ...patch } : item));
+      return updated;
+    });
+  };
+
+  const handleNormalizeManualShares = () => {
+    const activeSlice = billingEntities.slice(0, clientCount);
+    const sum = activeSlice.reduce((s, e) => s + (Number(e.costSharePercent) || 0), 0);
+    if (sum <= 0) {
+      const eq = +(100 / clientCount).toFixed(2);
+      setBillingEntities(prev => prev.map((e, i) => (i < clientCount ? { ...e, costSharePercent: i === clientCount - 1 ? +(100 - eq * (clientCount - 1)).toFixed(2) : eq } : e)));
+      return;
+    }
+    let running = 0;
+    setBillingEntities(prev => prev.map((e, i) => {
+      if (i >= clientCount) return e;
+      if (i === clientCount - 1) return { ...e, costSharePercent: +Math.max(0, 100 - running).toFixed(2) };
+      const norm = +(((Number(e.costSharePercent) || 0) / sum) * 100).toFixed(2);
+      running += norm;
+      return { ...e, costSharePercent: norm };
+    }));
+  };
+
   const [kmTotal, setKmTotal] = useState(250);
   const [kmHighwayPercent, setKmHighwayPercent] = useState(60);
   const [workingDaysMonth, setWorkingDaysMonth] = useState(22);
@@ -296,9 +348,20 @@ const SimulationPage = () => {
       refrigerationCostDaily + telematicsCostDaily + washingCostDaily + extraCostDaily +
       partnerFeeDaily;
 
-    // Prezzo con margine target
-    const marginPct = Number(targetMarginPercent) || 20;
-    const revenueDailyTarget = marginPct < 100 ? totalCostDaily / (1 - (marginPct / 100)) : totalCostDaily * 1.2;
+    // Gestione Singolo Cliente vs Multi-Commessa (da 1 a 4 Clienti con costi a fattor comune)
+    const isMulti = clientCount > 1;
+    const activeBillingEntities = billingEntities.slice(0, clientCount);
+    const multiAlloc = isMulti
+      ? computeMultiClientAllocation(totalCostDaily, workingDays, activeBillingEntities, costAllocationMode)
+      : null;
+
+    // Prezzo con margine target (o somma tariffe attive delle entità di fatturazione)
+    const marginPct = isMulti
+      ? multiAlloc.totalMolPercent
+      : (targetMarginPercent !== '' && targetMarginPercent !== undefined ? Number(targetMarginPercent) : 20);
+    const revenueDailyTarget = isMulti
+      ? multiAlloc.totalRevenueDaily
+      : (marginPct < 100 ? totalCostDaily / (1 - (marginPct / 100)) : totalCostDaily * 1.2);
     const molDailyTarget = revenueDailyTarget - totalCostDaily;
 
     // Metriche finanziarie ponderate coerenti al 100% con ProjectsPage
@@ -318,9 +381,12 @@ const SimulationPage = () => {
       vehicleLeaseDaily,
       trailerLeaseDaily,
       revenueDaily: revenueDailyTarget,
+      isMultiClient: isMulti,
+      costAllocationMode,
+      billingEntities: isMulti ? multiAlloc.entities : [],
       leasePaymentTiming,
       trailerLeasePaymentTiming,
-      paymentTermsClient,
+      paymentTermsClient: isMulti ? multiAlloc.weightedClientDso : paymentTermsClient,
       paymentTermsSuppliers,
       paymentTermsDriver,
       paymentTermsFuel,
@@ -368,10 +434,15 @@ const SimulationPage = () => {
       partnerFeePerTrip: Number(partnerFeePerTrip) || 0,
       tripsPerDay: Number(tripsPerDay) || 1,
       partnerMarginDaily: partnerFeeDaily,
+      isMultiClient: isMulti,
+      clientCount,
+      costAllocationMode,
+      multiAllocation: multiAlloc,
+      billingEntities: isMulti ? multiAlloc.entities : [],
       totalCostDaily: financialMetrics.totalCostDaily,
       revenueDailyTarget,
       molDailyTarget,
-      molPercent: marginPct,
+      molPercent: +marginPct.toFixed(2),
       monthlyCost: financialMetrics.monthlyCost,
       monthlyRevenue: financialMetrics.monthlyRevenue,
       monthlyMol: financialMetrics.monthlyMol,
@@ -387,18 +458,118 @@ const SimulationPage = () => {
   // Salva direttamente nel Budget Commesse FOUR passando TUTTI i parametri e le nuove voci
   const [saveMode, setSaveMode] = useState(null); // 'potential' | 'active'
 
-  const handleSaveAsProject = (statusType = 'potential') => {
+  const handleSaveAsProject = (statusType = 'potential', splitIntoSeparateRows = false) => {
     if (!simulationResult) return;
     const isPotential = statusType === 'potential';
 
     const leaseTiming = simulationResult.leasePaymentTiming || leasePaymentTiming;
     const leaseTerms = leaseTiming === 'M1_D10' ? 0 : leaseTiming === 'M1_D30' ? 30 : 60;
+    const isMulti = Boolean(simulationResult.isMultiClient) && Array.isArray(simulationResult.billingEntities) && simulationResult.billingEntities.length > 1;
+
+    // Opzione B: Salva come N commesse distinte con costi già ribaltati secondo la % di ciascun cliente
+    if (isMulti && splitIntoSeparateRows) {
+      const groupCode = (isPotential ? 'SIM-MC' : 'PRJ-MC') + Math.floor(100 + Math.random() * 900);
+      simulationResult.billingEntities.forEach((entity, idx) => {
+        const ratio = (Number(entity.costSharePercent) || 0) / 100;
+        const cName = (entity.clientName || '').trim() || `Cliente ${idx + 1}`;
+        const cRoute = (entity.route || '').trim() || routeName || `${kmTotal} km giornalieri`;
+        const splitProject = {
+          code: `${groupCode}-${idx + 1}`,
+          multiGroupCode: groupCode,
+          name: `${cName} - ${cRoute} (Quota ${entity.costSharePercent}% Multi-Commessa)`,
+          client: cName,
+          route: cRoute,
+          startDate: new Date().toISOString().slice(0, 10),
+          operatingMonths: Number(operatingMonths) || 36,
+          workingDaysMonth: simulationResult.workingDays,
+          kmDaily: Math.round(simulationResult.kmTotal * ratio) || simulationResult.kmTotal,
+          highwayPercent: Number(kmHighwayPercent) || 70,
+          managementType: simulationResult.vehicle.ownershipType === 'terzi' ? 'T' : 'D',
+          vehicleId: simulationResult.vehicle.id,
+          trailerId: simulationResult.trailer ? simulationResult.trailer.id : '',
+          driverShiftType: simulationResult.driverShiftType,
+          driverManualOverride: true,
+          driverCostDaily: +(simulationResult.driverDaily * ratio).toFixed(2),
+          energyPayer: simulationResult.energyPayer,
+          fuelCostDaily: +(simulationResult.fuelDaily * ratio).toFixed(2),
+          tollsDaily: +(simulationResult.tollsDaily * ratio).toFixed(2),
+          tiresDaily: +(simulationResult.tiresDaily * ratio).toFixed(2),
+          refrigerationEnabled: simulationResult.refrigerationEnabled,
+          refrigerationTech: simulationResult.refrigerationTech,
+          refrigerationUnitCost: Number(refrigerationUnitCost),
+          refrigerationHourlyConsumption: Number(refrigerationHourlyConsumption),
+          refrigerationHoursDaily: +(Number(refrigerationHoursDaily) * ratio).toFixed(2),
+          refrigerationCostDaily: +(simulationResult.refrigerationCostDaily * ratio).toFixed(2),
+          telematicsEnabled: simulationResult.telematicsEnabled,
+          telematicsAuto: false,
+          telematicsMonthly: +(simulationResult.telematicsMonthly * ratio).toFixed(2),
+          telematicsCostDaily: +(simulationResult.telematicsCostDaily * ratio).toFixed(2),
+          washingEnabled: simulationResult.washingEnabled,
+          washingUnitCost: +(Number(washingUnitCost) * ratio).toFixed(2),
+          washingCountPerMonth: Number(washingCountPerMonth),
+          washingCostDaily: +(simulationResult.washingCostDaily * ratio).toFixed(2),
+          extraCostDescription,
+          extraCostAmount: +((Number(extraCostAmount) || 0) * ratio).toFixed(2),
+          extraCostFrequency,
+          extraCostDaily: +(simulationResult.extraCostDaily * ratio).toFixed(2),
+          otherCostsDaily: 0,
+          partnerMarginDaily: +((simulationResult.partnerMarginDaily || 0) * ratio).toFixed(2),
+          porterageDaily: 0,
+          vehicleLeaseDaily: +(simulationResult.vehicleLeaseDaily * ratio).toFixed(2),
+          trailerLeaseDaily: +(simulationResult.trailerLeaseDaily * ratio).toFixed(2),
+          revenueDaily: +entity.revenueDaily.toFixed(2),
+          totalCostDaily: +entity.allocatedCostDaily.toFixed(2),
+          molDaily: +entity.molDaily.toFixed(2),
+          monthlyCost: +entity.allocatedCostMonthly.toFixed(2),
+          monthlyRevenue: +entity.revenueMonthly.toFixed(2),
+          monthlyMol: +entity.molMonthly.toFixed(2),
+          molPercent: entity.molPercent,
+          targetMarginPercent: entity.molPercent,
+          contractStatus: isPotential ? 'potential' : 'active',
+          isPipelineFuture: isPotential,
+          paymentTermsClient: entity.paymentTermsClient ?? paymentTermsClient,
+          paymentTermsSuppliers,
+          paymentTermsLease: leaseTerms,
+          leasePaymentTiming: leaseTiming,
+          trailerLeasePaymentTiming,
+          paymentTermsDriver,
+          paymentTermsFuel,
+          paymentTermsTolls,
+          paymentTermsTires,
+          paymentTermsRefrigeration,
+          paymentTermsTelematics,
+          paymentTermsWashing,
+          paymentTermsExtra,
+          acciseRecoveryEligible: energyPayer !== 'client',
+          depositAmount: 0,
+          cashAdvanceRequired: +(simulationResult.workingCapitalNeed * ratio).toFixed(2),
+          notes: `Quota ${entity.costSharePercent}% di Multi-Commessa (${groupCode}) • Modello riparto: ${COST_ALLOCATION_MODES[simulationResult.costAllocationMode]?.shortLabel || 'Condiviso'}`
+        };
+        storageService.addProject(splitProject);
+      });
+      setSaveMode(statusType);
+      setSaveSuccess(true);
+      setTimeout(() => {
+        navigate('/projects');
+      }, 1200);
+      return;
+    }
+
+    // Opzione Standard / Multi-Commessa Unificata (Costi e Mezzo a fattor comune con entità di fatturazione separate)
+    const combinedClient = isMulti
+      ? simulationResult.multiAllocation.combinedClientLabel
+      : (clientName || (isPotential ? 'Trattativa Commerciale' : 'Nuovo Committente'));
 
     const newProject = {
       code: (isPotential ? 'SIM-' : 'PRJ-') + Math.floor(100 + Math.random() * 900),
-      name: clientName && routeName ? `${clientName} - ${routeName}` : `Linea con ${simulationResult.vehicle.name}`,
-      client: clientName || (isPotential ? 'Trattativa Commerciale' : 'Nuovo Committente'),
+      name: isMulti
+        ? (routeName ? `Multi-Commessa (${simulationResult.clientCount} Clienti): ${routeName}` : `Multi-Commessa ${combinedClient}`)
+        : (clientName && routeName ? `${clientName} - ${routeName}` : `Linea con ${simulationResult.vehicle.name}`),
+      client: combinedClient,
       route: routeName || `${kmTotal} km giornalieri`,
+      isMultiClient: isMulti,
+      costAllocationMode: simulationResult.costAllocationMode || 'equal',
+      billingEntities: isMulti ? simulationResult.billingEntities : [],
       startDate: new Date().toISOString().slice(0, 10),
       operatingMonths: Number(operatingMonths) || 36,
       workingDaysMonth: simulationResult.workingDays,
@@ -444,10 +615,10 @@ const SimulationPage = () => {
       monthlyRevenue: +simulationResult.monthlyRevenue.toFixed(2),
       monthlyMol: +simulationResult.monthlyMol.toFixed(2),
       molPercent: simulationResult.molPercent,
-      targetMarginPercent: Number(targetMarginPercent) || 21,
+      targetMarginPercent: simulationResult.molPercent,
       contractStatus: isPotential ? 'potential' : 'active',
       isPipelineFuture: isPotential,
-      paymentTermsClient,
+      paymentTermsClient: isMulti ? simulationResult.multiAllocation.weightedClientDso : paymentTermsClient,
       paymentTermsSuppliers,
       paymentTermsLease: leaseTerms,
       leasePaymentTiming: leaseTiming,
@@ -463,7 +634,7 @@ const SimulationPage = () => {
       acciseRecoveryEligible: energyPayer !== 'client',
       depositAmount: 0,
       cashAdvanceRequired: +simulationResult.workingCapitalNeed.toFixed(2),
-      notes: `${isPotential ? 'Trattativa / Simulazione potenziale' : 'Contratto operativo attivo'} generato dal simulatore con margine target ${simulationResult.molPercent}%${extraCostDescription ? ` | Extra: ${extraCostDescription}` : ''}`
+      notes: `${isPotential ? 'Trattativa / Simulazione potenziale' : 'Contratto operativo attivo'}${isMulti ? ` Multi-Commessa (${simulationResult.clientCount} clienti • Riparto: ${COST_ALLOCATION_MODES[simulationResult.costAllocationMode]?.shortLabel})` : ''} generato dal simulatore con margine ${simulationResult.molPercent}%${extraCostDescription ? ` | Extra: ${extraCostDescription}` : ''}`
     };
 
     storageService.addProject(newProject);
@@ -474,7 +645,7 @@ const SimulationPage = () => {
     }, 1200);
   };
 
-  // Esporta PDF Preventivo con layout istituzionale FOUR e righe differenziate cromaticamente
+  // Esporta PDF Preventivo con layout istituzionale FOUR e righe differenziate cromaticamente (incluso riparto Multi-Commessa)
   const handleExportPDF = () => {
     if (!simulationResult) return;
     const doc = new jsPDF();
@@ -490,12 +661,20 @@ const SimulationPage = () => {
 
     doc.setFontSize(10);
     doc.setTextColor(186, 230, 253); // sky-200
-    doc.text('PREVENTIVO ECONOMICO TRATTA & MARGINALITÀ', 110, 15);
+    doc.text(
+      simulationResult.isMultiClient
+        ? `PREVENTIVO MULTI-COMMESSA (${simulationResult.clientCount} CLIENTI)`
+        : 'PREVENTIVO ECONOMICO TRATTA & MARGINALITÀ',
+      105,
+      15
+    );
 
     // Box Metadati Tratta, Cliente e Mezzo
     doc.setFontSize(9);
     doc.setTextColor(51, 65, 85);
-    const clientTxt = clientName ? `Cliente: ${clientName}` : 'Cliente: Trattativa Commerciale';
+    const clientTxt = simulationResult.isMultiClient
+      ? `Clienti (${simulationResult.clientCount}): ${simulationResult.multiAllocation.combinedClientLabel}`
+      : (clientName ? `Cliente: ${clientName}` : 'Cliente: Trattativa Commerciale');
     const routeTxt = routeName ? `Tratta: ${routeName}` : `Percorso: ${simulationResult.kmTotal} km/gg`;
     const durationTxt = `Durata Contratto: ${simulationResult.operatingMonths || 36} Mesi`;
     doc.text(`${clientTxt}  |  ${routeTxt}  |  ${durationTxt}`, 14, 32);
@@ -507,6 +686,13 @@ const SimulationPage = () => {
     const markupPct = simulationResult.totalCostDaily > 0
       ? ((simulationResult.molDailyTarget / simulationResult.totalCostDaily) * 100).toFixed(1)
       : '0.0';
+
+    const multiRows = (simulationResult.isMultiClient && Array.isArray(simulationResult.billingEntities))
+      ? simulationResult.billingEntities.map((be, idx) => [
+          `FATTURAZIONE CLIENTE ${idx + 1}: ${be.clientName || `Cliente ${idx + 1}`}${be.route ? ` (${be.route})` : ''} [Quota Costo ${be.costSharePercent}% = ${formatEUR(be.allocatedCostDaily)}/gg]`,
+          `Tariffa: ${formatEUR(be.revenueDaily)}/gg (${formatEUR(be.revenueMonthly)}/m) • M.O.L.: ${formatEUR(be.molDaily)}/gg (${be.molPercent}%)`
+        ])
+      : [];
 
     const tableData = [
       ['Distanza Giornaliera Totale', `${simulationResult.kmTotal} km (${simulationResult.highwayKm.toFixed(0)} km Autostrada • ${simulationResult.urbanKm.toFixed(0)} km Urbano)`],
@@ -521,9 +707,10 @@ const SimulationPage = () => {
       ...(simulationResult.washingCostDaily > 0 ? [[`Lavaggi Automezzi (${formatEUR(simulationResult.washingMonthly)}/m)`, formatEUR(simulationResult.washingCostDaily)]] : []),
       ...(simulationResult.extraCostDaily > 0 ? [[`Costi Accessori Extra (${simulationResult.extraCostDescription || simulationResult.extraCostFrequency})`, formatEUR(simulationResult.extraCostDaily)]] : []),
       ...(simulationResult.partnerMarginDaily > 0 ? [[`Compenso Partner Coordinamento (${formatEUR(simulationResult.partnerFeePerTrip)}/vg × ${simulationResult.tripsPerDay} vg/gg)`, formatEUR(simulationResult.partnerMarginDaily)]] : []),
-      ['TOTALE COSTO OPERATIVO GIORNALIERO', formatEUR(simulationResult.totalCostDaily)],
-      ['TARIFFA GIORNALIERA PROPOSTA AL CLIENTE', formatEUR(simulationResult.revenueDailyTarget)],
-      ['M.O.L. GIORNALIERO (MARGINE SUL RICAVO)', `${formatEUR(simulationResult.molDailyTarget)} (${simulationResult.molPercent}%)`],
+      ['TOTALE COSTO OPERATIVO GIORNALIERO (A FATTOR COMUNE)', formatEUR(simulationResult.totalCostDaily)],
+      ...multiRows,
+      ['TARIFFA GIORNALIERA COMPLESSIVA FATTURATA', formatEUR(simulationResult.revenueDailyTarget)],
+      ['M.O.L. GIORNALIERO COMPLESSIVO (MARGINE SUL RICAVO)', `${formatEUR(simulationResult.molDailyTarget)} (${simulationResult.molPercent}%)`],
       ['RICARICO APPLICATO SUI COSTI (MARKUP)', `+${markupPct}% sui costi operativi`],
       [`COSTO MENSILE STIMATO (${simulationResult.workingDays} gg)`, formatEUR(simulationResult.monthlyCost)],
       [`RICAVO MENSILE STIMATO (${simulationResult.workingDays} gg)`, formatEUR(simulationResult.monthlyRevenue)],
@@ -548,6 +735,12 @@ const SimulationPage = () => {
             data.cell.styles.textColor = [153, 27, 27];
             data.cell.styles.fontStyle = 'bold';
           }
+          // Entità Fatturazione Multi-Commessa
+          else if (rowText.includes('FATTURAZIONE CLIENTE')) {
+            data.cell.styles.fillColor = [240, 249, 255];
+            data.cell.styles.textColor = [22, 78, 135];
+            data.cell.styles.fontStyle = 'bold';
+          }
           // Ricavi Totali -> Sfondo azzurro/blu chiaro (#eff6ff), testo blu scuro FOUR
           else if (rowText.includes('TARIFFA GIORNALIERA') || rowText.includes('RICAVO MENSILE') || rowText.includes('FATTURATO INTERO')) {
             data.cell.styles.fillColor = [239, 246, 255];
@@ -570,7 +763,9 @@ const SimulationPage = () => {
       }
     });
 
-    const clientPart = clientName ? `_${clientName.replace(/\s+/g, '_')}` : '';
+    const clientPart = simulationResult.isMultiClient
+      ? `_MultiCommessa_${simulationResult.clientCount}Clienti`
+      : (clientName ? `_${clientName.replace(/\s+/g, '_')}` : '');
     doc.save(`FOUR_Preventivo${clientPart}_${simulationResult.vehicle.id}.pdf`);
   };
 
@@ -585,9 +780,9 @@ const SimulationPage = () => {
                 <Calculator className="w-6 h-6" />
               </span>
               <div>
-                <h1 className="text-2xl font-black text-slate-900 tracking-tight">Simulatore Costi Tratta & Preventivi</h1>
+                <h1 className="text-2xl font-black text-slate-900 tracking-tight">Simulatore Costi Tratta & Preventivi (1-4 Clienti)</h1>
                 <p className="text-xs text-slate-500">
-                  Calcolo costi operativi, quota noleggi, marginalità e fabbisogno finanziario per nuove linee
+                  Calcolo costi a fattor comune, ribaltamento automatico o manuale, tariffe attive separate e marginalità per singolo cliente
                 </p>
               </div>
             </div>
@@ -598,34 +793,259 @@ const SimulationPage = () => {
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
           {/* Colonna Sinistra: Input Form */}
           <div className="lg:col-span-5 bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-5">
-            <h2 className="text-sm font-bold text-slate-900 pb-2 border-b border-slate-100 flex items-center">
-              <Truck className="w-4 h-4 mr-2 text-emerald-600" />
-              Parametri Tratta & Selezione Mezzi
+            <h2 className="text-sm font-bold text-slate-900 pb-2 border-b border-slate-100 flex items-center justify-between">
+              <span className="flex items-center">
+                <Truck className="w-4 h-4 mr-2 text-emerald-600" />
+                Parametri Tratta, Risorse Condivise & Clienti
+              </span>
+              {clientCount > 1 && (
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-blue-100 text-[#164e87] border border-blue-300">
+                  Multi-Commessa ({clientCount} Clienti)
+                </span>
+              )}
             </h2>
 
             <form onSubmit={handleCalculate} className="space-y-4 text-xs">
-              {/* Cliente & Tratta facoltativi */}
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Cliente (Opzionale)</label>
-                  <input
-                    type="text"
-                    placeholder="Es. Decathlon, Conad"
-                    value={clientName}
-                    onChange={(e) => setClientName(e.target.value)}
-                    className="w-full px-3 py-1.5 border border-slate-300 rounded-xl"
-                  />
+              {/* SELETTORE SISTEMA MULTI-COMMESSA: DA 1 A 4 CLIENTI */}
+              <div className="p-3.5 bg-gradient-to-br from-blue-50/90 to-indigo-50/50 rounded-xl border border-blue-200 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-1.5">
+                    <Users className="w-4 h-4 text-[#164e87]" />
+                    <span className="font-extrabold text-[#164e87] text-xs uppercase tracking-wider">
+                      Configurazione Clienti & Fatturazione (1 - 4)
+                    </span>
+                  </div>
+                  <span className="text-[10px] font-bold text-slate-500">
+                    Costi a fattor comune
+                  </span>
                 </div>
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Nome Tratta</label>
-                  <input
-                    type="text"
-                    placeholder="Es. Bologna - Modena A/R"
-                    value={routeName}
-                    onChange={(e) => setRouteName(e.target.value)}
-                    className="w-full px-3 py-1.5 border border-slate-300 rounded-xl"
-                  />
+
+                {/* Bottoni 1, 2, 3, 4 Clienti */}
+                <div className="grid grid-cols-4 gap-1.5">
+                  {[1, 2, 3, 4].map(n => (
+                    <button
+                      key={n}
+                      type="button"
+                      onClick={() => handleClientCountChange(n)}
+                      className={`py-2 px-2 rounded-lg font-black text-xs transition border ${
+                        clientCount === n
+                          ? 'bg-[#164e87] text-white border-[#164e87] shadow-sm'
+                          : 'bg-white text-slate-700 border-slate-200 hover:bg-blue-50'
+                      }`}
+                    >
+                      {n === 1 ? '1 Cliente' : `${n} Clienti`}
+                    </button>
+                  ))}
                 </div>
+
+                {clientCount === 1 ? (
+                  /* Singolo Cliente Standard */
+                  <div className="grid grid-cols-2 gap-2.5 pt-1">
+                    <div>
+                      <label className="block font-semibold text-slate-700 mb-1">Cliente (Opzionale)</label>
+                      <input
+                        type="text"
+                        placeholder="Es. Decathlon, Conad"
+                        value={clientName}
+                        onChange={(e) => setClientName(e.target.value)}
+                        className="w-full px-3 py-1.5 border border-slate-300 rounded-xl bg-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="block font-semibold text-slate-700 mb-1">Nome Tratta</label>
+                      <input
+                        type="text"
+                        placeholder="Es. Bologna - Modena A/R"
+                        value={routeName}
+                        onChange={(e) => setRouteName(e.target.value)}
+                        className="w-full px-3 py-1.5 border border-slate-300 rounded-xl bg-white"
+                      />
+                    </div>
+                  </div>
+                ) : (
+                  /* Multi-Commessa (2, 3 o 4 Clienti) con Modello di Ribaltamento Costi e Marginalità Separate */
+                  <div className="space-y-3 pt-1">
+                    <div>
+                      <label className="block font-semibold text-slate-700 mb-1">Nome Giro / Tratta Condivisa</label>
+                      <input
+                        type="text"
+                        placeholder="Es. Giro Distribuzione Hub Bologna / Milano Multi-Cliente"
+                        value={routeName}
+                        onChange={(e) => setRouteName(e.target.value)}
+                        className="w-full px-3 py-1.5 border border-blue-300 rounded-xl bg-white font-semibold"
+                      />
+                    </div>
+
+                    {/* Scelta Modello di Ribaltamento Costi (Automatico o Manuale) */}
+                    <div>
+                      <label className="block font-bold text-[#164e87] mb-1">
+                        Modello di Ribaltamento Costi Comuni (Mezzo, Autista, Energia, Accessori)
+                      </label>
+                      <select
+                        value={costAllocationMode}
+                        onChange={(e) => setCostAllocationMode(e.target.value)}
+                        className="w-full px-3 py-2 border border-blue-300 rounded-xl bg-white font-bold text-slate-800 text-xs"
+                      >
+                        {Object.values(COST_ALLOCATION_MODES).map(mode => (
+                          <option key={mode.id} value={mode.id}>{mode.label}</option>
+                        ))}
+                      </select>
+                      <p className="text-[10px] text-slate-600 mt-1">
+                        {COST_ALLOCATION_MODES[costAllocationMode]?.description}
+                      </p>
+                    </div>
+
+                    {/* Schede Singole Entità di Fatturazione (da 2 a 4 Clienti) */}
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] font-extrabold text-slate-800">
+                          Entità di Fatturazione ({clientCount} Clienti) • Tariffe & Marginalità Separate
+                        </span>
+                        {costAllocationMode === 'manual_percent' && (
+                          <button
+                            type="button"
+                            onClick={handleNormalizeManualShares}
+                            className="text-[10px] font-bold text-[#164e87] hover:underline bg-blue-100 px-2 py-0.5 rounded"
+                          >
+                            Normalizza Quote a 100%
+                          </button>
+                        )}
+                      </div>
+
+                      {billingEntities.slice(0, clientCount).map((entity, idx) => (
+                        <div key={entity.id || idx} className="p-2.5 bg-white rounded-xl border border-blue-200 shadow-2xs space-y-2">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[11px] font-black text-[#164e87] bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
+                              Cliente #{idx + 1}
+                            </span>
+                            <div className="flex items-center space-x-1">
+                              <span className="text-[10px] text-slate-500">Incasso DSO:</span>
+                              <select
+                                value={entity.paymentTermsClient ?? 60}
+                                onChange={(e) => handleUpdateBillingEntity(idx, { paymentTermsClient: parseInt(e.target.value) || 60 })}
+                                className="px-1.5 py-0.5 border border-slate-300 rounded text-[10px] font-bold bg-slate-50"
+                              >
+                                <option value="30">30 gg</option>
+                                <option value="60">60 gg</option>
+                                <option value="90">90 gg</option>
+                                <option value="120">120 gg</option>
+                              </select>
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-2">
+                            <div>
+                              <label className="block text-[10px] font-bold text-slate-600 mb-0.5">Ragione Sociale / Cliente *</label>
+                              <input
+                                type="text"
+                                placeholder={`Nome Cliente ${idx + 1}`}
+                                value={entity.clientName}
+                                onChange={(e) => handleUpdateBillingEntity(idx, { clientName: e.target.value })}
+                                className="w-full px-2 py-1 border border-slate-300 rounded-lg font-bold text-xs"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-[10px] font-bold text-slate-600 mb-0.5">Sub-Tratta / Servizio</label>
+                              <input
+                                type="text"
+                                placeholder="Es. Scarico Hub / Pallets"
+                                value={entity.route}
+                                onChange={(e) => handleUpdateBillingEntity(idx, { route: e.target.value })}
+                                className="w-full px-2 py-1 border border-slate-300 rounded-lg text-xs"
+                              />
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-3 gap-2 pt-1 border-t border-slate-100">
+                            {costAllocationMode === 'proportional_metric' ? (
+                              <div>
+                                <label className="block text-[10px] font-bold text-blue-800 mb-0.5">Km / Pallets / Quota</label>
+                                <input
+                                  type="number"
+                                  step="any"
+                                  min="0"
+                                  value={entity.driverMetric}
+                                  onChange={(e) => handleUpdateBillingEntity(idx, { driverMetric: parseFloat(e.target.value) || 0 })}
+                                  className="w-full px-2 py-1 border border-blue-400 bg-blue-50/40 rounded-lg font-black text-xs text-blue-950"
+                                />
+                              </div>
+                            ) : (
+                              <div>
+                                <label className="block text-[10px] font-bold text-slate-600 mb-0.5">% Costo Ribaltato</label>
+                                <div className="flex items-center space-x-1">
+                                  <input
+                                    type="number"
+                                    step="any"
+                                    min="0"
+                                    max="100"
+                                    disabled={costAllocationMode !== 'manual_percent'}
+                                    value={
+                                      costAllocationMode === 'equal'
+                                        ? +(100 / clientCount).toFixed(1)
+                                        : entity.costSharePercent
+                                    }
+                                    onChange={(e) => handleUpdateBillingEntity(idx, { costSharePercent: parseFloat(e.target.value) || 0 })}
+                                    className={`w-full px-2 py-1 border rounded-lg font-black text-xs ${
+                                      costAllocationMode === 'manual_percent'
+                                        ? 'border-blue-400 bg-white text-slate-900'
+                                        : 'border-slate-200 bg-slate-100 text-slate-500 cursor-not-allowed'
+                                    }`}
+                                  />
+                                  <span className="text-[10px] font-bold text-slate-500">%</span>
+                                </div>
+                              </div>
+                            )}
+
+                            <div>
+                              <label className="block text-[10px] font-bold text-emerald-800 mb-0.5">Margine Target (%)</label>
+                              <div className="flex items-center space-x-1">
+                                <input
+                                  type="number"
+                                  step="any"
+                                  value={entity.targetMarginPercent}
+                                  onChange={(e) => {
+                                    const val = e.target.value === '' ? 0 : parseFloat(e.target.value);
+                                    handleUpdateBillingEntity(idx, {
+                                      pricingMode: 'margin',
+                                      targetMarginPercent: isNaN(val) ? 0 : val
+                                    });
+                                  }}
+                                  className="w-full px-2 py-1 border border-emerald-400 bg-emerald-50/50 rounded-lg font-black text-emerald-900 text-xs"
+                                />
+                                <span className="text-[10px] font-bold text-emerald-700">%</span>
+                              </div>
+                            </div>
+
+                            <div>
+                              <label className="block text-[10px] font-bold text-slate-700 mb-0.5">
+                                Tariffa Attiva (€/gg)
+                              </label>
+                              <input
+                                type="number"
+                                step="any"
+                                placeholder="Auto da Margine"
+                                value={entity.pricingMode === 'revenue' ? entity.revenueDaily : ''}
+                                onChange={(e) => {
+                                  const raw = e.target.value;
+                                  if (raw === '') {
+                                    handleUpdateBillingEntity(idx, { pricingMode: 'margin' });
+                                  } else {
+                                    handleUpdateBillingEntity(idx, {
+                                      pricingMode: 'revenue',
+                                      revenueDaily: parseFloat(raw) || 0
+                                    });
+                                  }
+                                }}
+                                className="w-full px-2 py-1 border border-slate-300 rounded-lg font-bold text-xs placeholder:text-[10px] placeholder:font-normal"
+                                title="Lascia vuoto per calcolare la tariffa dal Margine Target %, oppure inserisci una tariffa fissa in €/gg"
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Seleziona Mezzo dalla Flotta */}
@@ -1084,33 +1504,45 @@ const SimulationPage = () => {
                     <div className="flex items-center space-x-1">
                       <input
                         type="number"
-                        min="1"
-                        max="60"
+                        step="any"
+                        disabled={clientCount > 1}
                         value={targetMarginPercent}
-                        onChange={(e) => setTargetMarginPercent(parseFloat(e.target.value) || 21)}
-                        className="w-full px-3 py-1.5 border border-emerald-400 rounded-xl font-extrabold text-emerald-800 bg-emerald-50 text-xs"
+                        onChange={(e) => setTargetMarginPercent(parseFloat(e.target.value) || 0)}
+                        className={`w-full px-3 py-1.5 border rounded-xl font-extrabold text-xs ${
+                          clientCount > 1
+                            ? 'border-slate-200 bg-slate-100 text-slate-400 cursor-not-allowed'
+                            : 'border-emerald-400 text-emerald-800 bg-emerald-50'
+                        }`}
                       />
                       <span className="text-emerald-800 font-bold text-xs">%</span>
                     </div>
-                    <div className="flex gap-1 mt-1 flex-wrap">
-                      {[15, 18, 21, 25].map(pct => (
-                        <button
-                          key={pct}
-                          type="button"
-                          onClick={() => setTargetMarginPercent(pct)}
-                          className={`px-1.5 py-0.5 rounded text-[10px] font-bold transition ${
-                            targetMarginPercent === pct
-                              ? 'bg-emerald-600 text-white shadow-xs'
-                              : 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200'
-                          }`}
-                        >
-                          {pct}%{pct === 21 ? ' (Std)' : ''}
-                        </button>
-                      ))}
-                    </div>
-                    <p className="text-[9px] text-slate-500 mt-0.5">
-                      Ricarico sui costi: <strong className="text-slate-800">+{targetMarginPercent < 100 ? ((targetMarginPercent / (100 - targetMarginPercent)) * 100).toFixed(1) : 0}%</strong>
-                    </p>
+                    {clientCount > 1 ? (
+                      <p className="text-[9px] text-[#164e87] font-bold mt-1">
+                        In modalità Multi-Commessa le marginalità sono differenziate sopra per ciascuno dei {clientCount} clienti.
+                      </p>
+                    ) : (
+                      <>
+                        <div className="flex gap-1 mt-1 flex-wrap">
+                          {[15, 18, 21, 25].map(pct => (
+                            <button
+                              key={pct}
+                              type="button"
+                              onClick={() => setTargetMarginPercent(pct)}
+                              className={`px-1.5 py-0.5 rounded text-[10px] font-bold transition ${
+                                targetMarginPercent === pct
+                                  ? 'bg-emerald-600 text-white shadow-xs'
+                                  : 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200'
+                              }`}
+                            >
+                              {pct}%{pct === 21 ? ' (Std)' : ''}
+                            </button>
+                          ))}
+                        </div>
+                        <p className="text-[9px] text-slate-500 mt-0.5">
+                          Ricarico sui costi: <strong className="text-slate-800">+{targetMarginPercent < 100 ? ((targetMarginPercent / (100 - targetMarginPercent)) * 100).toFixed(1) : 0}%</strong>
+                        </p>
+                      </>
+                    )}
                   </div>
                 </div>
 
@@ -1356,6 +1788,110 @@ const SimulationPage = () => {
                   </div>
                 </div>
 
+                {/* PROSPETTO MULTI-COMMESSA: RIBALTAMENTO COSTI E ENTITÀ DI FATTURAZIONE SEPARATE (1-4 CLIENTI) */}
+                {simulationResult.isMultiClient && Array.isArray(simulationResult.billingEntities) && (
+                  <div className="bg-white rounded-2xl p-6 shadow-sm border-2 border-blue-200 space-y-4">
+                    <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-100">
+                      <div className="flex items-center space-x-2">
+                        <span className="p-1.5 bg-blue-100 text-[#164e87] rounded-lg">
+                          <Users className="w-4 h-4" />
+                        </span>
+                        <div>
+                          <h3 className="text-sm font-black text-slate-900">
+                            Prospetto Multi-Commessa ({simulationResult.clientCount} Entità di Fatturazione)
+                          </h3>
+                          <p className="text-[11px] text-slate-500">
+                            Modello di ribaltamento costi: <strong className="text-[#164e87]">{COST_ALLOCATION_MODES[simulationResult.costAllocationMode]?.label}</strong>
+                          </p>
+                        </div>
+                      </div>
+                      <span className="px-2.5 py-1 rounded-full text-[11px] font-black bg-emerald-100 text-emerald-800 border border-emerald-300">
+                        Costo Condiviso: {formatEUR(simulationResult.totalCostDaily)}/gg ({formatEUR(simulationResult.monthlyCost)}/m)
+                      </span>
+                    </div>
+
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-xs text-left divide-y divide-slate-200">
+                        <thead className="bg-slate-50 text-slate-600 font-extrabold uppercase text-[10px]">
+                          <tr>
+                            <th className="py-2.5 px-2">Entità Fatturazione / Cliente</th>
+                            <th className="py-2.5 px-2 text-right">Quota % Costo</th>
+                            <th className="py-2.5 px-2 text-right">Costo Ribaltato</th>
+                            <th className="py-2.5 px-2 text-right">Tariffa Attiva</th>
+                            <th className="py-2.5 px-2 text-right">M.O.L. Cliente</th>
+                            <th className="py-2.5 px-2 text-center">Margine %</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {simulationResult.billingEntities.map((be, idx) => (
+                            <tr key={be.id || idx} className="hover:bg-blue-50/40">
+                              <td className="py-2.5 px-2">
+                                <div className="font-black text-slate-900">{be.clientName || `Cliente ${idx + 1}`}</div>
+                                <div className="text-[10px] text-slate-500">
+                                  {be.route || 'Servizio condiviso'} • Incasso {be.paymentTermsClient} gg
+                                </div>
+                              </td>
+                              <td className="py-2.5 px-2 text-right font-mono font-bold text-[#164e87]">
+                                {formatPercent(be.costSharePercent)}
+                              </td>
+                              <td className="py-2.5 px-2 text-right">
+                                <div className="font-bold text-slate-800">{formatEUR(be.allocatedCostDaily)}/gg</div>
+                                <div className="text-[10px] text-slate-500">{formatEUR(be.allocatedCostMonthly)}/m</div>
+                              </td>
+                              <td className="py-2.5 px-2 text-right">
+                                <div className="font-black text-[#164e87]">{formatEUR(be.revenueDaily)}/gg</div>
+                                <div className="text-[10px] text-slate-600 font-semibold">{formatEUR(be.revenueMonthly)}/m</div>
+                              </td>
+                              <td className="py-2.5 px-2 text-right">
+                                <div className={`font-black ${be.molDaily >= 0 ? 'text-emerald-700' : 'text-rose-600'}`}>
+                                  {formatEUR(be.molDaily)}/gg
+                                </div>
+                                <div className="text-[10px] text-slate-500">{formatEUR(be.molMonthly)}/m</div>
+                              </td>
+                              <td className="py-2.5 px-2 text-center">
+                                <span className={`px-2 py-0.5 rounded-full text-[10px] font-black border ${
+                                  be.molPercent < 0
+                                    ? 'bg-rose-100 text-rose-800 border-rose-200'
+                                    : be.molPercent < 15
+                                      ? 'bg-amber-100 text-amber-800 border-amber-200'
+                                      : 'bg-emerald-100 text-emerald-800 border-emerald-200'
+                                }`}>
+                                  {formatPercent(be.molPercent)}
+                                </span>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                        <tfoot className="bg-slate-900 text-white font-bold text-xs">
+                          <tr>
+                            <td className="py-2.5 px-2 rounded-bl-xl">TOTALE CONSOLIDATO ({simulationResult.clientCount} Clienti)</td>
+                            <td className="py-2.5 px-2 text-right font-mono text-cyan-300">
+                              {formatPercent(simulationResult.multiAllocation?.totalSharePercent || 100)}
+                            </td>
+                            <td className="py-2.5 px-2 text-right">
+                              <div>{formatEUR(simulationResult.totalCostDaily)}/gg</div>
+                              <div className="text-[10px] text-slate-300">{formatEUR(simulationResult.monthlyCost)}/m</div>
+                            </td>
+                            <td className="py-2.5 px-2 text-right text-emerald-300">
+                              <div>{formatEUR(simulationResult.revenueDailyTarget)}/gg</div>
+                              <div className="text-[10px] text-emerald-200">{formatEUR(simulationResult.monthlyRevenue)}/m</div>
+                            </td>
+                            <td className="py-2.5 px-2 text-right text-emerald-400">
+                              <div>{formatEUR(simulationResult.molDailyTarget)}/gg</div>
+                              <div className="text-[10px] text-emerald-200">{formatEUR(simulationResult.monthlyMol)}/m</div>
+                            </td>
+                            <td className="py-2.5 px-2 text-center rounded-br-xl">
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-500 text-slate-950">
+                                {formatPercent(simulationResult.molPercent)}
+                              </span>
+                            </td>
+                          </tr>
+                        </tfoot>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
                 {/* Dettaglio Costi Operativi */}
                 <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200 space-y-4">
                   <h3 className="text-sm font-bold text-slate-900 pb-2 border-b border-slate-100">
@@ -1500,26 +2036,57 @@ const SimulationPage = () => {
                       </span>
                     </div>
                   ) : (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      <button
-                        type="button"
-                        onClick={() => handleSaveAsProject('potential')}
-                        className="py-3 px-4 bg-amber-500 hover:bg-amber-600 text-slate-950 rounded-xl font-black shadow-md transition flex items-center justify-center space-x-2 text-xs"
-                        title="Salva questa simulazione come Trattativa/Potenziale per testarne l'impatto sul progetto nella sua interezza"
-                      >
-                        <Sparkles className="w-4 h-4 text-slate-950" />
-                        <span>Salva come Trattativa / Simulazione</span>
-                      </button>
+                    <div className="space-y-2.5">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <button
+                          type="button"
+                          onClick={() => handleSaveAsProject('potential', false)}
+                          className="py-3 px-4 bg-amber-500 hover:bg-amber-600 text-slate-950 rounded-xl font-black shadow-md transition flex items-center justify-center space-x-2 text-xs"
+                          title="Salva questa simulazione come Trattativa/Potenziale per testarne l'impatto sul progetto nella sua interezza"
+                        >
+                          <Sparkles className="w-4 h-4 text-slate-950" />
+                          <span>
+                            {simulationResult.isMultiClient
+                              ? `Salva Multi-Commessa (${simulationResult.clientCount} Clienti) in Trattativa`
+                              : 'Salva come Trattativa / Simulazione'}
+                          </span>
+                        </button>
 
-                      <button
-                        type="button"
-                        onClick={() => handleSaveAsProject('active')}
-                        className="py-3 px-4 bg-[#164e87] hover:bg-[#0b2440] text-white rounded-xl font-black shadow-md transition flex items-center justify-center space-x-2 text-xs border border-cyan-400/40"
-                        title="Salva direttamente come Contratto Attivo a regime nel budget operativo"
-                      >
-                        <Save className="w-4 h-4 text-cyan-300" />
-                        <span>Salva come Contratto Attivo</span>
-                      </button>
+                        <button
+                          type="button"
+                          onClick={() => handleSaveAsProject('active', false)}
+                          className="py-3 px-4 bg-[#164e87] hover:bg-[#0b2440] text-white rounded-xl font-black shadow-md transition flex items-center justify-center space-x-2 text-xs border border-cyan-400/40"
+                          title="Salva direttamente come Contratto Attivo a regime nel budget operativo"
+                        >
+                          <Save className="w-4 h-4 text-cyan-300" />
+                          <span>
+                            {simulationResult.isMultiClient
+                              ? `Salva Multi-Commessa (${simulationResult.clientCount} Clienti) Attiva`
+                              : 'Salva come Contratto Attivo'}
+                          </span>
+                        </button>
+                      </div>
+
+                      {simulationResult.isMultiClient && (
+                        <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
+                          <button
+                            type="button"
+                            onClick={() => handleSaveAsProject('potential', true)}
+                            className="px-3 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 rounded-lg font-bold text-[11px] transition"
+                            title="Genera righe di commessa distinte per ciascun cliente con i costi già ribaltati pro-quota"
+                          >
+                            ⚡ Oppure esplodi in {simulationResult.clientCount} Trattative Separate (pro-quota)
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleSaveAsProject('active', true)}
+                            className="px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-[#164e87] border border-blue-200 rounded-lg font-bold text-[11px] transition"
+                            title="Genera righe di commessa attive distinte per ciascun cliente con i costi già ribaltati pro-quota"
+                          >
+                            🏢 Esplodi in {simulationResult.clientCount} Commesse Attive Separate (pro-quota)
+                          </button>
+                        </div>
+                      )}
                     </div>
                   )}
                   <p className="text-[11px] text-slate-400 text-center">
