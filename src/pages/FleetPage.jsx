@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import storageService from '../services/storageService';
-import { formatEUR, LEASE_PAYMENT_TIMINGS, normalizeLeaseTiming } from '../utils/cashFlowCalculations';
+import { formatEUR, LEASE_PAYMENT_TIMINGS, normalizeLeaseTiming, formatVariationDate } from '../utils/cashFlowCalculations';
 import { MARKET_VEHICLE_BENCHMARKS } from '../data/initialData';
 import {
   Truck,
@@ -23,7 +23,8 @@ import {
   Check,
   Shield,
   ArrowRightLeft,
-  Sparkles
+  Sparkles,
+  Calendar
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
@@ -37,6 +38,9 @@ const FleetPage = () => {
   const [fuelFilter, setFuelFilter] = useState('all');
   const [showModal, setShowModal] = useState(false);
   const [editingItem, setEditingItem] = useState(null);
+  const [applyLeaseFromEffectiveDate, setApplyLeaseFromEffectiveDate] = useState(false);
+  const [newLeaseEffectiveDate, setNewLeaseEffectiveDate] = useState('2026-07-01');
+  const [newLeaseVariationNote, setNewLeaseVariationNote] = useState('');
 
   // Form State
   const [formData, setFormData] = useState({
@@ -47,6 +51,7 @@ const FleetPage = () => {
     avgConsumption: 1.2,
     yieldKmPerUnit: 0.83, // km/kWh o km/kg ("al contrario")
     monthlyLease: 4500,
+    leaseVariations: [],
     ownershipType: 'noleggio', // noleggio, proprieta, terzi
     // Parametri Mezzi di Proprietà
     purchaseCost: 140000,
@@ -77,6 +82,9 @@ const FleetPage = () => {
   };
 
   const handleOpenModal = (item = null, type = activeTab) => {
+    setApplyLeaseFromEffectiveDate(false);
+    setNewLeaseEffectiveDate('2026-07-01');
+    setNewLeaseVariationNote('');
     if (item) {
       setEditingItem({ ...item, itemType: type });
       const cons = item.avgConsumption || 1.0;
@@ -94,6 +102,7 @@ const FleetPage = () => {
         avgConsumption: cons,
         yieldKmPerUnit: item.yieldKmPerUnit || yieldVal,
         monthlyLease: item.monthlyLease || 0,
+        leaseVariations: Array.isArray(item.leaseVariations) ? item.leaseVariations : [],
         ownershipType: item.ownershipType || 'noleggio',
         purchaseCost: item.purchaseCost || 140000,
         amortizationYears: item.amortizationYears || 5,
@@ -102,6 +111,7 @@ const FleetPage = () => {
         maintenanceMonthly: item.maintenanceMonthly || 350,
         tireCostKm: item.tireCostKm || 0.04,
         tireCount: item.tireCount || 12,
+        leasePaymentTiming: item.leasePaymentTiming || normalizeLeaseTiming(item),
         leasePaymentTerms: item.leasePaymentTerms !== undefined ? item.leasePaymentTerms : 0,
         lessorName: item.lessorName || '',
         licenseTypeId: item.licenseTypeId || 'ce_diurno',
@@ -123,6 +133,7 @@ const FleetPage = () => {
           avgConsumption: 1.2,
           yieldKmPerUnit: 0.83,
           monthlyLease: 4800,
+          leaseVariations: [],
           ownershipType: 'noleggio',
           purchaseCost: 150000,
           amortizationYears: 5,
@@ -151,6 +162,7 @@ const FleetPage = () => {
           avgConsumption: 0,
           yieldKmPerUnit: 0,
           monthlyLease: 1600,
+          leaseVariations: [],
           ownershipType: 'noleggio',
           purchaseCost: 65000,
           amortizationYears: 7,
@@ -186,17 +198,37 @@ const FleetPage = () => {
     e.preventDefault();
     if (!formData.name) return;
 
+    let payload = { ...formData };
+    if (
+      editingItem &&
+      editingItem.id &&
+      applyLeaseFromEffectiveDate &&
+      newLeaseEffectiveDate &&
+      Number(editingItem.monthlyLease) !== Number(formData.monthlyLease)
+    ) {
+      const existingVars = Array.isArray(formData.leaseVariations) ? [...formData.leaseVariations] : [];
+      const newVarEntry = {
+        id: 'lvar_' + Date.now(),
+        effectiveDate: newLeaseEffectiveDate,
+        previousMonthlyLease: Number(editingItem.monthlyLease) || 0,
+        monthlyLease: Number(formData.monthlyLease) || 0,
+        note: newLeaseVariationNote || `Adeguamento canone nolo dal ${formatVariationDate(newLeaseEffectiveDate)}`
+      };
+      payload.leaseVariations = [...existingVars.filter(v => v.effectiveDate !== newLeaseEffectiveDate), newVarEntry]
+        .sort((a, b) => String(a.effectiveDate).localeCompare(String(b.effectiveDate)));
+    }
+
     if (activeTab === 'vehicles') {
       if (editingItem && editingItem.id) {
-        storageService.updateVehicle(editingItem.id, formData);
+        storageService.updateVehicle(editingItem.id, payload);
       } else {
-        storageService.addVehicle(formData);
+        storageService.addVehicle(payload);
       }
     } else {
       if (editingItem && editingItem.id) {
-        storageService.updateTrailer(editingItem.id, formData);
+        storageService.updateTrailer(editingItem.id, payload);
       } else {
-        storageService.addTrailer(formData);
+        storageService.addTrailer(payload);
       }
     }
 
@@ -525,6 +557,23 @@ const FleetPage = () => {
                     </span>
                     <span className="font-extrabold text-slate-900">{formatEUR(item.monthlyLease)} / m</span>
                   </div>
+
+                  {Array.isArray(item.leaseVariations) && item.leaseVariations.length > 0 && (
+                    <div className="p-2 rounded-lg bg-indigo-50 border border-indigo-200 space-y-1">
+                      {item.leaseVariations.map((lv, lIdx) => (
+                        <div key={lv.id || lIdx} className="flex items-center justify-between text-[10px]">
+                          <span className="font-bold text-indigo-900 flex items-center gap-1">
+                            <Calendar className="w-3 h-3 text-indigo-600" />
+                            <span>Dal {formatVariationDate(lv.effectiveDate)}:</span>
+                          </span>
+                          <span className="font-mono font-extrabold text-indigo-950">
+                            {lv.previousMonthlyLease !== undefined ? `${formatEUR(lv.previousMonthlyLease)} → ` : ''}
+                            {formatEUR(lv.monthlyLease ?? lv.newValue)}/m
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
 
                   <div className="flex justify-between items-center">
                     <span className="text-slate-500">Addebito Scadenza Nolo:</span>
@@ -912,6 +961,151 @@ const FleetPage = () => {
                   </div>
                 </div>
               )}
+
+              {/* SEZIONE VARIAZIONE CANONE A PARTIRE DA UNA DATA (Ricalcolo automatico sulle commesse) */}
+              <div className="p-3.5 bg-indigo-50/70 border border-indigo-200 rounded-xl space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-extrabold text-indigo-950 uppercase tracking-wider flex items-center gap-1.5">
+                    <Calendar className="w-3.5 h-3.5 text-indigo-700" />
+                    <span>Variazione Canone Nolo a partire da una Data</span>
+                  </span>
+                  <span className="text-[10px] font-bold text-indigo-800 bg-white px-2 py-0.5 rounded-full border border-indigo-200">
+                    Ricalcolo Commesse
+                  </span>
+                </div>
+
+                {editingItem && Number(editingItem.monthlyLease) !== Number(formData.monthlyLease) && (
+                  <div className="p-2.5 bg-white rounded-xl border border-indigo-300 space-y-2">
+                    <label className="flex items-center space-x-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={applyLeaseFromEffectiveDate}
+                        onChange={(e) => setApplyLeaseFromEffectiveDate(e.target.checked)}
+                        className="w-4 h-4 text-indigo-600 rounded accent-indigo-600"
+                      />
+                      <span className="font-bold text-indigo-950 text-xs">
+                        Applica la modifica canone ({formatEUR(editingItem.monthlyLease)} → {formatEUR(formData.monthlyLease)}/m) a partire da una data:
+                      </span>
+                    </label>
+
+                    {applyLeaseFromEffectiveDate && (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                        <div>
+                          <label className="block text-[10px] font-bold text-slate-600 mb-0.5">Valido a partire dal *</label>
+                          <input
+                            type="date"
+                            value={newLeaseEffectiveDate}
+                            onChange={(e) => setNewLeaseEffectiveDate(e.target.value)}
+                            className="w-full px-2.5 py-1.5 border border-indigo-300 rounded-lg font-bold bg-indigo-50/40 text-xs"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-bold text-slate-600 mb-0.5">Motivazione / Nota</label>
+                          <input
+                            type="text"
+                            placeholder="Es. Adeguamento ISTAT / Rinnovo NLT"
+                            value={newLeaseVariationNote}
+                            onChange={(e) => setNewLeaseVariationNote(e.target.value)}
+                            className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg bg-white text-xs"
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Storico / Programmazione Variazioni Canone */}
+                {Array.isArray(formData.leaseVariations) && formData.leaseVariations.length > 0 ? (
+                  <div className="space-y-1.5">
+                    {formData.leaseVariations.map((lv, idx) => (
+                      <div key={lv.id || idx} className="flex items-center justify-between bg-white px-2.5 py-1.5 rounded-lg border border-indigo-200 text-[11px]">
+                        <div>
+                          <span className="font-black text-indigo-900">Dal {formatVariationDate(lv.effectiveDate)}:</span>{' '}
+                          <span className="text-slate-600">
+                            {lv.previousMonthlyLease !== undefined ? `${formatEUR(lv.previousMonthlyLease)}/m → ` : ''}
+                            <strong className="text-slate-900">{formatEUR(lv.monthlyLease ?? lv.newValue)}/m</strong>
+                          </span>
+                          {lv.note && <span className="text-slate-400 ml-1.5">({lv.note})</span>}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const updated = formData.leaseVariations.filter((_, i) => i !== idx);
+                            setFormData({ ...formData, leaseVariations: updated });
+                          }}
+                          className="text-rose-500 hover:text-rose-700 p-1"
+                          title="Rimuovi variazione datata"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-[10px] text-indigo-800">
+                    Modifica il canone mensile qui sopra per attivare l&apos;opzione <strong>&ldquo;Valido a partire da una data&rdquo;</strong>, oppure aggiungi una variazione programmata:
+                  </p>
+                )}
+
+                <div className="pt-1 flex flex-wrap items-end gap-2">
+                  <div className="flex-1 min-w-[120px]">
+                    <label className="block text-[10px] font-semibold text-slate-600 mb-0.5">Data Decorrenza</label>
+                    <input
+                      type="date"
+                      value={newLeaseEffectiveDate}
+                      onChange={(e) => setNewLeaseEffectiveDate(e.target.value)}
+                      className="w-full px-2 py-1 border border-slate-300 rounded-lg bg-white text-xs font-bold"
+                    />
+                  </div>
+                  <div className="w-28">
+                    <label className="block text-[10px] font-semibold text-slate-600 mb-0.5">Canone Prima (€/m)</label>
+                    <input
+                      type="number"
+                      step="50"
+                      value={editingItem?.monthlyLease ?? formData.monthlyLease}
+                      onChange={(e) => {
+                        const val = parseFloat(e.target.value) || 0;
+                        setEditingItem(prev => prev ? { ...prev, monthlyLease: val } : { monthlyLease: val });
+                      }}
+                      className="w-full px-2 py-1 border border-slate-300 rounded-lg bg-white text-xs font-semibold"
+                    />
+                  </div>
+                  <div className="w-28">
+                    <label className="block text-[10px] font-semibold text-indigo-900 mb-0.5">Nuovo Canone (€/m)</label>
+                    <input
+                      type="number"
+                      step="50"
+                      value={formData.monthlyLease}
+                      onChange={(e) => setFormData({ ...formData, monthlyLease: parseFloat(e.target.value) || 0 })}
+                      className="w-full px-2 py-1 border border-indigo-400 rounded-lg bg-white text-xs font-bold text-indigo-950"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!newLeaseEffectiveDate) return;
+                      const prevVal = Number(editingItem?.monthlyLease ?? formData.monthlyLease) || 0;
+                      const nextVal = Number(formData.monthlyLease) || 0;
+                      const entry = {
+                        id: 'lvar_' + Date.now(),
+                        effectiveDate: newLeaseEffectiveDate,
+                        previousMonthlyLease: prevVal,
+                        monthlyLease: nextVal,
+                        note: newLeaseVariationNote || `Variazione canone dal ${formatVariationDate(newLeaseEffectiveDate)}`
+                      };
+                      const nextList = [
+                        ...(formData.leaseVariations || []).filter(v => v.effectiveDate !== newLeaseEffectiveDate),
+                        entry
+                      ].sort((a, b) => String(a.effectiveDate).localeCompare(String(b.effectiveDate)));
+                      setFormData({ ...formData, leaseVariations: nextList });
+                      setApplyLeaseFromEffectiveDate(false);
+                    }}
+                    className="px-2.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-bold text-[11px] transition"
+                  >
+                    + Registra Data
+                  </button>
+                </div>
+              </div>
 
               {/* SEZIONE CONSUMO BIDIREZIONALE ("AL CONTRARIO") */}
               <div className="p-3.5 bg-emerald-50/70 border border-emerald-200/80 rounded-xl space-y-2">

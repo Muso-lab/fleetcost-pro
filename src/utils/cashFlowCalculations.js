@@ -340,26 +340,27 @@ export const calculateAnnualBudgetAndCashFlow = (projects, options = {}) => {
       }
     };
 
-    // Itera sui 12 mesi dell'anno corrente
+    // Itera sui 12 mesi dell'anno corrente (risolvendo eventuali variazioni prezzi/noli a partire da una data di decorrenza)
     for (let m = 0; m < 12; m++) {
       if (isProjectActiveInMonth(project, m, year, { rolloverPreviousYearBudget })) {
-        const rev = Number(project.monthlyRevenue) || 0;
         const workingDays = project.workingDaysMonth || 22;
+        const mRates = getProjectEffectiveRatesForMonth(project, year, m);
+        const rev = mRates.monthlyRevenue;
 
-        const driverC = (Number(project.driverCostDaily) || 0) * workingDays;
-        const fuelGrossC = project.energyPayer === 'client' ? 0 : (Number(project.fuelCostDaily) || 0) * workingDays;
-        const tollsC = (Number(project.tollsDaily) || 0) * workingDays;
-        const tiresC = (Number(project.tiresDaily) || 0) * workingDays;
-        const vLeaseC = (Number(project.vehicleLeaseDaily) || 0) * workingDays;
-        const tLeaseC = (Number(project.trailerLeaseDaily) || 0) * workingDays;
+        const driverC = mRates.driverCostDaily * workingDays;
+        const fuelGrossC = project.energyPayer === 'client' ? 0 : mRates.fuelCostDaily * workingDays;
+        const tollsC = mRates.tollsDaily * workingDays;
+        const tiresC = mRates.tiresDaily * workingDays;
+        const vLeaseC = mRates.vehicleLeaseDaily * workingDays;
+        const tLeaseC = mRates.trailerLeaseDaily * workingDays;
         const totalLeaseC = vLeaseC + tLeaseC;
         const fridgeC = (Number(project.refrigerationCostDaily) || 0) * workingDays;
         const telematicsC = (Number(project.telematicsCostDaily) || 0) * workingDays;
         const washingC = (Number(project.washingCostDaily) || 0) * workingDays;
         const extraC = (Number(project.extraCostDaily) || 0) * workingDays;
-        const partC = (Number(project.partnerMarginDaily) || 0) * workingDays;
+        const partC = mRates.partnerMarginDaily * workingDays;
         const porterageC = (Number(project.porterageDaily) || 0) * workingDays;
-        const otherC = (Number(project.otherCostsDaily) || 0) * workingDays;
+        const otherC = mRates.otherCostsDaily * workingDays;
 
         // Calcolo credito accise per questa commessa
         // Se energia a carico del cliente o veicolo full electric, nessun recupero accise
@@ -1192,26 +1193,377 @@ export const computeMultiClientAllocation = (
 };
 
 /**
- * Calcola metriche economiche e finanziarie ponderate per una singola commessa o Multi-Commessa (1..4 clienti)
- * (Fabbisogno finanziario reale calcolato per componente e relativa scadenza di pagamento)
+ * Voci supportate dal Sistema di Variazione Prezzi / Canoni con Data di Decorrenza
  */
-export const calculateSingleProjectMetrics = (project) => {
+export const COST_VARIATION_TARGETS = {
+  vehicleLeaseMonthly: {
+    id: 'vehicleLeaseMonthly',
+    label: 'Canone Noleggio Mezzo Motore (€/mese)',
+    shortLabel: 'Nolo Mezzo',
+    unit: '€/mese',
+    isMonthly: true
+  },
+  trailerLeaseMonthly: {
+    id: 'trailerLeaseMonthly',
+    label: 'Canone Noleggio Semirimorchio (€/mese)',
+    shortLabel: 'Nolo Rimorchio',
+    unit: '€/mese',
+    isMonthly: true
+  },
+  driverCostDaily: {
+    id: 'driverCostDaily',
+    label: 'Costo Autista / Personale (€/gg)',
+    shortLabel: 'Autista',
+    unit: '€/gg',
+    isMonthly: false
+  },
+  fuelCostDaily: {
+    id: 'fuelCostDaily',
+    label: 'Costo Energia / Carburante (€/gg)',
+    shortLabel: 'Energia/Carburante',
+    unit: '€/gg',
+    isMonthly: false
+  },
+  tollsDaily: {
+    id: 'tollsDaily',
+    label: 'Pedaggi Autostradali (€/gg)',
+    shortLabel: 'Pedaggi',
+    unit: '€/gg',
+    isMonthly: false
+  },
+  tiresDaily: {
+    id: 'tiresDaily',
+    label: 'Pneumatici & Manutenzione (€/gg)',
+    shortLabel: 'Pneumatici',
+    unit: '€/gg',
+    isMonthly: false
+  },
+  partnerMarginDaily: {
+    id: 'partnerMarginDaily',
+    label: 'Compenso Partner / Vettore Terzi (€/gg)',
+    shortLabel: 'Partner / Terzista',
+    unit: '€/gg',
+    isMonthly: false
+  },
+  revenueDaily: {
+    id: 'revenueDaily',
+    label: 'Tariffa Attiva Cliente / Ricavo (€/gg)',
+    shortLabel: 'Tariffa Cliente',
+    unit: '€/gg',
+    isMonthly: false
+  }
+};
+
+/**
+ * Formatta una data YYYY-MM-DD in formato leggibile italiano (es. 01 Lug 2026)
+ */
+export const formatVariationDate = (dateStr) => {
+  if (!dateStr) return '';
+  const parts = String(dateStr).split('-');
+  if (parts.length < 3) return dateStr;
+  const y = parseInt(parts[0], 10);
+  const m = (parseInt(parts[1], 10) || 1) - 1;
+  const d = parseInt(parts[2], 10) || 1;
+  return `${String(d).padStart(2, '0')} ${MONTH_SHORT_NAMES[m] || ''} ${y}`;
+};
+
+/**
+ * Risolve il valore effettivo (anche pro-rata mensile se la data cade a metà mese)
+ * di una grandezza soggetta a una o più variazioni datate [{ effectiveDate: 'YYYY-MM-DD', newValue, previousValue }]
+ */
+export const resolveDatedValueForMonth = (currentFallbackValue, variations = [], targetYear = 2026, monthIndex = 0) => {
+  if (!Array.isArray(variations) || variations.length === 0) {
+    return Number(currentFallbackValue) || 0;
+  }
+
+  const validVars = variations
+    .filter(v => v && v.effectiveDate && v.newValue !== undefined && v.newValue !== '')
+    .map(v => ({
+      ...v,
+      newValue: Number(v.newValue) || 0,
+      previousValue: v.previousValue !== undefined && v.previousValue !== '' ? Number(v.previousValue) : undefined
+    }))
+    .sort((a, b) => String(a.effectiveDate).localeCompare(String(b.effectiveDate)));
+
+  if (validVars.length === 0) {
+    return Number(currentFallbackValue) || 0;
+  }
+
+  // Valore iniziale valido prima della prima variazione datata:
+  const initialBase = validVars[0].previousValue !== undefined
+    ? validVars[0].previousValue
+    : (Number(currentFallbackValue) || 0);
+
+  const daysInMonth = new Date(targetYear, monthIndex + 1, 0).getDate();
+  let sumDailyValues = 0;
+
+  for (let day = 1; day <= daysInMonth; day++) {
+    const dayIso = `${targetYear}-${String(monthIndex + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    let activeVal = initialBase;
+    for (let i = 0; i < validVars.length; i++) {
+      if (dayIso >= validVars[i].effectiveDate) {
+        activeVal = validVars[i].newValue;
+      }
+    }
+    sumDailyValues += activeVal;
+  }
+
+  return +(sumDailyValues / daysInMonth).toFixed(2);
+};
+
+/**
+ * Restituisce tutte le variazioni datate attive su una commessa (ereditate da Mezzo, Semirimorchio + specifiche Commessa)
+ */
+export const getAllProjectPriceVariations = (project) => {
+  if (!project) return [];
+  const workingDays = Number(project.workingDaysMonth) || 22;
+  const list = [];
+
+  // 1. Variazioni canone dal Mezzo Motore
+  if (Array.isArray(project.vehicleLeaseVariations)) {
+    project.vehicleLeaseVariations.forEach(v => {
+      if (!v || !v.effectiveDate) return;
+      list.push({
+        id: v.id || `veh_var_${v.effectiveDate}`,
+        source: 'vehicle',
+        sourceLabel: 'Anagrafica Mezzo Motore',
+        targetField: 'vehicleLeaseMonthly',
+        effectiveDate: v.effectiveDate,
+        formattedDate: formatVariationDate(v.effectiveDate),
+        previousValue: v.previousMonthlyLease !== undefined ? Number(v.previousMonthlyLease) : +((Number(project.vehicleLeaseDaily) || 0) * workingDays).toFixed(2),
+        newValue: Number(v.monthlyLease ?? v.newValue) || 0,
+        note: v.note || 'Variazione canone noleggio mezzo'
+      });
+    });
+  }
+
+  // 2. Variazioni canone dal Semirimorchio
+  if (Array.isArray(project.trailerLeaseVariations)) {
+    project.trailerLeaseVariations.forEach(v => {
+      if (!v || !v.effectiveDate) return;
+      list.push({
+        id: v.id || `trl_var_${v.effectiveDate}`,
+        source: 'trailer',
+        sourceLabel: 'Anagrafica Semirimorchio',
+        targetField: 'trailerLeaseMonthly',
+        effectiveDate: v.effectiveDate,
+        formattedDate: formatVariationDate(v.effectiveDate),
+        previousValue: v.previousMonthlyLease !== undefined ? Number(v.previousMonthlyLease) : +((Number(project.trailerLeaseDaily) || 0) * workingDays).toFixed(2),
+        newValue: Number(v.monthlyLease ?? v.newValue) || 0,
+        note: v.note || 'Variazione canone semirimorchio'
+      });
+    });
+  }
+
+  // 3. Variazioni specifiche registrate sulla Commessa
+  if (Array.isArray(project.costVariations)) {
+    project.costVariations.forEach(v => {
+      if (!v || !v.effectiveDate || !v.targetField) return;
+      list.push({
+        id: v.id || `prj_var_${v.effectiveDate}_${v.targetField}`,
+        source: 'project',
+        sourceLabel: 'Commessa',
+        targetField: v.targetField,
+        effectiveDate: v.effectiveDate,
+        formattedDate: formatVariationDate(v.effectiveDate),
+        previousValue: v.previousValue !== undefined && v.previousValue !== '' ? Number(v.previousValue) : undefined,
+        newValue: Number(v.newValue) || 0,
+        note: v.note || COST_VARIATION_TARGETS[v.targetField]?.label || 'Variazione costo'
+      });
+    });
+  }
+
+  return list.sort((a, b) => String(a.effectiveDate).localeCompare(String(b.effectiveDate)));
+};
+
+/**
+ * Calcola i valori giornalieri e mensili effettivi di una commessa per uno specifico mese (targetYear, monthIndex 0..11)
+ * tenendo conto della data di decorrenza di tutte le variazioni prezzi/noli
+ */
+export const getProjectEffectiveRatesForMonth = (project, targetYear = 2026, monthIndex = 0) => {
+  const workingDays = Number(project.workingDaysMonth) || 22;
+  const allVars = getAllProjectPriceVariations(project);
+
+  const baseVLeaseDaily = Number(project.vehicleLeaseDaily) || 0;
+  const baseTLeaseDaily = Number(project.trailerLeaseDaily) || 0;
+  const baseDriverDaily = Number(project.driverCostDaily) || 0;
+  const baseFuelDaily = project.energyPayer === 'client' ? 0 : (Number(project.fuelCostDaily) || 0);
+  const baseTollsDaily = Number(project.tollsDaily) || 0;
+  const baseTiresDaily = Number(project.tiresDaily) || 0;
+  const basePartnerDaily = Number(project.partnerMarginDaily) || 0;
+  const baseOtherDaily = Number(project.otherCostsDaily) || 0;
+  const refrigerationCost = Number(project.refrigerationCostDaily) || 0;
+  const telematicsCost = Number(project.telematicsCostDaily) || 0;
+  const washingCost = Number(project.washingCostDaily) || 0;
+  const extraCost = Number(project.extraCostDaily) || 0;
+  const porterageCost = Number(project.porterageDaily) || 0;
+
+  const byField = (field) => allVars.filter(v => v.targetField === field);
+
+  const vLeaseVars = byField('vehicleLeaseMonthly');
+  const vehicleLeaseDaily = vLeaseVars.length > 0 && workingDays > 0
+    ? +(resolveDatedValueForMonth(baseVLeaseDaily * workingDays, vLeaseVars, targetYear, monthIndex) / workingDays).toFixed(2)
+    : baseVLeaseDaily;
+
+  const tLeaseVars = byField('trailerLeaseMonthly');
+  const trailerLeaseDaily = tLeaseVars.length > 0 && workingDays > 0
+    ? +(resolveDatedValueForMonth(baseTLeaseDaily * workingDays, tLeaseVars, targetYear, monthIndex) / workingDays).toFixed(2)
+    : baseTLeaseDaily;
+
+  const driverVars = byField('driverCostDaily');
+  const driverCostDaily = driverVars.length > 0
+    ? resolveDatedValueForMonth(baseDriverDaily, driverVars, targetYear, monthIndex)
+    : baseDriverDaily;
+
+  const fuelVars = byField('fuelCostDaily');
+  const fuelCostDaily = project.energyPayer === 'client'
+    ? 0
+    : (fuelVars.length > 0 ? resolveDatedValueForMonth(baseFuelDaily, fuelVars, targetYear, monthIndex) : baseFuelDaily);
+
+  const tollsVars = byField('tollsDaily');
+  const tollsDaily = tollsVars.length > 0
+    ? resolveDatedValueForMonth(baseTollsDaily, tollsVars, targetYear, monthIndex)
+    : baseTollsDaily;
+
+  const tiresVars = byField('tiresDaily');
+  const tiresDaily = tiresVars.length > 0
+    ? resolveDatedValueForMonth(baseTiresDaily, tiresVars, targetYear, monthIndex)
+    : baseTiresDaily;
+
+  const partnerVars = byField('partnerMarginDaily');
+  const partnerMarginDaily = partnerVars.length > 0
+    ? resolveDatedValueForMonth(basePartnerDaily, partnerVars, targetYear, monthIndex)
+    : basePartnerDaily;
+
+  const totalCostDaily = +(
+    driverCostDaily +
+    fuelCostDaily +
+    tollsDaily +
+    tiresDaily +
+    refrigerationCost +
+    telematicsCost +
+    washingCost +
+    extraCost +
+    baseOtherDaily +
+    partnerMarginDaily +
+    porterageCost +
+    vehicleLeaseDaily +
+    trailerLeaseDaily
+  ).toFixed(2);
+
+  const hasMultiClient = Boolean(project.isMultiClient) && Array.isArray(project.billingEntities) && project.billingEntities.length > 1;
+  const multiAllocation = hasMultiClient
+    ? computeMultiClientAllocation(totalCostDaily, workingDays, project.billingEntities, project.costAllocationMode || 'equal')
+    : null;
+
+  const baseRevDaily = hasMultiClient
+    ? multiAllocation.totalRevenueDaily
+    : (Number(project.revenueDaily) || 0);
+  const revVars = byField('revenueDaily');
+  const revenueDaily = (!hasMultiClient && revVars.length > 0)
+    ? resolveDatedValueForMonth(baseRevDaily, revVars, targetYear, monthIndex)
+    : baseRevDaily;
+
+  const molDaily = +(revenueDaily - totalCostDaily).toFixed(2);
+  const monthlyCost = +(totalCostDaily * workingDays).toFixed(2);
+  const monthlyRevenue = +(revenueDaily * workingDays).toFixed(2);
+  const monthlyMol = +(monthlyRevenue - monthlyCost).toFixed(2);
+  const molPercent = revenueDaily > 0 ? (molDaily / revenueDaily) * 100 : (totalCostDaily > 0 ? -100 : 0);
+
+  return {
+    driverCostDaily,
+    fuelCostDaily,
+    tollsDaily,
+    tiresDaily,
+    vehicleLeaseDaily,
+    trailerLeaseDaily,
+    partnerMarginDaily,
+    otherCostsDaily: baseOtherDaily,
+    totalCostDaily,
+    revenueDaily,
+    molDaily,
+    monthlyCost,
+    monthlyRevenue,
+    monthlyMol,
+    molPercent,
+    multiAllocation
+  };
+};
+
+/**
+ * Calcola metriche economiche e finanziarie ponderate per una singola commessa o Multi-Commessa (1..4 clienti)
+ * Ricalcola dinamicamente anche eventuali variazioni prezzi/noli valide a partire da una data di decorrenza.
+ */
+export const calculateSingleProjectMetrics = (project, options = {}) => {
+  const targetYear = options.year || 2026;
   const workingDays = Number(project.workingDaysMonth) || 22;
   const operatingMonths = Number(project.operatingMonths) || 12;
 
-  const driverCost = Number(project.driverCostDaily) || 0;
-  const fuelCost = project.energyPayer === 'client' ? 0 : (Number(project.fuelCostDaily) || 0);
-  const tollsCost = Number(project.tollsDaily) || 0;
-  const tiresCost = Number(project.tiresDaily) || 0;
+  const allVariations = getAllProjectPriceVariations(project);
+  const hasVariations = allVariations.length > 0;
+
+  let driverCost = Number(project.driverCostDaily) || 0;
+  let fuelCost = project.energyPayer === 'client' ? 0 : (Number(project.fuelCostDaily) || 0);
+  let tollsCost = Number(project.tollsDaily) || 0;
+  let tiresCost = Number(project.tiresDaily) || 0;
   const refrigerationCost = Number(project.refrigerationCostDaily) || 0;
   const telematicsCost = Number(project.telematicsCostDaily) || 0;
   const washingCost = Number(project.washingCostDaily) || 0;
   const extraCost = Number(project.extraCostDaily) || 0;
   const otherCost = Number(project.otherCostsDaily) || 0;
-  const partnerMargin = Number(project.partnerMarginDaily) || 0;
+  let partnerMargin = Number(project.partnerMarginDaily) || 0;
   const porterageCost = Number(project.porterageDaily) || 0;
-  const vehicleLease = Number(project.vehicleLeaseDaily) || 0;
-  const trailerLease = Number(project.trailerLeaseDaily) || 0;
+  let vehicleLease = Number(project.vehicleLeaseDaily) || 0;
+  let trailerLease = Number(project.trailerLeaseDaily) || 0;
+
+  let variationSummary = null;
+  let weightedRevenueOverride = null;
+
+  if (hasVariations) {
+    // Valuta i mesi attivi nell'esercizio (default 2026) per calcolare la media ponderata esatta
+    const activeMonthIndices = [];
+    for (let m = 0; m < 12; m++) {
+      if (isProjectActiveInMonth(project, m, targetYear)) {
+        activeMonthIndices.push(m);
+      }
+    }
+    const evalMonths = activeMonthIndices.length > 0 ? activeMonthIndices : [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+    const monthlyRatesList = evalMonths.map(m => getProjectEffectiveRatesForMonth(project, targetYear, m));
+    const nM = monthlyRatesList.length;
+
+    driverCost = +(monthlyRatesList.reduce((s, r) => s + r.driverCostDaily, 0) / nM).toFixed(2);
+    fuelCost = +(monthlyRatesList.reduce((s, r) => s + r.fuelCostDaily, 0) / nM).toFixed(2);
+    tollsCost = +(monthlyRatesList.reduce((s, r) => s + r.tollsDaily, 0) / nM).toFixed(2);
+    tiresCost = +(monthlyRatesList.reduce((s, r) => s + r.tiresDaily, 0) / nM).toFixed(2);
+    partnerMargin = +(monthlyRatesList.reduce((s, r) => s + r.partnerMarginDaily, 0) / nM).toFixed(2);
+    vehicleLease = +(monthlyRatesList.reduce((s, r) => s + r.vehicleLeaseDaily, 0) / nM).toFixed(2);
+    trailerLease = +(monthlyRatesList.reduce((s, r) => s + r.trailerLeaseDaily, 0) / nM).toFixed(2);
+    weightedRevenueOverride = +(monthlyRatesList.reduce((s, r) => s + r.revenueDaily, 0) / nM).toFixed(2);
+
+    // Calcola fotografia Prima della variazione (Inizio Anno) vs Dopo la variazione (Fine Anno / Regime post-data)
+    const beforeRates = getProjectEffectiveRatesForMonth(project, targetYear - 1, 0);
+    const afterRates = getProjectEffectiveRatesForMonth(project, targetYear + 1, 11);
+    const latestVar = allVariations[allVariations.length - 1];
+
+    variationSummary = {
+      hasVariations: true,
+      count: allVariations.length,
+      variationsList: allVariations,
+      latestEffectiveDate: latestVar.effectiveDate,
+      latestEffectiveDateFormatted: latestVar.formattedDate,
+      beforeMonthlyCost: beforeRates.monthlyCost,
+      afterMonthlyCost: afterRates.monthlyCost,
+      deltaMonthlyCost: +(afterRates.monthlyCost - beforeRates.monthlyCost).toFixed(2),
+      beforeMonthlyRevenue: beforeRates.monthlyRevenue,
+      afterMonthlyRevenue: afterRates.monthlyRevenue,
+      beforeMonthlyMol: beforeRates.monthlyMol,
+      afterMonthlyMol: afterRates.monthlyMol,
+      beforeMolPercent: +beforeRates.molPercent.toFixed(1),
+      afterMolPercent: +afterRates.molPercent.toFixed(1),
+      beforeVehicleLeaseMonthly: +(beforeRates.vehicleLeaseDaily * workingDays).toFixed(2),
+      afterVehicleLeaseMonthly: +(afterRates.vehicleLeaseDaily * workingDays).toFixed(2)
+    };
+  }
 
   const totalCostDaily = +(
     driverCost +
@@ -1237,7 +1589,7 @@ export const calculateSingleProjectMetrics = (project) => {
 
   const revenueDaily = hasMultiClient
     ? multiAllocation.totalRevenueDaily
-    : (Number(project.revenueDaily) || 0);
+    : (weightedRevenueOverride !== null ? weightedRevenueOverride : (Number(project.revenueDaily) || 0));
   const molDaily = +(revenueDaily - totalCostDaily).toFixed(2);
   const molPercent = revenueDaily > 0 ? (molDaily / revenueDaily) * 100 : (totalCostDaily > 0 && revenueDaily === 0 ? -100 : 0);
 
@@ -1351,6 +1703,8 @@ export const calculateSingleProjectMetrics = (project) => {
     costAllocationMode: project.costAllocationMode || 'equal',
     multiAllocation,
     billingEntities: hasMultiClient ? multiAllocation.entities : (project.billingEntities || []),
+    hasPriceVariations: hasVariations,
+    variationSummary,
     estimatedWorkingCapitalGap,
     workingCapitalBreakdown: {
       leases: +needLease.toFixed(2),
@@ -1572,6 +1926,12 @@ export const recalculateProjectCost = (project, fleet = [], trailers = [], setti
     tiresDaily,
     vehicleLeaseDaily,
     trailerLeaseDaily,
+    vehicleLeaseVariations: Array.isArray(vehicle?.leaseVariations)
+      ? vehicle.leaseVariations
+      : (Array.isArray(project.vehicleLeaseVariations) ? project.vehicleLeaseVariations : []),
+    trailerLeaseVariations: Array.isArray(trailer?.leaseVariations)
+      ? trailer.leaseVariations
+      : (Array.isArray(project.trailerLeaseVariations) ? project.trailerLeaseVariations : []),
     refrigerationEnabled: refCalc.enabled,
     refrigerationTech: refCalc.tech,
     refrigerationUnitCost: refCalc.unitCost,
@@ -1607,7 +1967,9 @@ export const recalculateProjectCost = (project, fleet = [], trailers = [], setti
     monthlyRevenue: metrics.monthlyRevenue,
     monthlyMol: metrics.monthlyMol,
     molPercent: +metrics.molPercent.toFixed(2),
-    cashAdvanceRequired: metrics.estimatedWorkingCapitalGap
+    cashAdvanceRequired: metrics.estimatedWorkingCapitalGap,
+    hasPriceVariations: metrics.hasPriceVariations,
+    variationSummary: metrics.variationSummary || null
   };
 };
 

@@ -15,7 +15,9 @@ import {
   OPERATING_UNITS,
   getProjectOperatingUnit,
   COST_ALLOCATION_MODES,
-  computeMultiClientAllocation
+  computeMultiClientAllocation,
+  COST_VARIATION_TARGETS,
+  formatVariationDate
 } from '../utils/cashFlowCalculations';
 import {
   calculateRouteFromStops,
@@ -84,6 +86,13 @@ const ProjectsPage = () => {
   const [showNextYearModal, setShowNextYearModal] = useState(false);
   const [showPerItemTerms, setShowPerItemTerms] = useState(false);
   const [editingProject, setEditingProject] = useState(null);
+  const [newVariationDraft, setNewVariationDraft] = useState({
+    targetField: 'vehicleLeaseMonthly',
+    effectiveDate: '2026-07-01',
+    previousValue: '',
+    newValue: '',
+    note: ''
+  });
 
   // Form State per Nuovo/Modifica Progetto (supporta Singola Commessa e Multi-Commessa da 1 a 4 Clienti)
   const defaultBillingEntities = [
@@ -156,6 +165,9 @@ const ProjectsPage = () => {
     paymentTermsExtra: 30,
     acciseRecoveryEligible: true,
     depositAmount: 0,
+    costVariations: [],
+    vehicleLeaseVariations: [],
+    trailerLeaseVariations: [],
     notes: ''
   });
 
@@ -218,7 +230,9 @@ const ProjectsPage = () => {
       extraCostDaily: recalculated.extraCostDaily,
       partnerMarginDaily: recalculated.partnerMarginDaily,
       porterageDaily: recalculated.porterageDaily,
-      otherCostsDaily: recalculated.otherCostsDaily
+      otherCostsDaily: recalculated.otherCostsDaily,
+      vehicleLeaseVariations: recalculated.vehicleLeaseVariations || merged.vehicleLeaseVariations || [],
+      trailerLeaseVariations: recalculated.trailerLeaseVariations || merged.trailerLeaseVariations || []
     };
   };
 
@@ -332,6 +346,13 @@ const ProjectsPage = () => {
         paymentTermsExtra: project.paymentTermsExtra ?? 30,
         acciseRecoveryEligible: project.acciseRecoveryEligible !== false,
         depositAmount: project.depositAmount || 0,
+        costVariations: Array.isArray(project.costVariations) ? project.costVariations : [],
+        vehicleLeaseVariations: Array.isArray(projVeh?.leaseVariations)
+          ? projVeh.leaseVariations
+          : (Array.isArray(project.vehicleLeaseVariations) ? project.vehicleLeaseVariations : []),
+        trailerLeaseVariations: Array.isArray(projTrl?.leaseVariations)
+          ? projTrl.leaseVariations
+          : (Array.isArray(project.trailerLeaseVariations) ? project.trailerLeaseVariations : []),
         notes: project.notes || ''
       });
     } else {
@@ -2052,9 +2073,21 @@ const ProjectsPage = () => {
                               </span>
                             )}
 
-                            {project.orographyProfile && (
+                             {project.orographyProfile && (
                               <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200">
                                 ⛰️ {project.orographyProfile.terrainLabel} (D+ {project.orographyProfile.elevationGainM}m)
+                              </span>
+                            )}
+
+                            {metrics.hasPriceVariations && metrics.variationSummary && (
+                              <span
+                                className="text-[10px] font-black px-2 py-0.5 rounded-full bg-violet-100 text-violet-900 border border-violet-300 flex items-center gap-1"
+                                title={`Pre-variazione: ${formatEUR(metrics.variationSummary.preMonthlyCost)}/m → Post-variazione: ${formatEUR(metrics.variationSummary.postMonthlyCost)}/m`}
+                              >
+                                <Calendar className="w-2.5 h-2.5 text-violet-700" />
+                                <span>
+                                  Variazione Prezzi dal {metrics.variationSummary.latestEffectiveDateFormatted}
+                                </span>
                               </span>
                             )}
 
@@ -2241,6 +2274,11 @@ const ProjectsPage = () => {
                             <span>Costi:</span>
                             <span className="font-semibold text-slate-700">{formatEUR(metrics.monthlyCost)}</span>
                           </div>
+                          {metrics.hasPriceVariations && metrics.variationSummary && (
+                            <div className="text-[9.5px] font-bold text-violet-800 bg-violet-50 border border-violet-200 rounded px-1.5 py-0.5 mt-1 inline-block">
+                              Pre: {formatEUR(metrics.variationSummary.preMonthlyCost)} → Post: {formatEUR(metrics.variationSummary.postMonthlyCost)}/m
+                            </div>
+                          )}
                           <div className="flex items-baseline justify-end space-x-2 mt-1.5 pt-1 border-t border-slate-100">
                             <span className="text-xs font-bold text-slate-600">M.O.L.:</span>
                             <span className={`text-sm font-black ${isNegative ? 'text-rose-600' : isLowMargin ? 'text-amber-600' : 'text-emerald-700'}`}>
@@ -3403,6 +3441,210 @@ const ProjectsPage = () => {
                         </div>
                       </div>
                     </div>
+                  </div>
+
+                  {/* SEZIONE VARIAZIONI PREZZI / COSTI & NOLI A PARTIRE DA UNA DATA (Ricalcolo Dinamico per Decorrenza) */}
+                  <div className="p-3.5 bg-violet-50/70 rounded-xl border border-violet-200 space-y-2.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="text-[11px] font-extrabold text-violet-950 uppercase tracking-wider flex items-center gap-1.5">
+                        <Calendar className="w-3.5 h-3.5 text-violet-700" />
+                        <span>Variazioni Prezzi / Costi &amp; Noli Mezzi a partire da una Data</span>
+                      </span>
+                      <span className="text-[10px] text-violet-900 font-bold bg-white px-2.5 py-0.5 rounded-full border border-violet-200">
+                        Ricalcolo Pro-Rata per Mese &amp; Media Ponderata Annua
+                      </span>
+                    </div>
+
+                    {/* Variazioni Canone Nolo ereditate automaticamente da Anagrafica Flotta (Mezzo / Rimorchio) */}
+                    {((Array.isArray(formData.vehicleLeaseVariations) && formData.vehicleLeaseVariations.length > 0) ||
+                      (Array.isArray(formData.trailerLeaseVariations) && formData.trailerLeaseVariations.length > 0)) && (
+                      <div className="p-2.5 bg-white rounded-xl border border-violet-200 space-y-1">
+                        <div className="text-[10px] font-black text-violet-900 uppercase">
+                          🚛 Variazioni Canone Nolo Ereditate da Anagrafica Flotta:
+                        </div>
+                        {(formData.vehicleLeaseVariations || []).map((vVar, idx) => (
+                          <div key={vVar.id || `v_${idx}`} className="flex items-center justify-between text-[11px] text-slate-700">
+                            <span>
+                              <strong>Nolo Mezzo Motore</strong> — Valido dal <strong className="text-violet-900">{formatVariationDate(vVar.effectiveDate)}</strong>
+                              {vVar.note ? ` (${vVar.note})` : ''}
+                            </span>
+                            <span className="font-mono font-black text-violet-950">
+                              {vVar.previousMonthlyLease !== undefined ? `${formatEUR(vVar.previousMonthlyLease)}/m → ` : ''}
+                              {formatEUR(vVar.monthlyLease ?? vVar.newValue)}/m
+                            </span>
+                          </div>
+                        ))}
+                        {(formData.trailerLeaseVariations || []).map((tVar, idx) => (
+                          <div key={tVar.id || `t_${idx}`} className="flex items-center justify-between text-[11px] text-slate-700">
+                            <span>
+                              <strong>Nolo Semirimorchio</strong> — Valido dal <strong className="text-violet-900">{formatVariationDate(tVar.effectiveDate)}</strong>
+                              {tVar.note ? ` (${tVar.note})` : ''}
+                            </span>
+                            <span className="font-mono font-black text-violet-950">
+                              {tVar.previousMonthlyLease !== undefined ? `${formatEUR(tVar.previousMonthlyLease)}/m → ` : ''}
+                              {formatEUR(tVar.monthlyLease ?? tVar.newValue)}/m
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Elenco Variazioni Specifiche registrate sulla Commessa */}
+                    {Array.isArray(formData.costVariations) && formData.costVariations.length > 0 && (
+                      <div className="space-y-1.5">
+                        {formData.costVariations.map((cv, cIdx) => {
+                          const targetMeta = COST_VARIATION_TARGETS[cv.targetField] || { label: cv.targetField, unit: '€' };
+                          return (
+                            <div key={cv.id || cIdx} className="flex items-center justify-between bg-white px-3 py-1.5 rounded-lg border border-violet-200 text-[11px]">
+                              <div>
+                                <span className="font-black text-violet-900">Dal {formatVariationDate(cv.effectiveDate)}</span>
+                                <span className="mx-1.5 text-slate-400">•</span>
+                                <strong className="text-slate-800">{targetMeta.label}:</strong>{' '}
+                                <span className="font-mono text-slate-600">
+                                  {cv.previousValue !== undefined && cv.previousValue !== '' ? `${formatEUR(cv.previousValue)} → ` : ''}
+                                  <strong className="text-violet-950">{formatEUR(cv.newValue)} ({targetMeta.unit})</strong>
+                                </span>
+                                {cv.note && <span className="text-slate-400 ml-1.5">({cv.note})</span>}
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const nextVars = (formData.costVariations || []).filter((_, i) => i !== cIdx);
+                                  setFormData({ ...formData, costVariations: nextVars });
+                                }}
+                                className="text-rose-500 hover:text-rose-700 p-1"
+                                title="Elimina variazione"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {/* Form Inserimento Nuova Variazione Prezzo/Costo da Data */}
+                    <div className="grid grid-cols-1 sm:grid-cols-12 gap-2 items-end bg-white p-2.5 rounded-xl border border-violet-200/80">
+                      <div className="sm:col-span-4">
+                        <label className="block text-[10px] font-bold text-slate-700 mb-0.5">Voce soggetta a Variazione</label>
+                        <select
+                          value={newVariationDraft.targetField}
+                          onChange={(e) => {
+                            const tf = e.target.value;
+                            const wDays = Number(formData.workingDaysMonth) || 22;
+                            let currentVal = 0;
+                            if (tf === 'vehicleLeaseMonthly') currentVal = +((Number(formData.vehicleLeaseDaily) || 0) * wDays).toFixed(2);
+                            else if (tf === 'trailerLeaseMonthly') currentVal = +((Number(formData.trailerLeaseDaily) || 0) * wDays).toFixed(2);
+                            else currentVal = Number(formData[tf]) || 0;
+                            setNewVariationDraft(prev => ({
+                              ...prev,
+                              targetField: tf,
+                              previousValue: currentVal,
+                              newValue: currentVal
+                            }));
+                          }}
+                          className="w-full px-2 py-1.5 border border-slate-300 rounded-lg bg-white text-xs font-bold"
+                        >
+                          {Object.values(COST_VARIATION_TARGETS).map(t => (
+                            <option key={t.id} value={t.id}>{t.label} ({t.unit})</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="sm:col-span-2">
+                        <label className="block text-[10px] font-bold text-slate-700 mb-0.5">Valido dal *</label>
+                        <input
+                          type="date"
+                          value={newVariationDraft.effectiveDate}
+                          onChange={(e) => setNewVariationDraft(prev => ({ ...prev, effectiveDate: e.target.value }))}
+                          className="w-full px-2 py-1.5 border border-violet-300 rounded-lg bg-violet-50/40 text-xs font-bold"
+                        />
+                      </div>
+                      <div className="sm:col-span-2">
+                        <label className="block text-[10px] font-bold text-slate-600 mb-0.5">Valore Prima</label>
+                        <input
+                          type="number"
+                          step="any"
+                          placeholder="Prima"
+                          value={
+                            newVariationDraft.previousValue !== ''
+                              ? newVariationDraft.previousValue
+                              : newVariationDraft.targetField === 'vehicleLeaseMonthly'
+                                ? +((Number(formData.vehicleLeaseDaily) || 0) * (Number(formData.workingDaysMonth) || 22)).toFixed(0)
+                                : newVariationDraft.targetField === 'trailerLeaseMonthly'
+                                  ? +((Number(formData.trailerLeaseDaily) || 0) * (Number(formData.workingDaysMonth) || 22)).toFixed(0)
+                                  : (Number(formData[newVariationDraft.targetField]) || 0)
+                          }
+                          onChange={(e) => setNewVariationDraft(prev => ({ ...prev, previousValue: e.target.value }))}
+                          className="w-full px-2 py-1.5 border border-slate-300 rounded-lg bg-white text-xs font-semibold"
+                        />
+                      </div>
+                      <div className="sm:col-span-2">
+                        <label className="block text-[10px] font-bold text-violet-900 mb-0.5">Nuovo Valore *</label>
+                        <input
+                          type="number"
+                          step="any"
+                          placeholder="Nuovo €"
+                          value={newVariationDraft.newValue}
+                          onChange={(e) => setNewVariationDraft(prev => ({ ...prev, newValue: e.target.value }))}
+                          className="w-full px-2 py-1.5 border border-violet-400 rounded-lg bg-white text-xs font-black text-violet-950"
+                        />
+                      </div>
+                      <div className="sm:col-span-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (!newVariationDraft.effectiveDate || newVariationDraft.newValue === '') return;
+                            const wDays = Number(formData.workingDaysMonth) || 22;
+                            const fallbackPrev = newVariationDraft.targetField === 'vehicleLeaseMonthly'
+                              ? +((Number(formData.vehicleLeaseDaily) || 0) * wDays).toFixed(2)
+                              : newVariationDraft.targetField === 'trailerLeaseMonthly'
+                                ? +((Number(formData.trailerLeaseDaily) || 0) * wDays).toFixed(2)
+                                : (Number(formData[newVariationDraft.targetField]) || 0);
+                            const prevVal = newVariationDraft.previousValue !== ''
+                              ? parseFloat(newVariationDraft.previousValue)
+                              : fallbackPrev;
+                            const nextVal = parseFloat(newVariationDraft.newValue) || 0;
+                            const entry = {
+                              id: 'cvar_' + Date.now(),
+                              targetField: newVariationDraft.targetField,
+                              effectiveDate: newVariationDraft.effectiveDate,
+                              previousValue: prevVal,
+                              newValue: nextVal,
+                              note: newVariationDraft.note || ''
+                            };
+                            const nextList = [...(formData.costVariations || []), entry]
+                              .sort((a, b) => String(a.effectiveDate).localeCompare(String(b.effectiveDate)));
+                            setFormData({ ...formData, costVariations: nextList });
+                            setNewVariationDraft(prev => ({ ...prev, newValue: '', note: '' }));
+                          }}
+                          className="w-full py-1.5 px-2.5 bg-violet-600 hover:bg-violet-700 text-white rounded-lg font-bold text-xs transition shadow-xs"
+                        >
+                          + Aggiungi
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Riepilogo Impatto Economico Pre-Data vs Post-Data vs Media Ponderata Annua */}
+                    {liveModalMetrics.hasPriceVariations && liveModalMetrics.variationSummary && (
+                      <div className="p-2.5 bg-violet-100/80 border border-violet-300 rounded-xl flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                        <div>
+                          <span className="font-black text-violet-950">
+                            📊 Ricalcolo Commessa con Decorrenza {liveModalMetrics.variationSummary.latestEffectiveDateFormatted}:
+                          </span>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-3">
+                          <span className="text-slate-700">
+                            Prima: <strong>{formatEUR(liveModalMetrics.variationSummary.preMonthlyCost)}/m</strong> (MOL {formatPercent(liveModalMetrics.variationSummary.preMolPercent)})
+                          </span>
+                          <span className="text-violet-900">
+                            Dal {liveModalMetrics.variationSummary.latestEffectiveDateFormatted}: <strong>{formatEUR(liveModalMetrics.variationSummary.postMonthlyCost)}/m</strong> (MOL {formatPercent(liveModalMetrics.variationSummary.postMolPercent)})
+                          </span>
+                          <span className="px-2 py-0.5 rounded-full font-black bg-white text-violet-950 border border-violet-300">
+                            Media Ponderata Annua: {formatEUR(liveModalMetrics.monthlyCost)}/m • MOL {formatEUR(liveModalMetrics.monthlyMol)}/m ({formatPercent(liveModalMetrics.molPercent)})
+                          </span>
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   {formData.managementType !== 'T' && (

@@ -299,7 +299,7 @@ class StorageService {
       const trailers = this.getTrailers();
       const settings = this.getSettings();
 
-      // Sincronizzazione automatica se i canoni di noleggio sono variati
+      // Sincronizzazione automatica se i canoni di noleggio o le variazioni per data sono cambiati
       let needsSave = false;
       const synchronized = projects.map(p => {
         const veh = fleet.find(v => v.id === p.vehicleId);
@@ -310,7 +310,13 @@ class StorageService {
           const isDaily72 = veh && ((veh.name || '').includes('72') || (veh.model || '').includes('72'));
           const daily72NeedsDriverUpdate = isDaily72 && p.driverCostDaily === 140 && !p.driverManualOverride;
 
-          if (p.managementType === 'D' && (expectedVLease !== p.vehicleLeaseDaily || expectedTLease !== p.trailerLeaseDaily || daily72NeedsDriverUpdate)) {
+          const vehVarJson = JSON.stringify(veh?.leaseVariations || []);
+          const projVehVarJson = JSON.stringify(p.vehicleLeaseVariations || []);
+          const trlVarJson = JSON.stringify(trl?.leaseVariations || []);
+          const projTrlVarJson = JSON.stringify(p.trailerLeaseVariations || []);
+          const variationsOutOfSync = (veh && vehVarJson !== projVehVarJson) || (trl && trlVarJson !== projTrlVarJson);
+
+          if ((p.managementType === 'D' && (expectedVLease !== p.vehicleLeaseDaily || expectedTLease !== p.trailerLeaseDaily || daily72NeedsDriverUpdate)) || variationsOutOfSync) {
             needsSave = true;
             return recalculateProjectCost(p, fleet, trailers, settings);
           }
