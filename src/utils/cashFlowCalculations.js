@@ -1032,6 +1032,64 @@ export const COST_ALLOCATION_MODES = {
 };
 
 /**
+ * Ribilancia automaticamente le percentuali di ribaltamento costi (somma sempre 100%)
+ * quando l'utente modifica manualmente la quota di una delle entità di fatturazione (2..4 clienti).
+ */
+export const rebalanceManualCostShares = (entities = [], activeCount, changedIdx, rawPercent) => {
+  if (!Array.isArray(entities) || entities.length === 0) return [];
+  const count = Math.min(Math.max(1, Number(activeCount) || entities.length), entities.length);
+  const clamped = +Math.min(100, Math.max(0, Number(rawPercent) || 0)).toFixed(2);
+  const remaining = +(100 - clamped).toFixed(2);
+
+  if (count <= 1) {
+    return entities.map((item, i) => (i === 0 ? { ...item, costSharePercent: 100 } : item));
+  }
+
+  if (count === 2) {
+    return entities.map((item, i) => {
+      if (i >= count) return item;
+      return {
+        ...item,
+        costSharePercent: i === changedIdx ? clamped : remaining
+      };
+    });
+  }
+
+  const otherIndices = [];
+  let othersPrevSum = 0;
+  for (let i = 0; i < count; i++) {
+    if (i !== changedIdx) {
+      otherIndices.push(i);
+      othersPrevSum += Math.max(0, Number(entities[i]?.costSharePercent) || 0);
+    }
+  }
+
+  const newShares = new Map();
+  newShares.set(changedIdx, clamped);
+  let runningOthers = 0;
+
+  otherIndices.forEach((origIdx, pos) => {
+    if (pos === otherIndices.length - 1) {
+      newShares.set(origIdx, +Math.max(0, remaining - runningOthers).toFixed(2));
+    } else {
+      const share = othersPrevSum > 0
+        ? +(((Math.max(0, Number(entities[origIdx]?.costSharePercent) || 0)) / othersPrevSum) * remaining).toFixed(2)
+        : +(remaining / otherIndices.length).toFixed(2);
+      runningOthers += share;
+      newShares.set(origIdx, share);
+    }
+  });
+
+  return entities.map((item, i) => {
+    if (i >= count) return item;
+    return {
+      ...item,
+      costSharePercent: newShares.get(i) ?? 0
+    };
+  });
+};
+
+/**
  * Calcola il ribaltamento dei costi comuni e le singole marginalità per 1..4 entità di fatturazione
  */
 export const computeMultiClientAllocation = (

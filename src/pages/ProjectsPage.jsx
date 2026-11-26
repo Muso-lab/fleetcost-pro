@@ -16,6 +16,7 @@ import {
   getProjectOperatingUnit,
   COST_ALLOCATION_MODES,
   computeMultiClientAllocation,
+  rebalanceManualCostShares,
   COST_VARIATION_TARGETS,
   formatVariationDate
 } from '../utils/cashFlowCalculations';
@@ -596,9 +597,13 @@ const ProjectsPage = () => {
     setFormData(prev => {
       const list = Array.isArray(prev.billingEntities) ? [...prev.billingEntities] : [];
       const next = list.map((item, i) => (i === idx ? { ...item, ...patch } : item));
+      const finalEntities =
+        patch.costSharePercent !== undefined && prev.costAllocationMode === 'manual_percent'
+          ? rebalanceManualCostShares(next, next.length, idx, patch.costSharePercent)
+          : next;
       return {
         ...prev,
-        billingEntities: next
+        billingEntities: finalEntities
       };
     });
   };
@@ -2592,7 +2597,14 @@ const ProjectsPage = () => {
                                 </div>
                               ) : (
                                 <div>
-                                  <label className="block text-[10px] font-bold text-slate-600 mb-0.5">% Costo Ribaltato</label>
+                                  <label className="block text-[10px] font-bold text-slate-600 mb-0.5 flex items-center justify-between">
+                                    <span>% Costo Ribaltato</span>
+                                    {formData.costAllocationMode === 'manual_percent' && (
+                                      <span className="text-[9px] text-blue-700 font-bold" title="Modificando una quota, le altre si bilanciano automaticamente a 100%">
+                                        Auto 100%
+                                      </span>
+                                    )}
+                                  </label>
                                   <div className="flex items-center space-x-1">
                                     <input
                                       type="number"
@@ -2601,7 +2613,11 @@ const ProjectsPage = () => {
                                       max="100"
                                       disabled={formData.costAllocationMode !== 'manual_percent'}
                                       value={formData.costAllocationMode === 'manual_percent' ? (formData.billingEntities[idx]?.costSharePercent ?? 0) : entity.costSharePercent}
-                                      onChange={(e) => handleModalUpdateBillingEntity(idx, { costSharePercent: parseFloat(e.target.value) || 0 })}
+                                      onChange={(e) => {
+                                        const raw = parseFloat(e.target.value);
+                                        const clamped = isNaN(raw) ? 0 : Math.min(100, Math.max(0, raw));
+                                        handleModalUpdateBillingEntity(idx, { costSharePercent: clamped });
+                                      }}
                                       className={`w-full px-2 py-1.5 border rounded-lg font-black text-xs ${
                                         formData.costAllocationMode === 'manual_percent'
                                           ? 'border-blue-400 bg-white text-slate-900'

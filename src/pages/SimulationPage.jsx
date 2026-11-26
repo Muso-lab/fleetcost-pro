@@ -13,7 +13,8 @@ import {
   LEASE_PAYMENT_TIMINGS,
   normalizeLeaseTiming,
   COST_ALLOCATION_MODES,
-  computeMultiClientAllocation
+  computeMultiClientAllocation,
+  rebalanceManualCostShares
 } from '../utils/cashFlowCalculations';
 import {
   calculateRouteFromStops,
@@ -93,6 +94,9 @@ const SimulationPage = () => {
   const handleUpdateBillingEntity = (idx, patch) => {
     setBillingEntities(prev => {
       const updated = prev.map((item, i) => (i === idx ? { ...item, ...patch } : item));
+      if (patch.costSharePercent !== undefined && costAllocationMode === 'manual_percent') {
+        return rebalanceManualCostShares(updated, clientCount, idx, patch.costSharePercent);
+      }
       return updated;
     });
   };
@@ -1610,7 +1614,14 @@ const SimulationPage = () => {
                               </div>
                             ) : (
                               <div>
-                                <label className="block text-[10px] font-bold text-slate-600 mb-0.5">% Costo Ribaltato</label>
+                                <label className="block text-[10px] font-bold text-slate-600 mb-0.5 flex items-center justify-between">
+                                  <span>% Costo Ribaltato</span>
+                                  {costAllocationMode === 'manual_percent' && (
+                                    <span className="text-[9px] text-blue-700 font-bold" title="Modificando una quota, le altre si bilanciano automaticamente a 100%">
+                                      Auto 100%
+                                    </span>
+                                  )}
+                                </label>
                                 <div className="flex items-center space-x-1">
                                   <input
                                     type="number"
@@ -1623,7 +1634,11 @@ const SimulationPage = () => {
                                         ? +(100 / clientCount).toFixed(1)
                                         : entity.costSharePercent
                                     }
-                                    onChange={(e) => handleUpdateBillingEntity(idx, { costSharePercent: parseFloat(e.target.value) || 0 })}
+                                    onChange={(e) => {
+                                      const raw = parseFloat(e.target.value);
+                                      const clamped = isNaN(raw) ? 0 : Math.min(100, Math.max(0, raw));
+                                      handleUpdateBillingEntity(idx, { costSharePercent: clamped });
+                                    }}
                                     className={`w-full px-2 py-1 border rounded-lg font-black text-xs ${
                                       costAllocationMode === 'manual_percent'
                                         ? 'border-blue-400 bg-white text-slate-900'
