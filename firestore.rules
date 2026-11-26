@@ -1,0 +1,149 @@
+rules_version = '2';
+
+// ===============================================================
+// Assumed Data Model
+// ===============================================================
+//
+// Application: FOUR Sustainable Logistics (fleetcost-pro)
+// Architecture: Single-tenant corporate fleet & financial management workspace.
+// All authorized client sessions authenticate via Firebase Authentication.
+//
+// Collection: four_workspace
+// Document ID: {docId} — strictly restricted to one of the 6 singleton IDs:
+//   'fleet' | 'trailers' | 'projects' | 'settings' | 'simulations' | 'security'
+//
+// Fields:
+//   - updatedAt: string (required on create & update, 1..64 chars) - ISO 8601 modification timestamp
+//   - items: list (optional, max 2000 elements) - collection records for 'fleet', 'trailers', 'projects', 'simulations'
+//   - data: map (optional, max 100 top-level keys) - configuration object for 'settings' and 'security'
+//   - updatedBy: string (optional, 0..200 chars) - identifier/email of the user session performing the update
+//   - clientId: string (optional, 0..120 chars) - client instance identifier for sync origin tracking
+//   - seedVersion: string (optional, 0..120 chars) - schema/seed version marker
+//   - version: string (optional, 0..64 chars) - document payload version string
+//
+// Operations:
+//   - get: authenticated users for the 6 allowed workspace document IDs
+//   - list: authenticated users (supports real-time collection onSnapshot listeners on 'four_workspace')
+//   - create, update: authenticated users for the 6 allowed workspace document IDs passing strict schema validation
+//   - delete: never allowed (workspace singleton documents are updated in-place only)
+//
+// All other collections, documents, and subcollections are denied by default.
+// ===============================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+
+    // Check if the user session is authenticated via Firebase Auth
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Validate that all required fields exist on the resulting document
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    // Validate that the document contains only explicitly allowlisted fields
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    // Validate required string field type and character length bounds
+    function validStringLength(field, minLen, maxLen) {
+      return request.resource.data[field] is string &&
+        request.resource.data[field].size() >= minLen &&
+        request.resource.data[field].size() <= maxLen;
+    }
+
+    // Validate optional string field (if present, must be a string within length bounds)
+    function isValidOptionalString(field, minLen, maxLen) {
+      return !(field in request.resource.data) ||
+        (request.resource.data[field] is string &&
+         request.resource.data[field].size() >= minLen &&
+         request.resource.data[field].size() <= maxLen);
+    }
+
+    // Validate optional list field type and maximum element count
+    function isValidOptionalList(field, maxSize) {
+      return !(field in request.resource.data) ||
+        (request.resource.data[field] is list &&
+         request.resource.data[field].size() <= maxSize);
+    }
+
+    // Validate optional map field type and maximum top-level key count
+    function isValidOptionalMap(field, maxKeys) {
+      return !(field in request.resource.data) ||
+        (request.resource.data[field] is map &&
+         request.resource.data[field].keys().size() <= maxKeys);
+    }
+
+    // ===============================================================
+    // Domain Validators (Used in BOTH create and update)
+    // ===============================================================
+
+    // Enforce the 6 canonical singleton document IDs in four_workspace
+    function isValidWorkspaceDocId(docId) {
+      return docId in [
+        'fleet',
+        'trailers',
+        'projects',
+        'settings',
+        'simulations',
+        'security'
+      ];
+    }
+
+    // Validate complete post-write state of a four_workspace document
+    function isValidWorkspaceDoc(docId) {
+      return isValidWorkspaceDocId(docId) &&
+        hasOnlyAllowedFields([
+          'items',
+          'data',
+          'updatedAt',
+          'updatedBy',
+          'clientId',
+          'seedVersion',
+          'version'
+        ]) &&
+        hasRequiredFields(['updatedAt']) &&
+        validStringLength('updatedAt', 1, 64) &&
+        isValidOptionalList('items', 2000) &&
+        isValidOptionalMap('data', 100) &&
+        isValidOptionalString('updatedBy', 0, 200) &&
+        isValidOptionalString('clientId', 0, 120) &&
+        isValidOptionalString('seedVersion', 0, 120) &&
+        isValidOptionalString('version', 0, 64);
+    }
+
+    // ===============================================================
+    // Collection Rules: four_workspace
+    // ===============================================================
+
+    match /four_workspace/{docId} {
+      // Single-document reads restricted to authenticated sessions and valid workspace IDs
+      allow get: if isAuthenticated() && isValidWorkspaceDocId(docId);
+
+      // Collection-level queries / real-time onSnapshot(collection(db, 'four_workspace'))
+      allow list: if isAuthenticated();
+
+      // In-place creation and updates must both satisfy full domain & schema validation
+      allow create: if isAuthenticated() && isValidWorkspaceDoc(docId);
+      allow update: if isAuthenticated() && isValidWorkspaceDoc(docId);
+
+      // Workspace singleton documents are updated in-place and must never be deleted
+      allow delete: if false;
+    }
+
+    // ===============================================================
+    // Default Deny (Catch-All)
+    // ===============================================================
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

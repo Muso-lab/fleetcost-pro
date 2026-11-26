@@ -57,6 +57,12 @@ const CashFlowPage = () => {
 
   useEffect(() => {
     loadProjects();
+    const unsubscribe = storageService.subscribe((event) => {
+      if (event.type === 'data' && event.scopes?.includes('projects')) {
+        loadProjects();
+      }
+    });
+    return () => unsubscribe();
   }, []);
 
   const loadProjects = () => {

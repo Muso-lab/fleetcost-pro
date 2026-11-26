@@ -62,14 +62,26 @@ const DashboardPage = () => {
   const [draggedProjectId, setDraggedProjectId] = useState(null);
 
   useEffect(() => {
-    setFleet(storageService.getFleet());
-    setProjects(storageService.getProjects());
+    const refreshDashboardData = () => {
+      setFleet(storageService.getFleet());
+      setProjects(storageService.getProjects());
+    };
+    refreshDashboardData();
+
+    const unsubscribe = storageService.subscribe((event) => {
+      if (event.type === 'data') {
+        refreshDashboardData();
+      }
+    });
+
     // Verifica e applica eventuale aggiornamento settimanale prezzi carburanti "Alla Pompa" da fonti ufficiali
     storageService.refreshWeeklyFuelPricesFromOfficialSources({ force: false }).then(res => {
       if (res && res.updated) {
-        setProjects(storageService.getProjects());
+        refreshDashboardData();
       }
     });
+
+    return () => unsubscribe();
   }, []);
 
   const handleMoveDashboardProject = (projectId, direction) => {

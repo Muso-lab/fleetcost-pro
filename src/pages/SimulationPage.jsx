@@ -247,6 +247,15 @@ const SimulationPage = () => {
 
   useEffect(() => {
     loadData();
+    const unsubscribe = storageService.subscribe((event) => {
+      if (event.type === 'data') {
+        setFleet(storageService.getFleet());
+        setTrailers(storageService.getTrailers());
+        setSettings(storageService.getSettings());
+        setSavedSimulations(storageService.getSimulations());
+      }
+    });
+    return () => unsubscribe();
   }, []);
 
   const loadData = () => {

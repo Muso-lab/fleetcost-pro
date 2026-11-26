@@ -88,12 +88,18 @@ const SettingsPage = () => {
 
   useEffect(() => {
     loadSettings();
+    const unsubscribe = storageService.subscribe((event) => {
+      if (event.type === 'data' && event.scopes?.includes('settings')) {
+        loadSettings();
+      }
+    });
     // Aggiornamento automatico settimanale all'avvio se sono passati >= 7 giorni dall'ultimo sync
     storageService.refreshWeeklyFuelPricesFromOfficialSources({ force: false }).then(res => {
       if (res && res.updated) {
         setSettings(res.settings);
       }
     });
+    return () => unsubscribe();
   }, []);
 
   const loadSettings = () => {

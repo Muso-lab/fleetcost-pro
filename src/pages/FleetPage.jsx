@@ -76,6 +76,12 @@ const FleetPage = () => {
 
   useEffect(() => {
     loadData();
+    const unsubscribe = storageService.subscribe((event) => {
+      if (event.type === 'data' && (event.scopes?.includes('fleet') || event.scopes?.includes('trailers'))) {
+        loadData();
+      }
+    });
+    return () => unsubscribe();
   }, []);
 
   const loadData = () => {

@@ -1,8 +1,14 @@
-// Service per la persistenza locale (LocalStorage) e sincronizzazione opzionale con Firebase
-// Garantisce il funzionamento offline / standalone al 100% in locale
+// Service centralizzato con Sincronizzazione Cloud in Tempo Reale (Firebase Firestore) + Cache Locale Istantanea (LocalStorage)
+// Garantisce allineamento immediato multi-PC / multi-sessione e continuità anche in caso di micro-disconnessioni
 
+import { collection, doc, getDocs, onSnapshot, setDoc } from 'firebase/firestore';
+import { db, ensureFirebaseSession } from '../config/firebase';
 import { DEFAULT_FLEET, DEFAULT_TRAILERS, DEFAULT_PROJECTS, DEFAULT_SETTINGS } from '../data/initialData';
-import { recalculateProjectCost, calculateSpecificInsuranceCost } from '../utils/cashFlowCalculations';
+import {
+  calculateSingleProjectMetrics,
+  calculateDriverDailyCost,
+  calculateSpecificInsuranceCost
+} from '../utils/cashFlowCalculations';
 import {
   fetchLiveWeeklyFuelPrices,
   getFuelSyncMetadata,
@@ -15,21 +21,70 @@ const STORAGE_KEYS = {
   PROJECTS: 'four_projects',
   SETTINGS: 'four_settings',
   SIMULATIONS: 'four_simulations',
+  SECURITY: 'four_security_auth_config',
   ACTIVE_SCENARIO: 'four_active_scenario'
 };
 
+const CLOUD_COLLECTION = 'four_workspace';
+const CLEAN_SEED_VERSION = 'clean_2026_11_26_v1';
 const FLEET_DATA_VERSION_KEY = 'fleetcost_data_version_2026';
-const CURRENT_DATA_VERSION = 'v2026_four_protected_user_data_v7';
+const CURRENT_DATA_VERSION = 'v2026_cloud_clean_seed_v8';
+
+const sanitizeForCloud = (val) => JSON.parse(JSON.stringify(val));
 
 class StorageService {
   constructor() {
+    this.clientId = 'client_' + Math.random().toString(36).slice(2, 10);
+    this.listeners = new Set();
+    this.cloudUnsubscribe = null;
+    this.cloudStarting = false;
+    this.cloudStatus = {
+      state: 'connecting', // 'connecting' | 'synced' | 'syncing' | 'offline' | 'error'
+      lastSyncedAt: null,
+      errorMessage: null
+    };
     this.initDefaults();
   }
 
+  // --- SOTTOSCRIZIONE REATTIVA PER LE PAGINE E LA NAVBAR ---
+  subscribe(listener) {
+    if (typeof listener !== 'function') return () => {};
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
+  notifyListeners(event) {
+    this.listeners.forEach((fn) => {
+      try {
+        fn(event);
+      } catch (e) {
+        console.error('Errore listener storageService:', e);
+      }
+    });
+  }
+
+  setCloudStatus(patch) {
+    this.cloudStatus = {
+      ...this.cloudStatus,
+      ...patch
+    };
+    this.notifyListeners({
+      type: 'status',
+      cloudStatus: this.cloudStatus
+    });
+  }
+
+  getCloudStatus() {
+    return this.cloudStatus;
+  }
+
+  // --- INIZIALIZZAZIONE PULITA DATASET UFFICIALE ---
   initDefaults(forceReset = false) {
-    // NOTA 2.5: Protezione assoluta dei dati utente.
-    // Solo un reset esplicito (forceReset === true) può sovrascrivere i dati esistenti in localStorage.
-    if (forceReset) {
+    const storedVersion = localStorage.getItem(FLEET_DATA_VERSION_KEY);
+    // Allinea qualsiasi browser/PC che aveva vecchi dati sporchi/demo in cache al nuovo dataset pulito + Cloud
+    if (forceReset || storedVersion !== CURRENT_DATA_VERSION) {
       localStorage.setItem(STORAGE_KEYS.FLEET, JSON.stringify(DEFAULT_FLEET));
       localStorage.setItem(STORAGE_KEYS.TRAILERS, JSON.stringify(DEFAULT_TRAILERS));
       localStorage.setItem(STORAGE_KEYS.PROJECTS, JSON.stringify(DEFAULT_PROJECTS));
@@ -39,7 +94,6 @@ class StorageService {
       return;
     }
 
-    // Inizializzazione non distruttiva: popola una chiave ESCLUSIVAMENTE se è assente in localStorage.
     if (localStorage.getItem(STORAGE_KEYS.FLEET) === null) {
       localStorage.setItem(STORAGE_KEYS.FLEET, JSON.stringify(DEFAULT_FLEET));
     }
@@ -52,14 +106,219 @@ class StorageService {
     if (localStorage.getItem(STORAGE_KEYS.SETTINGS) === null) {
       localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(DEFAULT_SETTINGS));
     } else {
-      // Migrazione non distruttiva delle impostazioni: mantiene quelle utente e aggiunge solo eventuali nuove chiavi
       this.mergeDefaultSettings();
     }
     if (localStorage.getItem(STORAGE_KEYS.SIMULATIONS) === null) {
       localStorage.setItem(STORAGE_KEYS.SIMULATIONS, JSON.stringify([]));
     }
+  }
 
-    localStorage.setItem(FLEET_DATA_VERSION_KEY, CURRENT_DATA_VERSION);
+  // --- MOTORE DI SINCRONIZZAZIONE CLOUD IN TEMPO REALE (FIRESTORE) ---
+  async startCloudSync() {
+    if (!db) {
+      this.setCloudStatus({ state: 'offline', errorMessage: 'Database Cloud non configurato' });
+      return;
+    }
+    if (this.cloudUnsubscribe || this.cloudStarting) {
+      return;
+    }
+
+    this.cloudStarting = true;
+    this.setCloudStatus({ state: 'connecting', errorMessage: null });
+
+    try {
+      const fbUser = await ensureFirebaseSession();
+      if (!fbUser) {
+        this.cloudStarting = false;
+        this.setCloudStatus({ state: 'offline', errorMessage: 'Sessione Cloud offline' });
+        return;
+      }
+
+      // 1. Controlla lo stato iniziale su Cloud Firestore: se vuoto o non ancora allineato al seed pulito, inizializzalo
+      const colRef = collection(db, CLOUD_COLLECTION);
+      const initialSnap = await getDocs(colRef);
+      const existingDocs = {};
+      initialSnap.forEach((d) => {
+        existingDocs[d.id] = d.data();
+      });
+
+      const hasCleanCloudSeed =
+        existingDocs.projects &&
+        existingDocs.projects.seedVersion === CLEAN_SEED_VERSION &&
+        Array.isArray(existingDocs.projects.items);
+
+      if (!hasCleanCloudSeed) {
+        await this.pushFullStateToCloud({
+          fleet: DEFAULT_FLEET,
+          trailers: DEFAULT_TRAILERS,
+          projects: DEFAULT_PROJECTS,
+          settings: DEFAULT_SETTINGS,
+          simulations: []
+        });
+      } else {
+        this.applyCloudDocsToLocal(existingDocs, 'initial_cloud_load');
+      }
+
+      // 2. Attiva listener realtime `onSnapshot` per propagare all'istante ogni modifica tra tutti i PC connessi
+      this.cloudUnsubscribe = onSnapshot(
+        colRef,
+        (snapshot) => {
+          const changedDocs = {};
+          snapshot.docChanges().forEach((change) => {
+            if (change.type === 'added' || change.type === 'modified') {
+              changedDocs[change.doc.id] = change.doc.data();
+            }
+          });
+
+          if (Object.keys(changedDocs).length > 0) {
+            this.applyCloudDocsToLocal(changedDocs, 'realtime_snapshot');
+          }
+
+          this.setCloudStatus({
+            state: 'synced',
+            lastSyncedAt: new Date().toISOString(),
+            errorMessage: null
+          });
+        },
+        (err) => {
+          console.error('Errore listener realtime Firestore:', err);
+          this.setCloudStatus({
+            state: 'error',
+            errorMessage: err?.message || 'Errore connessione Cloud'
+          });
+        }
+      );
+
+      this.setCloudStatus({
+        state: 'synced',
+        lastSyncedAt: new Date().toISOString(),
+        errorMessage: null
+      });
+    } catch (err) {
+      console.error('Errore avvio Cloud Sync:', err);
+      this.setCloudStatus({
+        state: 'offline',
+        errorMessage: err?.message || 'Modalità offline'
+      });
+    } finally {
+      this.cloudStarting = false;
+    }
+  }
+
+  stopCloudSync() {
+    if (this.cloudUnsubscribe) {
+      this.cloudUnsubscribe();
+      this.cloudUnsubscribe = null;
+    }
+  }
+
+  applyCloudDocsToLocal(docsMap, reason = 'cloud') {
+    let anyDataChanged = false;
+    const changedScopes = [];
+
+    const applySlice = (docId, storageKey, fieldName) => {
+      const docData = docsMap[docId];
+      if (!docData || docData[fieldName] === undefined) return;
+      const incomingJson = JSON.stringify(docData[fieldName]);
+      const currentJson = localStorage.getItem(storageKey);
+      if (incomingJson !== currentJson) {
+        localStorage.setItem(storageKey, incomingJson);
+        anyDataChanged = true;
+        changedScopes.push(docId);
+      }
+    };
+
+    applySlice('fleet', STORAGE_KEYS.FLEET, 'items');
+    applySlice('trailers', STORAGE_KEYS.TRAILERS, 'items');
+    applySlice('projects', STORAGE_KEYS.PROJECTS, 'items');
+    applySlice('settings', STORAGE_KEYS.SETTINGS, 'data');
+    applySlice('simulations', STORAGE_KEYS.SIMULATIONS, 'items');
+    applySlice('security', STORAGE_KEYS.SECURITY, 'data');
+
+    if (anyDataChanged) {
+      this.notifyListeners({
+        type: 'data',
+        source: 'cloud',
+        reason,
+        scopes: changedScopes
+      });
+    }
+  }
+
+  async pushSliceToCloud(docId, value, isMap = false) {
+    if (!db) return;
+    try {
+      this.setCloudStatus({ state: 'syncing', errorMessage: null });
+      const fbUser = await ensureFirebaseSession();
+      if (!fbUser) {
+        this.setCloudStatus({ state: 'offline', errorMessage: 'Sessione Cloud non attiva' });
+        return;
+      }
+
+      const payload = {
+        [isMap ? 'data' : 'items']: sanitizeForCloud(value),
+        updatedAt: new Date().toISOString(),
+        clientId: this.clientId,
+        seedVersion: CLEAN_SEED_VERSION,
+        version: '1.0'
+      };
+
+      await setDoc(doc(db, CLOUD_COLLECTION, docId), payload);
+      this.setCloudStatus({
+        state: 'synced',
+        lastSyncedAt: payload.updatedAt,
+        errorMessage: null
+      });
+    } catch (err) {
+      console.error(`Errore salvataggio Cloud (${docId}):`, err);
+      this.setCloudStatus({
+        state: 'error',
+        errorMessage: err?.message || `Errore salvataggio ${docId}`
+      });
+    }
+  }
+
+  async pushFullStateToCloud({ fleet, trailers, projects, settings, simulations }) {
+    await Promise.all([
+      this.pushSliceToCloud('fleet', fleet, false),
+      this.pushSliceToCloud('trailers', trailers, false),
+      this.pushSliceToCloud('projects', projects, false),
+      this.pushSliceToCloud('settings', settings, true),
+      this.pushSliceToCloud('simulations', simulations || [], false)
+    ]);
+  }
+
+  async forceSyncFromCloud() {
+    if (!db) return false;
+    try {
+      this.setCloudStatus({ state: 'syncing', errorMessage: null });
+      const fbUser = await ensureFirebaseSession();
+      if (!fbUser) return false;
+      const snap = await getDocs(collection(db, CLOUD_COLLECTION));
+      const docsMap = {};
+      snap.forEach((d) => {
+        docsMap[d.id] = d.data();
+      });
+      if (Object.keys(docsMap).length > 0) {
+        this.applyCloudDocsToLocal(docsMap, 'manual_refresh');
+      }
+      this.setCloudStatus({
+        state: 'synced',
+        lastSyncedAt: new Date().toISOString(),
+        errorMessage: null
+      });
+      return true;
+    } catch (e) {
+      console.error('Errore forceSyncFromCloud:', e);
+      this.setCloudStatus({ state: 'error', errorMessage: e?.message });
+      return false;
+    }
+  }
+
+  saveSecurityConfig(securityConfig) {
+    localStorage.setItem(STORAGE_KEYS.SECURITY, JSON.stringify(securityConfig));
+    this.notifyListeners({ type: 'data', source: 'local', scopes: ['security'] });
+    this.pushSliceToCloud('security', securityConfig, true);
   }
 
   mergeDefaultSettings() {
@@ -68,7 +327,6 @@ class StorageService {
       if (!raw) return DEFAULT_SETTINGS;
       const parsed = JSON.parse(raw);
 
-      // Merge delle patenti esistenti aggiungendo eventuali nuove categorie (es. c_doppio)
       const existingLicenses = Array.isArray(parsed.licenseTypes) ? parsed.licenseTypes : [];
       const existingIds = new Set(existingLicenses.map(l => l.id));
       const mergedLicenses = [
@@ -76,16 +334,13 @@ class StorageService {
         ...(DEFAULT_SETTINGS.licenseTypes || []).filter(l => !existingIds.has(l.id))
       ];
 
-      // Aggiorna i nomi/prezzi dei carburanti in modalità "Alla Pompa (Senza Recupero Accise)" se erano rimasti ai vecchi valori "Netto Accise"
       const existingFuels = Array.isArray(parsed.fuelTypes) ? parsed.fuelTypes : DEFAULT_SETTINGS.fuelTypes;
       const mergedFuels = existingFuels.map(f => {
         const defFuel = (DEFAULT_SETTINGS.fuelTypes || []).find(df => df.id === f.id);
         if (!defFuel) return f;
-        // Se era rimasto il vecchio prezzo "Netto Accise" (1.42 gasolio, 1.52 hvo, 1.18 biolng) o dicitura "Netto Accise", migra al prezzo Alla Pompa
         const isLegacyNetPrice =
           (f.id === 'gasolio' && (Number(f.price) === 1.42 || (f.name || '').includes('Netto Accise'))) ||
-          (f.id === 'hvo' && Number(f.price) === 1.52) ||
-          (f.id === 'biolng' && Number(f.price) === 1.18);
+          (f.id === 'hvo' && Number(f.price) === 1.52);
         return {
           ...defFuel,
           ...f,
@@ -160,7 +415,6 @@ class StorageService {
       let fleet = data ? JSON.parse(data) : DEFAULT_FLEET;
       let fleetUpdated = false;
       fleet = fleet.map(v => {
-        // Daily 72 (7.2t) è un autocarro con obbligo di Patente C (o C1)
         const isDaily72 = (v.name || '').includes('72') || (v.model || '').includes('72');
         if (isDaily72 && (v.category === 'furgone' || !v.categoryLabel?.includes('Patente C'))) {
           fleetUpdated = true;
@@ -185,6 +439,8 @@ class StorageService {
 
   saveFleet(fleet) {
     localStorage.setItem(STORAGE_KEYS.FLEET, JSON.stringify(fleet));
+    this.notifyListeners({ type: 'data', source: 'local', scopes: ['fleet'] });
+    this.pushSliceToCloud('fleet', fleet, false);
     return fleet;
   }
 
@@ -200,25 +456,39 @@ class StorageService {
     return newVehicle;
   }
 
-  updateVehicle(id, vehicleData) {
+  updateVehicle(id, vehicleData, options = { syncProjects: true }) {
     const fleet = this.getFleet();
     const index = fleet.findIndex(v => v.id === id);
     if (index !== -1) {
-      fleet[index] = { ...fleet[index], ...vehicleData, updatedAt: new Date().toISOString() };
+      const prevVeh = fleet[index];
+      fleet[index] = { ...prevVeh, ...vehicleData, updatedAt: new Date().toISOString() };
       this.saveFleet(fleet);
-      // Auto-sincronizzazione reattiva: aggiorna all'istante le commesse associate
-      this.syncProjectsForVehicle(fleet[index]);
+
+      // Sincronizza le commesse associate solo se variano parametri economici/contrattuali del mezzo
+      const economicChanged =
+        prevVeh.monthlyLease !== fleet[index].monthlyLease ||
+        prevVeh.insuranceIncluded !== fleet[index].insuranceIncluded ||
+        prevVeh.insuranceYearly !== fleet[index].insuranceYearly ||
+        prevVeh.licenseTypeId !== fleet[index].licenseTypeId ||
+        JSON.stringify(prevVeh.leaseVariations || []) !== JSON.stringify(fleet[index].leaseVariations || []);
+
+      if (options.syncProjects !== false && economicChanged) {
+        this.syncProjectsForVehicle(fleet[index]);
+      }
       return fleet[index];
     }
     return null;
   }
 
+  /**
+   * Aggiorna in modo non distruttivo i canoni nolo / variazioni datate sulle commesse associate al mezzo
+   * preservando eventuali costi manuali (pedaggi, gomme, ricavi) inseriti dall'utente sulla commessa.
+   */
   syncProjectsForVehicle(vehicle) {
     try {
       const data = localStorage.getItem(STORAGE_KEYS.PROJECTS);
       if (!data) return;
       const projects = JSON.parse(data);
-      const fleet = this.getFleet();
       const trailers = this.getTrailers();
       const settings = this.getSettings();
 
@@ -226,13 +496,42 @@ class StorageService {
       const updated = projects.map(p => {
         if (p.vehicleId === vehicle.id) {
           hasChanges = true;
-          return recalculateProjectCost(p, fleet, trailers, settings);
+          const trl = trailers.find(t => t.id === p.trailerId);
+          const workingDays = Number(p.workingDaysMonth) || 22;
+          const insCalc = calculateSpecificInsuranceCost(vehicle, trl, workingDays, settings);
+          const nextVLeaseDaily = p.managementType === 'T'
+            ? (Number(p.vehicleLeaseDaily) || 0)
+            : (workingDays > 0 ? +((Number(vehicle.monthlyLease || 0) + insCalc.vehicleInsuranceMonthly) / workingDays).toFixed(2) : p.vehicleLeaseDaily);
+          const nextDriverDaily = (!p.driverManualOverride && p.managementType !== 'T')
+            ? calculateDriverDailyCost(vehicle, p.driverShiftType || '1_diurno', settings)
+            : p.driverCostDaily;
+
+          const patched = {
+            ...p,
+            vehicleLeaseDaily: nextVLeaseDaily,
+            driverCostDaily: nextDriverDaily,
+            vehicleLeaseVariations: Array.isArray(vehicle.leaseVariations) ? vehicle.leaseVariations : []
+          };
+          const m = calculateSingleProjectMetrics(patched);
+          return {
+            ...patched,
+            totalCostDaily: m.totalCostDaily,
+            revenueDaily: m.revenueDaily,
+            molDaily: m.molDaily,
+            monthlyCost: m.monthlyCost,
+            monthlyRevenue: m.monthlyRevenue,
+            monthlyMol: m.monthlyMol,
+            molPercent: +m.molPercent.toFixed(2),
+            cashAdvanceRequired: m.estimatedWorkingCapitalGap,
+            hasPriceVariations: m.hasPriceVariations,
+            variationSummary: m.variationSummary || null
+          };
         }
         return p;
       });
 
       if (hasChanges) {
-        localStorage.setItem(STORAGE_KEYS.PROJECTS, JSON.stringify(updated));
+        this.saveProjects(updated);
       }
     } catch (e) {
       console.error('Errore sincronizzazione commesse con veicolo:', e);
@@ -249,29 +548,7 @@ class StorageService {
   getTrailers() {
     try {
       const data = localStorage.getItem(STORAGE_KEYS.TRAILERS);
-      let trailers = data ? JSON.parse(data) : DEFAULT_TRAILERS;
-      let updated = false;
-      trailers = trailers.map(t => {
-        if (t.insuranceYearly === undefined && t.insuranceIncluded === undefined) {
-          updated = true;
-          const defTrl = DEFAULT_TRAILERS.find(dt => dt.id === t.id);
-          const defaultIns = defTrl?.insuranceYearly ?? (
-            t.category === 'double_deck' ? 1560 :
-            t.category === 'refrigerato_azoto' ? 1440 :
-            t.category === 'refrigerato' ? 1380 : 960
-          );
-          return {
-            ...t,
-            insuranceIncluded: false,
-            insuranceYearly: defaultIns
-          };
-        }
-        return t;
-      });
-      if (updated && data) {
-        localStorage.setItem(STORAGE_KEYS.TRAILERS, JSON.stringify(trailers));
-      }
-      return trailers;
+      return data ? JSON.parse(data) : DEFAULT_TRAILERS;
     } catch (e) {
       console.error('Errore lettura rimorchi:', e);
       return DEFAULT_TRAILERS;
@@ -280,6 +557,8 @@ class StorageService {
 
   saveTrailers(trailers) {
     localStorage.setItem(STORAGE_KEYS.TRAILERS, JSON.stringify(trailers));
+    this.notifyListeners({ type: 'data', source: 'local', scopes: ['trailers'] });
+    this.pushSliceToCloud('trailers', trailers, false);
     return trailers;
   }
 
@@ -295,14 +574,23 @@ class StorageService {
     return newTrailer;
   }
 
-  updateTrailer(id, trailerData) {
+  updateTrailer(id, trailerData, options = { syncProjects: true }) {
     const trailers = this.getTrailers();
     const index = trailers.findIndex(t => t.id === id);
     if (index !== -1) {
-      trailers[index] = { ...trailers[index], ...trailerData, updatedAt: new Date().toISOString() };
+      const prevTrl = trailers[index];
+      trailers[index] = { ...prevTrl, ...trailerData, updatedAt: new Date().toISOString() };
       this.saveTrailers(trailers);
-      // Auto-sincronizzazione reattiva: aggiorna all'istante le commesse associate
-      this.syncProjectsForTrailer(trailers[index]);
+
+      const economicChanged =
+        prevTrl.monthlyLease !== trailers[index].monthlyLease ||
+        prevTrl.insuranceIncluded !== trailers[index].insuranceIncluded ||
+        prevTrl.insuranceYearly !== trailers[index].insuranceYearly ||
+        JSON.stringify(prevTrl.leaseVariations || []) !== JSON.stringify(trailers[index].leaseVariations || []);
+
+      if (options.syncProjects !== false && economicChanged) {
+        this.syncProjectsForTrailer(trailers[index]);
+      }
       return trailers[index];
     }
     return null;
@@ -314,20 +602,44 @@ class StorageService {
       if (!data) return;
       const projects = JSON.parse(data);
       const fleet = this.getFleet();
-      const trailers = this.getTrailers();
       const settings = this.getSettings();
 
       let hasChanges = false;
       const updated = projects.map(p => {
         if (p.trailerId === trailer.id) {
           hasChanges = true;
-          return recalculateProjectCost(p, fleet, trailers, settings);
+          const veh = fleet.find(v => v.id === p.vehicleId);
+          const workingDays = Number(p.workingDaysMonth) || 22;
+          const insCalc = calculateSpecificInsuranceCost(veh, trailer, workingDays, settings);
+          const nextTLeaseDaily = workingDays > 0
+            ? +((Number(trailer.monthlyLease || 0) + insCalc.trailerInsuranceMonthly) / workingDays).toFixed(2)
+            : p.trailerLeaseDaily;
+
+          const patched = {
+            ...p,
+            trailerLeaseDaily: nextTLeaseDaily,
+            trailerLeaseVariations: Array.isArray(trailer.leaseVariations) ? trailer.leaseVariations : []
+          };
+          const m = calculateSingleProjectMetrics(patched);
+          return {
+            ...patched,
+            totalCostDaily: m.totalCostDaily,
+            revenueDaily: m.revenueDaily,
+            molDaily: m.molDaily,
+            monthlyCost: m.monthlyCost,
+            monthlyRevenue: m.monthlyRevenue,
+            monthlyMol: m.monthlyMol,
+            molPercent: +m.molPercent.toFixed(2),
+            cashAdvanceRequired: m.estimatedWorkingCapitalGap,
+            hasPriceVariations: m.hasPriceVariations,
+            variationSummary: m.variationSummary || null
+          };
         }
         return p;
       });
 
       if (hasChanges) {
-        localStorage.setItem(STORAGE_KEYS.PROJECTS, JSON.stringify(updated));
+        this.saveProjects(updated);
       }
     } catch (e) {
       console.error('Errore sincronizzazione commesse con rimorchio:', e);
@@ -347,34 +659,38 @@ class StorageService {
       const projects = data ? JSON.parse(data) : DEFAULT_PROJECTS;
       const fleet = this.getFleet();
       const trailers = this.getTrailers();
-      const settings = this.getSettings();
 
-      // Sincronizzazione automatica se i canoni di noleggio, l'assicurazione specifica o le variazioni per data sono cambiati
+      // Propaga eventuali variazioni canone per data registrate sui mezzi senza alterare i costi operativi manuali delle commesse
       let needsSave = false;
       const synchronized = projects.map(p => {
         const veh = fleet.find(v => v.id === p.vehicleId);
         const trl = trailers.find(t => t.id === p.trailerId);
-        if (veh || trl) {
-          const insCalc = calculateSpecificInsuranceCost(veh, trl, p.workingDaysMonth || 22, settings);
-          const expectedVLease = veh && p.workingDaysMonth > 0
-            ? +((Number(veh.monthlyLease || 0) + insCalc.vehicleInsuranceMonthly) / p.workingDaysMonth).toFixed(2)
-            : p.vehicleLeaseDaily;
-          const expectedTLease = trl && p.workingDaysMonth > 0
-            ? +((Number(trl.monthlyLease || 0) + insCalc.trailerInsuranceMonthly) / p.workingDaysMonth).toFixed(2)
-            : p.trailerLeaseDaily;
-          const isDaily72 = veh && ((veh.name || '').includes('72') || (veh.model || '').includes('72'));
-          const daily72NeedsDriverUpdate = isDaily72 && p.driverCostDaily === 140 && !p.driverManualOverride;
+        const vehVarJson = JSON.stringify(veh?.leaseVariations || []);
+        const projVehVarJson = JSON.stringify(p.vehicleLeaseVariations || []);
+        const trlVarJson = JSON.stringify(trl?.leaseVariations || []);
+        const projTrlVarJson = JSON.stringify(p.trailerLeaseVariations || []);
 
-          const vehVarJson = JSON.stringify(veh?.leaseVariations || []);
-          const projVehVarJson = JSON.stringify(p.vehicleLeaseVariations || []);
-          const trlVarJson = JSON.stringify(trl?.leaseVariations || []);
-          const projTrlVarJson = JSON.stringify(p.trailerLeaseVariations || []);
-          const variationsOutOfSync = (veh && vehVarJson !== projVehVarJson) || (trl && trlVarJson !== projTrlVarJson);
-
-          if ((p.managementType === 'D' && (expectedVLease !== p.vehicleLeaseDaily || expectedTLease !== p.trailerLeaseDaily || daily72NeedsDriverUpdate)) || variationsOutOfSync) {
-            needsSave = true;
-            return recalculateProjectCost(p, fleet, trailers, settings);
-          }
+        if ((veh && vehVarJson !== projVehVarJson) || (trl && trlVarJson !== projTrlVarJson)) {
+          needsSave = true;
+          const patched = {
+            ...p,
+            vehicleLeaseVariations: veh?.leaseVariations || [],
+            trailerLeaseVariations: trl?.leaseVariations || []
+          };
+          const m = calculateSingleProjectMetrics(patched);
+          return {
+            ...patched,
+            totalCostDaily: m.totalCostDaily,
+            revenueDaily: m.revenueDaily,
+            molDaily: m.molDaily,
+            monthlyCost: m.monthlyCost,
+            monthlyRevenue: m.monthlyRevenue,
+            monthlyMol: m.monthlyMol,
+            molPercent: +m.molPercent.toFixed(2),
+            cashAdvanceRequired: m.estimatedWorkingCapitalGap,
+            hasPriceVariations: m.hasPriceVariations,
+            variationSummary: m.variationSummary || null
+          };
         }
         return p;
       });
@@ -382,7 +698,6 @@ class StorageService {
       if (needsSave) {
         localStorage.setItem(STORAGE_KEYS.PROJECTS, JSON.stringify(synchronized));
       }
-
       return synchronized;
     } catch (e) {
       console.error('Errore lettura commesse:', e);
@@ -392,6 +707,8 @@ class StorageService {
 
   saveProjects(projects) {
     localStorage.setItem(STORAGE_KEYS.PROJECTS, JSON.stringify(projects));
+    this.notifyListeners({ type: 'data', source: 'local', scopes: ['projects'] });
+    this.pushSliceToCloud('projects', projects, false);
     return projects;
   }
 
@@ -406,18 +723,19 @@ class StorageService {
     projects.unshift(newProject);
     this.saveProjects(projects);
 
-    // Se un veicolo è stato assegnato al progetto, aggiorna il suo stato
     if (newProject.vehicleId) {
-      this.updateVehicle(newProject.vehicleId, {
-        status: 'assigned',
-        assignedProject: newProject.name
-      });
+      this.updateVehicle(
+        newProject.vehicleId,
+        { status: 'assigned', assignedProject: newProject.name },
+        { syncProjects: false }
+      );
     }
     if (newProject.trailerId) {
-      this.updateTrailer(newProject.trailerId, {
-        status: 'assigned',
-        assignedProject: newProject.name
-      });
+      this.updateTrailer(
+        newProject.trailerId,
+        { status: 'assigned', assignedProject: newProject.name },
+        { syncProjects: false }
+      );
     }
 
     return newProject;
@@ -435,19 +753,20 @@ class StorageService {
   }
 
   deleteProject(id) {
-    const project = this.getProjects().find(p => p.id === id);
+    const allProjects = this.getProjects();
+    const project = allProjects.find(p => p.id === id);
+    const remaining = allProjects.filter(p => p.id !== id);
+    this.saveProjects(remaining);
+
     if (project) {
-      // Libera i mezzi assegnati se non usati altrove
-      if (project.vehicleId) {
-        this.updateVehicle(project.vehicleId, { status: 'available', assignedProject: null });
+      if (project.vehicleId && !remaining.some(p => p.vehicleId === project.vehicleId)) {
+        this.updateVehicle(project.vehicleId, { status: 'available', assignedProject: null }, { syncProjects: false });
       }
-      if (project.trailerId) {
-        this.updateTrailer(project.trailerId, { status: 'available', assignedProject: null });
+      if (project.trailerId && !remaining.some(p => p.trailerId === project.trailerId)) {
+        this.updateTrailer(project.trailerId, { status: 'available', assignedProject: null }, { syncProjects: false });
       }
     }
-    const projects = this.getProjects().filter(p => p.id !== id);
-    this.saveProjects(projects);
-    return projects;
+    return remaining;
   }
 
   // --- SETTINGS ---
@@ -474,13 +793,13 @@ class StorageService {
 
   saveSettings(settings) {
     localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(settings));
-    this.syncAllProjectsWithSettings(settings);
+    this.notifyListeners({ type: 'data', source: 'local', scopes: ['settings'] });
+    this.pushSliceToCloud('settings', settings, true);
     return settings;
   }
 
   /**
    * Aggiorna i prezzi medi settimanali dei carburanti "Alla Pompa" da fonti ufficiali (MASE / MIMIT / GME)
-   * e ricalcola dinamicamente tutte le commesse.
    */
   async refreshWeeklyFuelPricesFromOfficialSources(options = { force: false }) {
     const currentSettings = this.getSettings();
@@ -528,28 +847,21 @@ class StorageService {
     };
   }
 
-  syncAllProjectsWithSettings(settings) {
-    try {
-      const data = localStorage.getItem(STORAGE_KEYS.PROJECTS);
-      if (!data) return;
-      const projects = JSON.parse(data);
-      const fleet = this.getFleet();
-      const trailers = this.getTrailers();
-      const updated = projects.map(p => recalculateProjectCost(p, fleet, trailers, settings));
-      localStorage.setItem(STORAGE_KEYS.PROJECTS, JSON.stringify(updated));
-    } catch (e) {
-      console.error('Errore sincronizzazione commesse con nuove impostazioni:', e);
-    }
-  }
-
-  // --- SIMULATIONS (PREVENTIVI TRATTA) ---
+  // --- SIMULATIONS (ARCHIVIO PREVENTIVI TRATTA) ---
   getSimulations() {
     try {
       const data = localStorage.getItem(STORAGE_KEYS.SIMULATIONS);
       return data ? JSON.parse(data) : [];
-    } catch (e) {
+    } catch {
       return [];
     }
+  }
+
+  saveSimulationsList(sims) {
+    localStorage.setItem(STORAGE_KEYS.SIMULATIONS, JSON.stringify(sims));
+    this.notifyListeners({ type: 'data', source: 'local', scopes: ['simulations'] });
+    this.pushSliceToCloud('simulations', sims, false);
+    return sims;
   }
 
   saveSimulation(simulation) {
@@ -561,18 +873,18 @@ class StorageService {
         ...simulation,
         updatedAt: new Date().toISOString()
       };
-      localStorage.setItem(STORAGE_KEYS.SIMULATIONS, JSON.stringify(sims));
+      this.saveSimulationsList(sims);
       return sims[existingIdx];
     }
     const newSim = {
       ...simulation,
       id: simulation.id || 'sim_' + Date.now(),
       code: simulation.code || 'PREV-' + Math.floor(100 + Math.random() * 900),
-      status: simulation.status || 'pending', // 'pending' (In Valutazione) | 'accepted' (Accettata / Convertita)
+      status: simulation.status || 'pending',
       createdAt: new Date().toISOString()
     };
     sims.unshift(newSim);
-    localStorage.setItem(STORAGE_KEYS.SIMULATIONS, JSON.stringify(sims));
+    this.saveSimulationsList(sims);
     return newSim;
   }
 
@@ -585,7 +897,7 @@ class StorageService {
         ...patch,
         updatedAt: new Date().toISOString()
       };
-      localStorage.setItem(STORAGE_KEYS.SIMULATIONS, JSON.stringify(sims));
+      this.saveSimulationsList(sims);
       return sims[idx];
     }
     return null;
@@ -593,19 +905,23 @@ class StorageService {
 
   deleteSimulation(id) {
     const sims = this.getSimulations().filter(s => s.id !== id);
-    localStorage.setItem(STORAGE_KEYS.SIMULATIONS, JSON.stringify(sims));
+    this.saveSimulationsList(sims);
     return sims;
   }
 
-  // --- RESET & BACKUP ---
+  // --- RESET & BACKUP (CON PROPAGAZIONE CLOUD IMMEDIATA) ---
   resetToDefaults() {
     this.initDefaults(true);
-    return {
+    const cleanState = {
       fleet: this.getFleet(),
       trailers: this.getTrailers(),
       projects: this.getProjects(),
-      settings: this.getSettings()
+      settings: this.getSettings(),
+      simulations: []
     };
+    this.notifyListeners({ type: 'data', source: 'local', scopes: ['fleet', 'trailers', 'projects', 'settings', 'simulations'] });
+    this.pushFullStateToCloud(cleanState);
+    return cleanState;
   }
 
   exportBackupJson() {
@@ -625,11 +941,26 @@ class StorageService {
   importBackupJson(jsonString) {
     try {
       const data = JSON.parse(jsonString);
-      if (data.fleet) localStorage.setItem(STORAGE_KEYS.FLEET, JSON.stringify(data.fleet));
-      if (data.trailers) localStorage.setItem(STORAGE_KEYS.TRAILERS, JSON.stringify(data.trailers));
-      if (data.projects) localStorage.setItem(STORAGE_KEYS.PROJECTS, JSON.stringify(data.projects));
-      if (data.settings) localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(data.settings));
-      if (data.simulations) localStorage.setItem(STORAGE_KEYS.SIMULATIONS, JSON.stringify(data.simulations));
+      const nextFleet = Array.isArray(data.fleet) ? data.fleet : this.getFleet();
+      const nextTrailers = Array.isArray(data.trailers) ? data.trailers : this.getTrailers();
+      const nextProjects = Array.isArray(data.projects) ? data.projects : this.getProjects();
+      const nextSettings = data.settings ? data.settings : this.getSettings();
+      const nextSims = Array.isArray(data.simulations) ? data.simulations : [];
+
+      localStorage.setItem(STORAGE_KEYS.FLEET, JSON.stringify(nextFleet));
+      localStorage.setItem(STORAGE_KEYS.TRAILERS, JSON.stringify(nextTrailers));
+      localStorage.setItem(STORAGE_KEYS.PROJECTS, JSON.stringify(nextProjects));
+      localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(nextSettings));
+      localStorage.setItem(STORAGE_KEYS.SIMULATIONS, JSON.stringify(nextSims));
+
+      this.notifyListeners({ type: 'data', source: 'local', scopes: ['fleet', 'trailers', 'projects', 'settings', 'simulations'] });
+      this.pushFullStateToCloud({
+        fleet: nextFleet,
+        trailers: nextTrailers,
+        projects: nextProjects,
+        settings: nextSettings,
+        simulations: nextSims
+      });
       return { success: true };
     } catch (e) {
       console.error('Errore import backup:', e);

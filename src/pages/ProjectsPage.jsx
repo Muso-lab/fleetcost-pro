@@ -177,6 +177,12 @@ const ProjectsPage = () => {
     if (newFromVehicle) {
       handleOpenCreateWithVehicle(newFromVehicle);
     }
+    const unsubscribe = storageService.subscribe((event) => {
+      if (event.type === 'data') {
+        loadData();
+      }
+    });
+    return () => unsubscribe();
   }, [searchParams]);
 
   const loadData = () => {

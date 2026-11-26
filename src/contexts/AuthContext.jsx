@@ -1,4 +1,5 @@
-import { createContext, useContext, useState } from 'react';
+import { createContext, useContext, useState, useEffect } from 'react';
+import storageService from '../services/storageService';
 
 const AuthContext = createContext();
 
@@ -61,6 +62,19 @@ export const AuthProvider = ({ children }) => {
   });
 
   const [authConfig, setAuthConfig] = useState(getStoredAuthConfig);
+
+  // Avvia automaticamente la sincronizzazione Cloud in tempo reale quando l'utente è autenticato
+  useEffect(() => {
+    if (currentUser) {
+      storageService.startCloudSync();
+    }
+    const unsubscribe = storageService.subscribe((event) => {
+      if (event.type === 'data' && event.scopes?.includes('security')) {
+        setAuthConfig(getStoredAuthConfig());
+      }
+    });
+    return () => unsubscribe();
+  }, [currentUser]);
 
   // Funzione di Login sicuro (verifica basata su hash SHA-256)
   const login = async (email, password, rememberMe = true) => {
@@ -134,7 +148,7 @@ export const AuthProvider = ({ children }) => {
       role: currentConfig.role || DEFAULT_AUTH_CONFIG.role,
       lastUpdated: new Date().toISOString()
     };
-    localStorage.setItem('four_security_auth_config', JSON.stringify(updated));
+    storageService.saveSecurityConfig(updated);
     setAuthConfig(updated);
     return true;
   };

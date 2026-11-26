@@ -11,9 +11,11 @@ import {
   X,
   Download,
   LogOut,
-  ShieldCheck
+  ShieldCheck,
+  Cloud,
+  RefreshCw
 } from 'lucide-react';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import storageService from '../services/storageService';
 import logoFour from '../assets/logo-four.png';
 
@@ -22,6 +24,16 @@ const Navbar = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [cloudStatus, setCloudStatus] = useState(() => storageService.getCloudStatus());
+
+  useEffect(() => {
+    const unsub = storageService.subscribe((event) => {
+      if (event.type === 'status') {
+        setCloudStatus(event.cloudStatus);
+      }
+    });
+    return () => unsub();
+  }, []);
 
   const handleLogout = async () => {
     if (confirm('Confermi di voler uscire e proteggere la sessione aziendale?')) {
@@ -97,6 +109,37 @@ const Navbar = () => {
 
           {/* Action buttons on desktop */}
           <div className="hidden md:flex items-center space-x-2">
+            {/* Indicatore Cloud Real-Time Sync multi-PC */}
+            <button
+              type="button"
+              onClick={() => storageService.forceSyncFromCloud()}
+              title={
+                cloudStatus.state === 'synced'
+                  ? `Sincronizzazione Cloud in tempo reale attiva${cloudStatus.lastSyncedAt ? ` (Ultimo sync: ${new Date(cloudStatus.lastSyncedAt).toLocaleTimeString('it-IT')})` : ''}. Clicca per forzare allineamento.`
+                  : cloudStatus.errorMessage || 'Stato sincronizzazione Cloud Firestore'
+              }
+              className={`px-2.5 py-1.5 text-[11px] font-bold rounded-xl border transition flex items-center space-x-1.5 shadow-sm ${
+                cloudStatus.state === 'synced'
+                  ? 'bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-200 border-emerald-400/40'
+                  : cloudStatus.state === 'syncing' || cloudStatus.state === 'connecting'
+                    ? 'bg-cyan-500/15 text-cyan-200 border-cyan-400/40'
+                    : 'bg-amber-500/20 text-amber-200 border-amber-400/40'
+              }`}
+            >
+              {cloudStatus.state === 'syncing' || cloudStatus.state === 'connecting' ? (
+                <RefreshCw className="w-3.5 h-3.5 text-cyan-300 animate-spin" />
+              ) : (
+                <Cloud className={`w-3.5 h-3.5 ${cloudStatus.state === 'synced' ? 'text-emerald-400' : 'text-amber-400'}`} />
+              )}
+              <span>
+                {cloudStatus.state === 'synced'
+                  ? 'Cloud Live'
+                  : cloudStatus.state === 'syncing' || cloudStatus.state === 'connecting'
+                    ? 'Sync Cloud...'
+                    : 'Locale'}
+              </span>
+            </button>
+
             <button
               onClick={handleExportBackup}
               title="Esporta Backup di Sicurezza dei Dati (JSON)"

@@ -1752,16 +1752,14 @@ export const calculateSpecificInsuranceCost = (vehicle, trailer, workingDays = 2
   }
 
   let trailerInsuranceYearly = 0;
-  let trailerInsuranceIncluded = false;
+  let trailerInsuranceIncluded = true;
   if (trailer) {
-    if (trailer.insuranceIncluded === true) {
+    if (trailer.insuranceIncluded === false && Number(trailer.insuranceYearly) > 0) {
+      trailerInsuranceIncluded = false;
+      trailerInsuranceYearly = Number(trailer.insuranceYearly) || defaultTrailerInsYearly;
+    } else {
       trailerInsuranceIncluded = true;
       trailerInsuranceYearly = 0;
-    } else {
-      trailerInsuranceIncluded = false;
-      trailerInsuranceYearly = trailer.insuranceYearly !== undefined
-        ? (Number(trailer.insuranceYearly) || 0)
-        : defaultTrailerInsYearly;
     }
   }
 
