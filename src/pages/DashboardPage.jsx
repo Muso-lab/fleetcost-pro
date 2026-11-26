@@ -64,6 +64,12 @@ const DashboardPage = () => {
   useEffect(() => {
     setFleet(storageService.getFleet());
     setProjects(storageService.getProjects());
+    // Verifica e applica eventuale aggiornamento settimanale prezzi carburanti "Alla Pompa" da fonti ufficiali
+    storageService.refreshWeeklyFuelPricesFromOfficialSources({ force: false }).then(res => {
+      if (res && res.updated) {
+        setProjects(storageService.getProjects());
+      }
+    });
   }, []);
 
   const handleMoveDashboardProject = (projectId, direction) => {

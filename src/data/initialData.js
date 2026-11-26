@@ -37,45 +37,45 @@ export const DEFAULT_FUEL_TYPES = [
     id: 'elettrico',
     name: 'Elettrico (BEV)',
     unit: 'kWh/km',
-    price: 0.36, // Media ponderata: 80% ricarica lenta deposito a 0.26 €/kWh + 20% HPC a 0.68 €/kWh
+    price: 0.36, // Media ponderata alla colonnina/hub: 80% ricarica deposito F2/F3 + 20% HPC
     emissionFactor: 0,
-    marketRange: '0,24 - 0,38 €/kWh (deposito vs HPC)',
-    notes: 'Ricarica deposito industriale notturna F2/F3 + biberonaggio rapido'
+    marketRange: '0,26 - 0,65 €/kWh (Hub deposito vs HPC)',
+    notes: 'Prezzo medio alla colonnina/hub comprensivo di oneri di rete e accise elettriche'
   },
   {
     id: 'biolng',
-    name: 'Bio-LNG (Biometano Liquefatto)',
+    name: 'Bio-LNG (Biometano Liquefatto - Alla Pompa)',
     unit: 'kg/100km',
-    price: 1.18, // Prezzo medio alla pompa/convenzione flotta 2025/2026
+    price: 1.32, // Prezzo medio alla pompa erogatori stradali Italia (senza recupero accise)
     emissionFactor: 0.12,
-    marketRange: '1,10 - 1,28 €/kg',
-    notes: 'Biometano liquefatto 100% da filiera agricola/FORSU certificata RED II'
+    marketRange: '1,24 - 1,42 €/kg (alla pompa)',
+    notes: 'Prezzo medio alla pompa erogatori GNL/Bio-LNG stradali certificato RED II'
   },
   {
     id: 'hvo',
-    name: 'HVO 100% Biodiesel',
+    name: 'HVO 100% Biodiesel (Prezzo Alla Pompa)',
     unit: 'L/100km',
-    price: 1.52, // Eni HVOlution / Q8 HVO medio rete
+    price: 1.72, // Prezzo pieno alla pompa Eni Live HVOlution / Q8 HVO (senza recupero accise)
     emissionFactor: 0.18,
-    marketRange: '1,45 - 1,58 €/L',
-    notes: 'Olio vegetale idrotrattato, compatibile con motori diesel Euro 6 EN 15940'
+    marketRange: '1,66 - 1,79 €/L (alla pompa, senza recupero accise)',
+    notes: 'Prezzo pieno alla pompa comprensivo di accise (nessun rimborso accise)'
   },
   {
     id: 'gasolio',
-    name: 'Gasolio Autotrazione (Netto Accise)',
+    name: 'Gasolio Autotrazione (Prezzo Alla Pompa - Senza Recupero Accise)',
     unit: 'L/100km',
-    price: 1.42, // Prezzo industriale effettivo al netto del rimborso accise autotrasporto (~0,214 €/L)
+    price: 1.75, // Prezzo medio settimanale MASE alla pompa (lordo accise, senza rimborso accise)
     emissionFactor: 2.65,
-    marketRange: '1,38 - 1,48 €/L (recupero carbon tax)',
-    notes: 'Gasolio commerciale per autocarri > 7.5t con credito d\'imposta accise'
+    marketRange: '1,69 - 1,82 €/L (alla pompa MASE, senza recupero accise)',
+    notes: 'Prezzo pieno alla pompa rilevato da Osservatorio Carburanti MASE (senza recupero accise)'
   },
   {
     id: 'adblue',
-    name: 'AdBlue (Soluzione di Urea al 32.5%)',
+    name: 'AdBlue (Soluzione di Urea al 32.5% - Alla Pompa)',
     unit: 'L/100km',
-    price: 0.65, // Cisterna IBC deposito (0.50 €/L) / colonnina (0.85 €/L)
+    price: 0.85, // Prezzo medio erogatore alla pompa
     emissionFactor: 0,
-    marketRange: '0,50 - 0,85 €/L',
+    marketRange: '0,75 - 0,98 €/L (alla colonnina)',
     notes: 'Consumo medio stimato: ~5% del volume di gasolio/HVO'
   },
   {
@@ -789,12 +789,14 @@ export const DEFAULT_TRAILERS = [
     brand: 'Indetruck',
     tractionType: 'Elettrica/Termica',
     monthlyLease: 1500,
+    insuranceIncluded: false,
+    insuranceYearly: 1380,
     leasePaymentTerms: 30,
     maintenanceIncluded: true,
     capacityPlt: 33,
     status: 'assigned',
     assignedProject: 'Distribuzione Fresco Penny',
-    notes: 'Manutenzione inclusa.'
+    notes: 'Manutenzione inclusa. Assicurazione specifica semirimorchio € 1.380/anno.'
   },
   {
     id: 'trl_2f_frigo_xa166rz',
@@ -809,12 +811,14 @@ export const DEFAULT_TRAILERS = [
     brand: 'Indetruck',
     tractionType: 'Elettrica/Termica',
     monthlyLease: 1200,
+    insuranceIncluded: false,
+    insuranceYearly: 1380,
     leasePaymentTerms: 30,
     maintenanceIncluded: false,
     capacityPlt: 33,
     status: 'assigned',
     assignedProject: 'Navette Penny Buccinasco',
-    notes: 'Manutenzione esclusa.'
+    notes: 'Manutenzione esclusa. Assicurazione specifica semirimorchio € 1.380/anno.'
   },
   {
     id: 'trl_3f_frigo_xa518sg',
@@ -829,12 +833,14 @@ export const DEFAULT_TRAILERS = [
     brand: 'Indetruck',
     tractionType: 'Elettrica/Termica',
     monthlyLease: 1200,
+    insuranceIncluded: false,
+    insuranceYearly: 1380,
     leasePaymentTerms: 30,
     maintenanceIncluded: false,
     capacityPlt: 33,
     status: 'assigned',
     assignedProject: 'Navette Penny Buccinasco 2',
-    notes: 'Manutenzione esclusa.'
+    notes: 'Manutenzione esclusa. Assicurazione specifica semirimorchio € 1.380/anno.'
   },
   {
     id: 'trl_4f_frigo_xa519sg',
@@ -849,12 +855,14 @@ export const DEFAULT_TRAILERS = [
     brand: 'Indetruck',
     tractionType: 'Elettrica/Termica',
     monthlyLease: 1200,
+    insuranceIncluded: false,
+    insuranceYearly: 1380,
     leasePaymentTerms: 30,
     maintenanceIncluded: false,
     capacityPlt: 33,
     status: 'assigned',
     assignedProject: 'Navette Penny Buccinasco LNG',
-    notes: 'Autista dedicato Paride FOUR.'
+    notes: 'Autista dedicato Paride FOUR. Assicurazione specifica € 1.380/anno.'
   },
   {
     id: 'trl_5f_frigo_azoto_xb699af',
@@ -869,12 +877,14 @@ export const DEFAULT_TRAILERS = [
     brand: 'Compagnia Italiana Rimorchi',
     tractionType: 'Azoto liquido',
     monthlyLease: 1750,
+    insuranceIncluded: false,
+    insuranceYearly: 1440,
     leasePaymentTerms: 30,
     maintenanceIncluded: true,
     capacityPlt: 33,
     status: 'assigned',
     assignedProject: 'Distribuzione Desenzano Garda',
-    notes: 'Refrigerazione silenziosa notturna ad azoto liquido. Manutenzione inclusa.'
+    notes: 'Refrigerazione silenziosa notturna ad azoto liquido. Assicurazione specifica € 1.440/anno.'
   },
   {
     id: 'trl_6f_frigo_xa068ad',
@@ -889,12 +899,14 @@ export const DEFAULT_TRAILERS = [
     brand: 'Idealcar',
     tractionType: 'Elettrica/Termica',
     monthlyLease: 1350,
+    insuranceIncluded: false,
+    insuranceYearly: 1380,
     leasePaymentTerms: 30,
     maintenanceIncluded: true,
     capacityPlt: 33,
     status: 'assigned',
     assignedProject: 'Bio-LNG Cossato / Gravedona / Arborio',
-    notes: 'Manutenzione inclusa.'
+    notes: 'Manutenzione inclusa. Assicurazione specifica € 1.380/anno.'
   },
   {
     id: 'trl_7f_frigo_idealcar_2',
@@ -909,12 +921,14 @@ export const DEFAULT_TRAILERS = [
     brand: 'Idealcar',
     tractionType: 'Elettrica/Termica',
     monthlyLease: 1350,
+    insuranceIncluded: false,
+    insuranceYearly: 1380,
     leasePaymentTerms: 30,
     maintenanceIncluded: true,
     capacityPlt: 33,
     status: 'available',
     assignedProject: null,
-    notes: 'Manutenzione inclusa.'
+    notes: 'Manutenzione inclusa. Assicurazione specifica € 1.380/anno.'
   },
   {
     id: 'trl_8f_frigo_four_xa520sg',
@@ -929,12 +943,14 @@ export const DEFAULT_TRAILERS = [
     brand: 'Four',
     tractionType: 'Elettrica/Termica',
     monthlyLease: 1350,
+    insuranceIncluded: false,
+    insuranceYearly: 1380,
     leasePaymentTerms: 30,
     maintenanceIncluded: true,
     capacityPlt: 33,
     status: 'available',
     assignedProject: null,
-    notes: 'Flotta proprietaria Four.'
+    notes: 'Flotta proprietaria Four. Assicurazione specifica € 1.380/anno.'
   },
   {
     id: 'trl_1b_boxato_xa756wc',
@@ -948,12 +964,14 @@ export const DEFAULT_TRAILERS = [
     lessorName: 'T-WAY',
     brand: 'Lecitreiler',
     monthlyLease: 700,
+    insuranceIncluded: false,
+    insuranceYearly: 960,
     leasePaymentTerms: 30,
     maintenanceIncluded: true,
     capacityPlt: 33,
     status: 'assigned',
     assignedProject: 'Bilico Elettrico 33 plt x Decathlon BO + BRT',
-    notes: 'Manutenzione inclusa. Autista Mustapha.'
+    notes: 'Manutenzione inclusa. Assicurazione specifica € 960/anno.'
   },
   {
     id: 'trl_2b_boxato_xa790zv',
@@ -967,12 +985,14 @@ export const DEFAULT_TRAILERS = [
     lessorName: 'T-WAY',
     brand: 'Krone',
     monthlyLease: 600,
+    insuranceIncluded: false,
+    insuranceYearly: 960,
     leasePaymentTerms: 30,
     maintenanceIncluded: false,
     capacityPlt: 33,
     status: 'assigned',
     assignedProject: 'Navette BRT Bologna Interporto',
-    notes: 'Autista Bronte FOUR.'
+    notes: 'Autista Bronte FOUR. Assicurazione specifica € 960/anno.'
   },
   {
     id: 'trl_3b_piacenza_lyreco',
@@ -986,12 +1006,14 @@ export const DEFAULT_TRAILERS = [
     lessorName: 'T-WAY',
     brand: 'Krone',
     monthlyLease: 600,
+    insuranceIncluded: false,
+    insuranceYearly: 960,
     leasePaymentTerms: 30,
     maintenanceIncluded: false,
     capacityPlt: 33,
     status: 'assigned',
     assignedProject: 'Lyreco - Distribuzione Milano (con Facchinaggio)',
-    notes: 'Autista Yacouba FOUR.'
+    notes: 'Autista Yacouba FOUR. Assicurazione specifica € 960/anno.'
   },
   {
     id: 'trl_4b_boxato_xb460ad',
@@ -1005,12 +1027,14 @@ export const DEFAULT_TRAILERS = [
     lessorName: 'T-WAY',
     brand: 'Krone',
     monthlyLease: 600,
+    insuranceIncluded: false,
+    insuranceYearly: 960,
     leasePaymentTerms: 30,
     maintenanceIncluded: false,
     capacityPlt: 33,
     status: 'available',
     assignedProject: null,
-    notes: 'Autista Mustapha.'
+    notes: 'Autista Mustapha. Assicurazione specifica € 960/anno.'
   },
   {
     id: 'trl_5b_boxato_xb461ad',
@@ -1024,12 +1048,14 @@ export const DEFAULT_TRAILERS = [
     lessorName: 'T-WAY',
     brand: 'Krone',
     monthlyLease: 600,
+    insuranceIncluded: false,
+    insuranceYearly: 960,
     leasePaymentTerms: 30,
     maintenanceIncluded: false,
     capacityPlt: 33,
     status: 'available',
     assignedProject: null,
-    notes: 'Autista Larbi.'
+    notes: 'Autista Larbi. Assicurazione specifica € 960/anno.'
   },
   {
     id: 'trl_db01_multitrax_xa252vg',
@@ -1043,6 +1069,8 @@ export const DEFAULT_TRAILERS = [
     lessorName: 'Multitrax',
     brand: 'Burger',
     monthlyLease: 2200,
+    insuranceIncluded: false,
+    insuranceYearly: 1560,
     leasePaymentTerms: 30,
     maintenanceIncluded: true,
     capacityPlt: 55,
@@ -1818,21 +1846,29 @@ export const DEFAULT_SETTINGS = {
     co2SavingsVsDieselKgKm: 0.75 // kg CO2 risparmiati per km con trazione elettrica/biometano
   },
   tireParameters: {
-    costPerTire: 450, // Costo medio per pneumatico nuovo (€)
+    costPerTire: 450, // Costo medio generale di fallback (€)
+    // Costi unitari a gomma differenziati per tipologia di mezzo (€/gomma):
+    costPerTireTractorElectric: 520, // Trattori Elettrici BEV (pneumatici alto indice di carico 315/70 R22.5 HL)
+    costPerTireTractorBiolng: 460, // Trattori Stradali Bio-LNG / HVO / Diesel (315/70 R22.5)
+    costPerTireTrailer: 380, // Semirimorchi & Casse (385/65 R22.5 da rimorchio)
+    costPerTireRigid: 420, // Motrici 12-22 Plt (295/80 o 315/70 R22.5)
+    costPerTireLight: 240, // Daily 72 / Autocarri Leggeri 7.2t & Furgoni (225/75 R16C)
     tiresTractor: 6, // 6 gomme trattore
     tiresTrailer: 6, // 6 gomme semirimorchio (totale 12 bilico)
-    tiresRigidTruck: 6, // 6 gomme motrice (o 4 per 9-12 plt)
+    tiresRigidTruck: 6, // 6 gomme motrice (o 4/6 per Daily 72)
     // Durate chilometriche differenziate FOUR:
     lifeKmTrailer: 80000, // 80.000 km per semirimorchi
     lifeKmTractorElectric: 50000, // 50.000 km per trattori elettrici (coppia 2400+ Nm & peso batterie)
     lifeKmRigidElectric: 80000, // 80.000 km per motrici elettriche
     lifeKmTractorBiolng: 85000, // 85.000 km per trattori Bio-LNG / Diesel
+    lifeKmLight: 65000, // 65.000 km per Daily 72 / Furgoni
     tireLifeKm: 80000, // durata di riferimento
-    estimatedTireCostKm: 0.054 // costo medio km
+    estimatedTireCostKm: 0.0909 // costo medio km bilico elettrico (0.0624 + 0.0285)
   },
   ownershipDefaults: {
-    annualInsuranceRCA: 3200, // RCA annuale
-    annualInsuranceKasko: 2400, // Kasko/Furto/Incendio annuale
+    annualInsuranceRCA: 3200, // RCA annuale mezzo di proprietà
+    annualInsuranceKasko: 2400, // Kasko/Furto/Incendio annuale mezzo di proprietà
+    trailerInsuranceYearlyDefault: 1200, // Assicurazione specifica media annua Semirimorchio (Rischio Statico + RCA/Kasko rimorchio)
     annualRoadTax: 1100, // Bollo annuo (0 per veicoli elettrici esenti)
     monthlyMaintenance: 350, // Manutenzione programmata e tagliandi al mese
     amortizationYears: 5, // Anni ammortamento standard
@@ -1846,15 +1882,16 @@ export const DEFAULT_SETTINGS = {
     factoringAdvanceRatePercent: 80, // % anticipo fatture factoring se attivato
     factoringCostPercent: 1.5 // costo factoring
   },
+  autoWeeklyFuelSync: true,
   treasuryRules: {
     defaultLeaseTiming: 'M1_D10', // M1_D10 | M1_D30 | M2_D20
     lngPaymentTerms: 'quindicinale_30gg', // 15 e 30 M+1
     telepassPaymentTerms: 'quindicinale_15gg', // 30 M (50%) e 15 M+1 (50%)
     acciseRecovery: {
-      enabled: true,
-      ratePerLiterDiesel: 0.21418, // Rimborso accise autotrazione > 7.5t (€/litro)
-      frequency: 'quarterly_plus_1', // Liquidazione/compensazione F24 a Q+1
-      creditMonths: [4, 7, 10, 13] // Maggio (Q1), Agosto (Q2), Novembre (Q3), Febbraio M+1 (Q4)
+      enabled: false, // Prezzi carburante sempre "Alla Pompa" senza recupero accise
+      ratePerLiterDiesel: 0,
+      frequency: 'none',
+      creditMonths: []
     }
   },
   refrigerationParams: {

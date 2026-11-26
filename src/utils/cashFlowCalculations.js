@@ -362,24 +362,10 @@ export const calculateAnnualBudgetAndCashFlow = (projects, options = {}) => {
         const porterageC = (Number(project.porterageDaily) || 0) * workingDays;
         const otherC = mRates.otherCostsDaily * workingDays;
 
-        // Calcolo credito accise per questa commessa
-        // Se energia a carico del cliente o veicolo full electric, nessun recupero accise
-        let acciseCreditMonthly = 0;
-        const isEligibleFuel = project.energyPayer !== 'client' &&
-          project.acciseRecoveryEligible !== false &&
-          (project.fuelType === 'gasolio' || project.fuelTypeId === 'gasolio' ||
-           (fuelGrossC > 0 && project.vehicleCategory !== 'motrice_bev' && project.fuelTypeId !== 'elettrico'));
-
-        if (acciseRecoveryEnabled && isEligibleFuel) {
-          // Stima litri consumati: costo carburante diviso prezzo stimato (~1.42 €/L) o km * consumo
-          const kmPerMonth = (Number(project.kmDaily) || 300) * workingDays;
-          // Per trattori diesel 44t consumo medio ~32 L/100km
-          const estimatedLiters = (kmPerMonth * 32) / 100;
-          acciseCreditMonthly = Math.round(estimatedLiters * acciseRatePerLiter * 100) / 100;
-        }
-
-        const fuelNetC = Math.max(0, fuelGrossC - acciseCreditMonthly);
-        const costPnl = driverC + (acciseRecoveryEnabled ? fuelNetC : fuelGrossC) + tollsC + tiresC +
+        // Calcolo carburante sempre ALLA POMPA (senza recupero accise)
+        const acciseCreditMonthly = 0;
+        const fuelNetC = fuelGrossC;
+        const costPnl = driverC + fuelGrossC + tollsC + tiresC +
           totalLeaseC + fridgeC + telematicsC + washingC + extraC + partC + porterageC + otherC;
         const molPnl = rev - costPnl;
 
@@ -387,8 +373,8 @@ export const calculateAnnualBudgetAndCashFlow = (projects, options = {}) => {
         monthlyPnl[m].revenue += rev;
         monthlyPnl[m].cost += costPnl;
         monthlyPnl[m].mol += molPnl;
-        monthlyPnl[m].acciseCredit += acciseCreditMonthly;
-        monthlyPnl[m].molNetOfAccise += (rev - (costPnl - (acciseRecoveryEnabled ? 0 : acciseCreditMonthly)));
+        monthlyPnl[m].acciseCredit += 0;
+        monthlyPnl[m].molNetOfAccise += molPnl;
         monthlyPnl[m].activeProjectsCount += 1;
 
         monthlyPnl[m].costBreakdown.driver += driverC;
@@ -1735,54 +1721,182 @@ export const formatPercent = (value) => {
 };
 
 /**
- * Calcola il costo chilometrico dei pneumatici con durate differenziate FOUR:
- * - Semirimorchi: 80.000 km (6 gomme da rimorchio)
- * - Trattori Elettrici: 50.000 km (6 gomme, coppia istantanea 2400+ Nm e peso batterie)
- * - Motrici Elettriche: 80.000 km (4 o 6 gomme)
- * - Trattori Bio-LNG / Termici: 85.000 km (6 gomme)
+ * Calcola la quota di Assicurazione Specifica sul singolo mezzo e semirimorchio:
+ * - Mezzo Motore a Noleggio (NLT): di default assicurazione integrata nel canone (0 € extra),
+ *   salvo che sul mezzo sia impostato `insuranceIncluded === false` con un valore specifico `insuranceYearly`.
+ * - Mezzo Motore di Proprietà: l'assicurazione è già compresa nel `monthlyLease` calcolato da `calculateOwnedMonthlyCost`
+ *   (oppure calcolata da `insuranceYearly` se `monthlyLease` non la include).
+ * - Semirimorchio: ha una propria polizza specifica (`trailer.insuranceYearly`, o default da impostazioni es. 1.200 €/anno)
+ *   quando `trailer.insuranceIncluded !== true`.
+ */
+export const calculateSpecificInsuranceCost = (vehicle, trailer, workingDays = 22, settings = {}) => {
+  const safeDays = Number(workingDays) || 22;
+  const defaultTrailerInsYearly = Number(settings?.ownershipDefaults?.trailerInsuranceYearlyDefault) || 1200;
+
+  let vehicleInsuranceYearly = 0;
+  let vehicleInsuranceIncluded = true;
+  if (vehicle) {
+    if (vehicle.ownershipType === 'proprieta') {
+      // Nei mezzi di proprietà l'assicurazione è già sommata dentro monthlyLease, quindi non va duplicata come extra,
+      // ma la esponiamo a fini informativi
+      vehicleInsuranceIncluded = true;
+      vehicleInsuranceYearly = 0;
+    } else if (vehicle.insuranceIncluded === false && Number(vehicle.insuranceYearly) > 0) {
+      vehicleInsuranceIncluded = false;
+      vehicleInsuranceYearly = Number(vehicle.insuranceYearly) || 0;
+    } else {
+      // Noleggio NLT standard: assicurazione integrata nel canone
+      vehicleInsuranceIncluded = true;
+      vehicleInsuranceYearly = 0;
+    }
+  }
+
+  let trailerInsuranceYearly = 0;
+  let trailerInsuranceIncluded = false;
+  if (trailer) {
+    if (trailer.insuranceIncluded === true) {
+      trailerInsuranceIncluded = true;
+      trailerInsuranceYearly = 0;
+    } else {
+      trailerInsuranceIncluded = false;
+      trailerInsuranceYearly = trailer.insuranceYearly !== undefined
+        ? (Number(trailer.insuranceYearly) || 0)
+        : defaultTrailerInsYearly;
+    }
+  }
+
+  const vehicleInsuranceMonthly = +(vehicleInsuranceYearly / 12).toFixed(2);
+  const trailerInsuranceMonthly = +(trailerInsuranceYearly / 12).toFixed(2);
+  const totalInsuranceMonthly = +(vehicleInsuranceMonthly + trailerInsuranceMonthly).toFixed(2);
+
+  const vehicleInsuranceDaily = safeDays > 0 ? +(vehicleInsuranceMonthly / safeDays).toFixed(2) : 0;
+  const trailerInsuranceDaily = safeDays > 0 ? +(trailerInsuranceMonthly / safeDays).toFixed(2) : 0;
+  const totalInsuranceDaily = +(vehicleInsuranceDaily + trailerInsuranceDaily).toFixed(2);
+
+  return {
+    vehicleInsuranceIncluded,
+    vehicleInsuranceYearly,
+    vehicleInsuranceMonthly,
+    vehicleInsuranceDaily,
+    trailerInsuranceIncluded,
+    trailerInsuranceYearly,
+    trailerInsuranceMonthly,
+    trailerInsuranceDaily,
+    totalInsuranceMonthly,
+    totalInsuranceDaily
+  };
+};
+
+/**
+ * Calcola il costo chilometrico dei pneumatici differenziando SIA la durata in km SIA il costo unitario a gomma (€/gomma)
+ * in base al tipo di mezzo (Trattore BEV, Trattore Bio-LNG/Termico, Motrice, Daily 72 / Furgone, Semirimorchio)
+ * o usando il valore specifico `costPerTire` configurato sulla scheda del singolo mezzo/semirimorchio:
+ * - Trattori Elettrici BEV: default 520 €/gomma, durata 50.000 km (6 gomme)
+ * - Trattori Bio-LNG / HVO / Diesel: default 460 €/gomma, durata 85.000 km (6 gomme)
+ * - Motrici 12-22 Plt: default 420 €/gomma, durata 80.000 km (6 gomme)
+ * - Daily 72 (7.2t) / Furgoni Leggeri: default 240 €/gomma, durata 65.000 km (6 o 4 gomme)
+ * - Semirimorchi & Casse: default 380 €/gomma, durata 80.000 km (6 gomme)
  */
 export const calculateTireCostPerKm = (vehicle, trailer, options = {}) => {
   const {
     costPerTire = 450,
+    costPerTireTractorElectric = 520,
+    costPerTireTractorBiolng = 460,
+    costPerTireTrailer = 380,
+    costPerTireRigid = 420,
+    costPerTireLight = 240,
     lifeTrailer = 80000,
+    lifeKmTrailer,
     lifeTractorElectric = 50000,
+    lifeKmTractorElectric,
     lifeRigidElectric = 80000,
-    lifeTractorBiolng = 85000
+    lifeKmRigidElectric,
+    lifeTractorBiolng = 85000,
+    lifeKmTractorBiolng,
+    lifeLight = 65000,
+    lifeKmLight
   } = options;
+
+  const effLifeTrailer = Number(lifeKmTrailer || lifeTrailer) || 80000;
+  const effLifeTractorBEV = Number(lifeKmTractorElectric || lifeTractorElectric) || 50000;
+  const effLifeRigid = Number(lifeKmRigidElectric || lifeRigidElectric) || 80000;
+  const effLifeTractorBio = Number(lifeKmTractorBiolng || lifeTractorBiolng) || 85000;
+  const effLifeLight = Number(lifeKmLight || lifeLight) || 65000;
 
   let vehicleRate = 0;
   let trailerRate = 0;
+  let vehicleTireUnitCost = costPerTire;
+  let trailerTireUnitCost = Number(costPerTireTrailer || costPerTire) || 380;
+  let vehicleTiresCount = 6;
+  let trailerTiresCount = 6;
+  let vehicleLifeKm = effLifeRigid;
 
   if (vehicle) {
     const isElectric = vehicle.fuelTypeId === 'elettrico' || vehicle.fuelType === 'elettrico';
     const isTractor = vehicle.category === 'trattore';
     const isRigid = vehicle.category === 'motrice';
+    const isVanOrLight = vehicle.category === 'furgone' ||
+      (vehicle.name || '').toLowerCase().includes('daily') ||
+      (vehicle.model || '').toLowerCase().includes('daily') ||
+      (vehicle.capacityPlt && vehicle.capacityPlt <= 9);
 
-    if (isTractor && isElectric) {
-      const tires = vehicle.tireCount || 6;
-      vehicleRate = (tires * costPerTire) / lifeTractorElectric; // 6 * 450 / 50000 = 0.0540 €/km
-    } else if (isRigid && isElectric) {
-      const tires = vehicle.tireCount || (vehicle.capacityPlt && vehicle.capacityPlt <= 12 ? 4 : 6);
-      vehicleRate = (tires * costPerTire) / lifeRigidElectric; // 6 * 450 / 80000 = 0.0338 €/km
+    if (isVanOrLight) {
+      vehicleTiresCount = Number(vehicle.tireCount) || ((vehicle.name || '').includes('72') ? 6 : 4);
+      vehicleTireUnitCost = Number(vehicle.costPerTire) > 0
+        ? Number(vehicle.costPerTire)
+        : (Number(costPerTireLight || costPerTire) || 240);
+      vehicleLifeKm = Number(vehicle.tireLifeKm) > 0 ? Number(vehicle.tireLifeKm) : effLifeLight;
+      vehicleRate = (vehicleTiresCount * vehicleTireUnitCost) / vehicleLifeKm;
+    } else if (isTractor && isElectric) {
+      vehicleTiresCount = Number(vehicle.tireCount) || 6;
+      vehicleTireUnitCost = Number(vehicle.costPerTire) > 0
+        ? Number(vehicle.costPerTire)
+        : (Number(costPerTireTractorElectric || costPerTire) || 520);
+      vehicleLifeKm = Number(vehicle.tireLifeKm) > 0 ? Number(vehicle.tireLifeKm) : effLifeTractorBEV;
+      vehicleRate = (vehicleTiresCount * vehicleTireUnitCost) / vehicleLifeKm;
     } else if (isTractor) {
-      const tires = vehicle.tireCount || 6;
-      vehicleRate = (tires * costPerTire) / lifeTractorBiolng; // 6 * 450 / 85000 = 0.0318 €/km
+      vehicleTiresCount = Number(vehicle.tireCount) || 6;
+      vehicleTireUnitCost = Number(vehicle.costPerTire) > 0
+        ? Number(vehicle.costPerTire)
+        : (Number(costPerTireTractorBiolng || costPerTire) || 460);
+      vehicleLifeKm = Number(vehicle.tireLifeKm) > 0 ? Number(vehicle.tireLifeKm) : effLifeTractorBio;
+      vehicleRate = (vehicleTiresCount * vehicleTireUnitCost) / vehicleLifeKm;
+    } else if (isRigid) {
+      vehicleTiresCount = Number(vehicle.tireCount) || 6;
+      vehicleTireUnitCost = Number(vehicle.costPerTire) > 0
+        ? Number(vehicle.costPerTire)
+        : (Number(costPerTireRigid || costPerTire) || 420);
+      vehicleLifeKm = Number(vehicle.tireLifeKm) > 0 ? Number(vehicle.tireLifeKm) : effLifeRigid;
+      vehicleRate = (vehicleTiresCount * vehicleTireUnitCost) / vehicleLifeKm;
     } else {
-      const tires = vehicle.tireCount || 4;
-      vehicleRate = (tires * costPerTire) / lifeRigidElectric;
+      vehicleTiresCount = Number(vehicle.tireCount) || 6;
+      vehicleTireUnitCost = Number(vehicle.costPerTire) > 0
+        ? Number(vehicle.costPerTire)
+        : (Number(costPerTireRigid || costPerTire) || 420);
+      vehicleLifeKm = Number(vehicle.tireLifeKm) > 0 ? Number(vehicle.tireLifeKm) : effLifeRigid;
+      vehicleRate = (vehicleTiresCount * vehicleTireUnitCost) / vehicleLifeKm;
     }
   }
 
   if (trailer) {
-    const tires = trailer.tireCount || 6;
-    trailerRate = (tires * costPerTire) / lifeTrailer; // 6 * 450 / 80000 = 0.03375 €/km
+    trailerTiresCount = Number(trailer.tireCount) || 6;
+    trailerTireUnitCost = Number(trailer.costPerTire) > 0
+      ? Number(trailer.costPerTire)
+      : (Number(costPerTireTrailer || costPerTire) || 380);
+    const trlLife = Number(trailer.tireLifeKm) > 0 ? Number(trailer.tireLifeKm) : effLifeTrailer;
+    trailerRate = (trailerTiresCount * trailerTireUnitCost) / trlLife;
   }
 
   const total = vehicleRate + trailerRate;
   return {
     vehicleRate: +vehicleRate.toFixed(4),
     trailerRate: +trailerRate.toFixed(4),
-    totalRate: +(total > 0 ? total : 0.04).toFixed(4)
+    totalRate: +(total > 0 ? total : 0.04).toFixed(4),
+    vehicleTireUnitCost,
+    trailerTireUnitCost,
+    vehicleTiresCount,
+    trailerTiresCount,
+    vehicleLifeKm
   };
 };
 
@@ -1824,6 +1938,7 @@ export const recalculateProjectCost = (project, fleet = [], trailers = [], setti
 
   const refCalc = calculateRefrigerationDailyCost(project, trailer, settings);
   const accCalc = calculateAccessoriesDailyCost(project, vehicle, trailer, settings);
+  const insCalc = calculateSpecificInsuranceCost(vehicle, trailer, workingDays, settings);
 
   // Refrigerazione e Costi Extra / Telematica rimorchio si applicano anche su T se FOUR fornisce il rimorchio
   refrigerationCostDaily = refCalc.dailyCost;
@@ -1840,22 +1955,23 @@ export const recalculateProjectCost = (project, fleet = [], trailers = [], setti
     washingCostDaily = project.washingEnabled === true ? accCalc.washingDaily : 0;
 
     if (trailer && workingDays > 0) {
-      trailerLeaseDaily = +(trailer.monthlyLease / workingDays).toFixed(2);
+      // Include eventuale assicurazione specifica del semirimorchio se non integrata nel nolo
+      trailerLeaseDaily = +((Number(trailer.monthlyLease || 0) + insCalc.trailerInsuranceMonthly) / workingDays).toFixed(2);
     } else {
       trailerLeaseDaily = Number(project.trailerLeaseDaily) || 0;
     }
   } else {
     // GESTIONE DIRETTA FOUR ("D"):
-    // 1. Quota giornaliera veicolo da canone mensile anagrafica
+    // 1. Quota giornaliera veicolo da canone mensile anagrafica (+ eventuale assicurazione specifica se non integrata nel nolo)
     if (vehicle && workingDays > 0) {
-      vehicleLeaseDaily = +(vehicle.monthlyLease / workingDays).toFixed(2);
+      vehicleLeaseDaily = +((Number(vehicle.monthlyLease || 0) + insCalc.vehicleInsuranceMonthly) / workingDays).toFixed(2);
     } else {
       vehicleLeaseDaily = Number(project.vehicleLeaseDaily) || 0;
     }
 
-    // 2. Quota giornaliera semirimorchio da canone mensile
+    // 2. Quota giornaliera semirimorchio da canone mensile + assicurazione specifica semirimorchio
     if (trailer && workingDays > 0) {
-      trailerLeaseDaily = +(trailer.monthlyLease / workingDays).toFixed(2);
+      trailerLeaseDaily = +((Number(trailer.monthlyLease || 0) + insCalc.trailerInsuranceMonthly) / workingDays).toFixed(2);
     } else {
       trailerLeaseDaily = Number(project.trailerLeaseDaily) || 0;
     }
@@ -1948,7 +2064,12 @@ export const recalculateProjectCost = (project, fleet = [], trailers = [], setti
     extraCostDaily,
     partnerMarginDaily,
     porterageDaily,
-    otherCostsDaily
+    otherCostsDaily,
+    vehicleInsuranceMonthly: insCalc.vehicleInsuranceMonthly,
+    trailerInsuranceMonthly: insCalc.trailerInsuranceMonthly,
+    vehicleInsuranceDaily: insCalc.vehicleInsuranceDaily,
+    trailerInsuranceDaily: insCalc.trailerInsuranceDaily,
+    totalInsuranceDaily: insCalc.totalInsuranceDaily
   };
 
   const metrics = calculateSingleProjectMetrics(enrichedProject);

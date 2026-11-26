@@ -53,15 +53,17 @@ const FleetPage = () => {
     monthlyLease: 4500,
     leaseVariations: [],
     ownershipType: 'noleggio', // noleggio, proprieta, terzi
-    // Parametri Mezzi di Proprietà
+    // Parametri Mezzi di Proprietà & Assicurazione Specifica sul Mezzo
     purchaseCost: 140000,
     amortizationYears: 5,
-    insuranceYearly: 5600,
+    insuranceIncluded: true, // Per i mezzi a nolo è integrata di default; per i semirimorchi ha un valore specifico
+    insuranceYearly: 0,
     roadTaxYearly: 0,
     maintenanceMonthly: 350,
-    // Parametri Gomme
+    // Parametri Gomme Specifici per Mezzo
+    costPerTire: '',
     tireCostKm: 0.04,
-    tireCount: 12,
+    tireCount: 6,
     // Termini Noleggio
     leasePaymentTerms: 0, // 0 = Anticipato (1° mese), 30 = 30 gg f.m., 60 = 60 gg
     lessorName: '',
@@ -106,11 +108,17 @@ const FleetPage = () => {
         ownershipType: item.ownershipType || 'noleggio',
         purchaseCost: item.purchaseCost || 140000,
         amortizationYears: item.amortizationYears || 5,
-        insuranceYearly: item.insuranceYearly || 5600,
+        insuranceIncluded: item.insuranceIncluded !== undefined
+          ? Boolean(item.insuranceIncluded)
+          : (type === 'vehicles' && (item.ownershipType || 'noleggio') === 'noleggio'),
+        insuranceYearly: item.insuranceYearly !== undefined
+          ? item.insuranceYearly
+          : (type === 'trailers' ? 1200 : ((item.ownershipType === 'proprieta') ? 5600 : 0)),
         roadTaxYearly: item.roadTaxYearly || 0,
         maintenanceMonthly: item.maintenanceMonthly || 350,
+        costPerTire: item.costPerTire || '',
         tireCostKm: item.tireCostKm || 0.04,
-        tireCount: item.tireCount || 12,
+        tireCount: item.tireCount || 6,
         leasePaymentTiming: item.leasePaymentTiming || normalizeLeaseTiming(item),
         leasePaymentTerms: item.leasePaymentTerms !== undefined ? item.leasePaymentTerms : 0,
         lessorName: item.lessorName || '',
@@ -137,11 +145,13 @@ const FleetPage = () => {
           ownershipType: 'noleggio',
           purchaseCost: 150000,
           amortizationYears: 5,
-          insuranceYearly: 5600,
+          insuranceIncluded: true,
+          insuranceYearly: 0,
           roadTaxYearly: 0,
           maintenanceMonthly: 350,
+          costPerTire: '',
           tireCostKm: 0.04,
-          tireCount: 12,
+          tireCount: 6,
           leasePaymentTiming: 'M1_D10',
           leasePaymentTerms: 0,
           lessorName: 'Volvo / Scania Financial',
@@ -166,10 +176,12 @@ const FleetPage = () => {
           ownershipType: 'noleggio',
           purchaseCost: 65000,
           amortizationYears: 7,
-          insuranceYearly: 2400,
+          insuranceIncluded: false,
+          insuranceYearly: 1380,
           roadTaxYearly: 400,
           maintenanceMonthly: 150,
-          tireCostKm: 0.02,
+          costPerTire: 380,
+          tireCostKm: 0.0285,
           tireCount: 6,
           leasePaymentTerms: 30,
           lessorName: 'Lamberet / TIP Services',
@@ -556,6 +568,24 @@ const FleetPage = () => {
                       {item.ownershipType === 'proprieta' ? 'Costo Fisso Proprietà / Mese:' : 'Canone Noleggio / Mese:'}
                     </span>
                     <span className="font-extrabold text-slate-900">{formatEUR(item.monthlyLease)} / m</span>
+                  </div>
+
+                  {/* Assicurazione Specifica sul Mezzo / Semirimorchio */}
+                  <div className="flex justify-between items-center">
+                    <span className="text-slate-500">Assicurazione Specifica:</span>
+                    {(item.ownershipType === 'proprieta') ? (
+                      <span className="text-[11px] font-bold text-blue-800 bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
+                        Inclusa in Proprietà ({formatEUR(item.insuranceYearly || 5600)}/a)
+                      </span>
+                    ) : (item.insuranceIncluded !== undefined ? item.insuranceIncluded : (activeTab === 'vehicles')) ? (
+                      <span className="text-[11px] font-bold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                        ✓ Integrata nel Nolo
+                      </span>
+                    ) : (
+                      <span className="text-[11px] font-extrabold text-amber-900 bg-amber-50 px-2 py-0.5 rounded border border-amber-300">
+                        +{formatEUR((Number(item.insuranceYearly) || 1200) / 12)}/m ({formatEUR(item.insuranceYearly || 1200)}/a)
+                      </span>
+                    )}
                   </div>
 
                   {Array.isArray(item.leaseVariations) && item.leaseVariations.length > 0 && (
@@ -961,6 +991,80 @@ const FleetPage = () => {
                   </div>
                 </div>
               )}
+
+              {/* ASSICURAZIONE SPECIFICA SUL MEZZO / SEMIRIMORCHIO & COSTO A GOMMA SPECIFICO */}
+              <div className="p-3.5 bg-amber-50/70 border border-amber-200 rounded-xl space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-extrabold text-amber-950 uppercase tracking-wider flex items-center gap-1.5">
+                    <Shield className="w-3.5 h-3.5 text-amber-700" />
+                    <span>Assicurazione Specifica &amp; Costo a Gomma del {activeTab === 'vehicles' ? 'Mezzo' : 'Semirimorchio'}</span>
+                  </span>
+                  <span className="text-[10px] font-bold text-amber-900 bg-white px-2 py-0.5 rounded-full border border-amber-200">
+                    {activeTab === 'vehicles' ? 'NLT Integrata / Specifica' : 'Valore Specifico Rimorchio'}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-700 mb-1">Gestione Polizza Assicurativa</label>
+                    <select
+                      value={formData.insuranceIncluded ? 'included' : 'specific'}
+                      onChange={(e) => {
+                        const inc = e.target.value === 'included';
+                        setFormData({
+                          ...formData,
+                          insuranceIncluded: inc,
+                          insuranceYearly: inc ? 0 : (formData.insuranceYearly || (activeTab === 'trailers' ? 1380 : 3200))
+                        });
+                      }}
+                      className="w-full px-2.5 py-1.5 border border-amber-300 rounded-lg bg-white text-xs font-bold"
+                    >
+                      <option value="included">✓ Integrata nel Canone Nolo (0 € extra)</option>
+                      <option value="specific">Polizza Specifica sul Mezzo (€/anno)</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-700 mb-1">
+                      Premio Assicurazione Annuo (€/anno)
+                    </label>
+                    <input
+                      type="number"
+                      step="60"
+                      disabled={Boolean(formData.insuranceIncluded)}
+                      value={formData.insuranceIncluded ? 0 : (formData.insuranceYearly ?? 1380)}
+                      onChange={(e) => setFormData({ ...formData, insuranceYearly: parseFloat(e.target.value) || 0 })}
+                      className={`w-full px-2.5 py-1.5 border rounded-lg text-xs font-bold ${
+                        formData.insuranceIncluded
+                          ? 'border-emerald-200 bg-emerald-50 text-emerald-700 cursor-not-allowed'
+                          : 'border-amber-400 bg-white text-amber-950'
+                      }`}
+                    />
+                    {!formData.insuranceIncluded && (
+                      <span className="text-[9.5px] text-amber-800 font-semibold block mt-0.5">
+                        Incidenza: +{formatEUR((Number(formData.insuranceYearly) || 0) / 12)}/mese (+{formatEUR((Number(formData.insuranceYearly) || 0) / 12 / 22)}/gg)
+                      </span>
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-700 mb-1">
+                      Costo Specifico a Gomma (€/gomma)
+                    </label>
+                    <input
+                      type="number"
+                      step="10"
+                      placeholder={activeTab === 'trailers' ? 'Default 380 €' : formData.category === 'trattore' ? (formData.fuelTypeId === 'elettrico' ? 'Default 520 €' : 'Default 460 €') : 'Default 420 €'}
+                      value={formData.costPerTire ?? ''}
+                      onChange={(e) => setFormData({ ...formData, costPerTire: e.target.value === '' ? '' : (parseFloat(e.target.value) || 0) })}
+                      className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg bg-white text-xs font-bold"
+                    />
+                    <span className="text-[9.5px] text-slate-500 block mt-0.5">
+                      Lascia vuoto per usare la tariffa di categoria
+                    </span>
+                  </div>
+                </div>
+              </div>
 
               {/* SEZIONE VARIAZIONE CANONE A PARTIRE DA UNA DATA (Ricalcolo automatico sulle commesse) */}
               <div className="p-3.5 bg-indigo-50/70 border border-indigo-200 rounded-xl space-y-2.5">

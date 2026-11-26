@@ -4,6 +4,7 @@ import {
   formatEUR,
   formatPercent,
   calculateTireCostPerKm,
+  calculateSpecificInsuranceCost,
   isRefrigeratedTrailer,
   calculateDriverDailyCost,
   calculateRefrigerationDailyCost,
@@ -258,6 +259,15 @@ const SimulationPage = () => {
     setSettings(s);
     setSavedSimulations(sims);
 
+    // Sincronizzazione settimanale automatica prezzi carburanti "Alla Pompa" da fonti ufficiali (MASE / GME)
+    storageService.refreshWeeklyFuelPricesFromOfficialSources({ force: false }).then(res => {
+      if (res && res.updated && res.settings) {
+        setSettings(res.settings);
+        const curVeh = f.find(item => item.id === (selectedVehicleId || f[0]?.id));
+        if (curVeh) updateFuelForVehicle(curVeh, res.settings);
+      }
+    });
+
     const washDef = s?.accessoryParams?.washing;
     if (washDef) {
       setWashingUnitCost(washDef.costPerWash ?? 80);
@@ -283,13 +293,7 @@ const SimulationPage = () => {
   };
 
   const updateTireForCombo = (vehicle, trailer, curSettings) => {
-    const calc = calculateTireCostPerKm(vehicle, trailer, {
-      costPerTire: curSettings?.tireParameters?.costPerTire || 450,
-      lifeTrailer: curSettings?.tireParameters?.lifeKmTrailer || 80000,
-      lifeTractorElectric: curSettings?.tireParameters?.lifeKmTractorElectric || 50000,
-      lifeRigidElectric: curSettings?.tireParameters?.lifeKmRigidElectric || 80000,
-      lifeTractorBiolng: curSettings?.tireParameters?.lifeKmTractorBiolng || 85000
-    });
+    const calc = calculateTireCostPerKm(vehicle, trailer, curSettings?.tireParameters || {});
     setTireRate(calc.totalRate);
   };
 
@@ -398,9 +402,15 @@ const SimulationPage = () => {
     // 4. Autista (NOTA 1.3 & NOTA 3.2.D: dinamico per mezzo + doppio turno sempre Diurno + Notturno)
     const driverDaily = calculateDriverDailyCost(vehicle, currentShiftType, settings || {});
 
-    // 5. Noleggio Mezzo e Semirimorchio ripartiti sui giorni lavorativi mese
-    const vehicleLeaseDaily = workingDays > 0 ? (Number(vehicle.monthlyLease) || 0) / workingDays : 0;
-    const trailerLeaseDaily = (trailer && workingDays > 0) ? (Number(trailer.monthlyLease) || 0) / workingDays : 0;
+    // 5. Noleggio Mezzo e Semirimorchio + Assicurazione Specifica sul singolo mezzo/rimorchio
+    // (I mezzi a nolo hanno assicurazione integrata, i semirimorchi hanno un proprio valore specifico)
+    const insCalc = calculateSpecificInsuranceCost(vehicle, trailer, workingDays, settings || {});
+    const vehicleLeaseDaily = workingDays > 0
+      ? ((Number(vehicle.monthlyLease) || 0) + insCalc.vehicleInsuranceMonthly) / workingDays
+      : 0;
+    const trailerLeaseDaily = (trailer && workingDays > 0)
+      ? ((Number(trailer.monthlyLease) || 0) + insCalc.trailerInsuranceMonthly) / workingDays
+      : 0;
 
     // 6. Refrigerazione Gruppo Frigo (NOTA 3.1)
     const refCalc = calculateRefrigerationDailyCost({
@@ -2241,14 +2251,14 @@ const SimulationPage = () => {
                 </div>
               </div>
 
-              {/* Usura Pneumatici Differenziata FOUR */}
+              {/* Usura Pneumatici con Costi a Gomma Differenziati per Tipo di Mezzo FOUR */}
               <div className="p-3 bg-amber-50/70 rounded-xl border border-amber-200 space-y-1">
                 <div className="flex items-center justify-between">
                   <label className="font-bold text-amber-950 text-xs">
-                    Costo Pneumatici Differenziato (€/km):
+                    Costo Pneumatici Differenziato per Mezzo (€/km):
                   </label>
                   <span className="text-[10px] text-amber-800 font-semibold">
-                    Calcolato su combinazione Mezzo & Rimorchio
+                    Costo a gomma &amp; durata specifici per mezzo
                   </span>
                 </div>
                 <div className="flex items-center space-x-2">
@@ -2262,7 +2272,7 @@ const SimulationPage = () => {
                   <span className="text-amber-900 font-bold text-xs">€/km</span>
                 </div>
                 <p className="text-[10px] text-amber-700 leading-tight">
-                  Trattori BEV: 50.000 km (~0,054 €/km) | Motrici & Semirimorchi: 80.000 km (~0,034 €/km).
+                  Trattore BEV: 520€/gomma (50k km) | Trattore Bio-LNG: 460€/gomma (85k km) | Motrice: 420€/gomma (80k km) | Semirimorchio: 380€/gomma (80k km) | Daily 72: 240€/gomma (65k km).
                 </p>
               </div>
 

@@ -70,17 +70,30 @@ const SettingsPage = () => {
   const [calcYieldValue, setCalcYieldValue] = useState(2.7); // 2.7 km con 1 kg (dal file Excel)
   const [calcConsumptionValue, setCalcConsumptionValue] = useState(37.04); // 37.04 kg/100km
 
-  // Stato Calcolatore Gomme con Durate Differenziate FOUR
+  // Stato Calcolatore Gomme con Costi a Gomma & Durate Differenziate per Tipo di Mezzo FOUR
   const [tireCostUnit, setTireCostUnit] = useState(450);
+  const [costPerTireTractorElectric, setCostPerTireTractorElectric] = useState(520);
+  const [costPerTireTractorBiolng, setCostPerTireTractorBiolng] = useState(460);
+  const [costPerTireTrailer, setCostPerTireTrailer] = useState(380);
+  const [costPerTireRigid, setCostPerTireRigid] = useState(420);
+  const [costPerTireLight, setCostPerTireLight] = useState(240);
   const [tireCount, setTireCount] = useState(12); // 6 trattore + 6 semirimorchio
   const [tireLifeKm, setTireLifeKm] = useState(80000);
   const [lifeKmTrailer, setLifeKmTrailer] = useState(80000); // Semirimorchi: 80.000 km
   const [lifeKmTractorElectric, setLifeKmTractorElectric] = useState(50000); // Trattori elettrici: 50.000 km
   const [lifeKmRigidElectric, setLifeKmRigidElectric] = useState(80000); // Motrici elettriche: 80.000 km
   const [lifeKmTractorBiolng, setLifeKmTractorBiolng] = useState(85000); // Trattori Bio-LNG: 85.000 km
+  const [lifeKmLight, setLifeKmLight] = useState(65000); // Daily 72 / Furgoni: 65.000 km
+  const [fuelSyncing, setFuelSyncing] = useState(false);
 
   useEffect(() => {
     loadSettings();
+    // Aggiornamento automatico settimanale all'avvio se sono passati >= 7 giorni dall'ultimo sync
+    storageService.refreshWeeklyFuelPricesFromOfficialSources({ force: false }).then(res => {
+      if (res && res.updated) {
+        setSettings(res.settings);
+      }
+    });
   }, []);
 
   const loadSettings = () => {
@@ -88,12 +101,32 @@ const SettingsPage = () => {
     setSettings(s);
     if (s.tireParameters) {
       setTireCostUnit(s.tireParameters.costPerTire || 450);
+      setCostPerTireTractorElectric(s.tireParameters.costPerTireTractorElectric || 520);
+      setCostPerTireTractorBiolng(s.tireParameters.costPerTireTractorBiolng || 460);
+      setCostPerTireTrailer(s.tireParameters.costPerTireTrailer || 380);
+      setCostPerTireRigid(s.tireParameters.costPerTireRigid || 420);
+      setCostPerTireLight(s.tireParameters.costPerTireLight || 240);
       setTireCount((s.tireParameters.tiresTractor || 6) + (s.tireParameters.tiresTrailer || 6));
       setTireLifeKm(s.tireParameters.tireLifeKm || 80000);
       setLifeKmTrailer(s.tireParameters.lifeKmTrailer || 80000);
       setLifeKmTractorElectric(s.tireParameters.lifeKmTractorElectric || 50000);
       setLifeKmRigidElectric(s.tireParameters.lifeKmRigidElectric || 80000);
       setLifeKmTractorBiolng(s.tireParameters.lifeKmTractorBiolng || 85000);
+      setLifeKmLight(s.tireParameters.lifeKmLight || 65000);
+    }
+  };
+
+  const handleManualFuelWeeklySync = async () => {
+    setFuelSyncing(true);
+    try {
+      const res = await storageService.refreshWeeklyFuelPricesFromOfficialSources({ force: true });
+      if (res && res.settings) {
+        setSettings(res.settings);
+        setSaveMessage(`Prezzi medi settimanali "Alla Pompa" aggiornati (${res.syncMeta?.weekLabel}) e ricalcolati sulle commesse!`);
+        setTimeout(() => setSaveMessage(''), 4500);
+      }
+    } finally {
+      setFuelSyncing(false);
     }
   };
 
@@ -180,15 +213,20 @@ const SettingsPage = () => {
   };
 
   const handleSaveAll = () => {
-    // Calcola il costo gomme risultante combinato (es. bilico elettrico completo: trattore 50k + semirimorchio 80k)
-    const costTractorBEV = (6 * tireCostUnit) / (lifeKmTractorElectric || 50000);
-    const costTrailer = (6 * tireCostUnit) / (lifeKmTrailer || 80000);
+    // Calcola il costo gomme risultante combinato con costi a gomma differenziati per tipo di mezzo
+    const costTractorBEV = (6 * costPerTireTractorElectric) / (lifeKmTractorElectric || 50000);
+    const costTrailer = (6 * costPerTireTrailer) / (lifeKmTrailer || 80000);
     const combinedElectricArticulatedKm = +(costTractorBEV + costTrailer).toFixed(4);
 
     const updatedSettings = {
       ...settings,
       tireParameters: {
         costPerTire: tireCostUnit,
+        costPerTireTractorElectric,
+        costPerTireTractorBiolng,
+        costPerTireTrailer,
+        costPerTireRigid,
+        costPerTireLight,
         tiresTractor: 6,
         tiresTrailer: 6,
         tiresRigidTruck: 6,
@@ -196,6 +234,7 @@ const SettingsPage = () => {
         lifeKmTractorElectric,
         lifeKmRigidElectric,
         lifeKmTractorBiolng,
+        lifeKmLight,
         tireLifeKm,
         estimatedTireCostKm: combinedElectricArticulatedKm
       },
@@ -207,7 +246,7 @@ const SettingsPage = () => {
 
     storageService.saveSettings(updatedSettings);
     setSettings(updatedSettings);
-    setSaveMessage('Impostazioni, parametri usura gomme FOUR e tariffe salvati!');
+    setSaveMessage('Impostazioni, costi a gomma differenziati per mezzo e prezzi carburanti alla pompa salvati!');
     setTimeout(() => setSaveMessage(''), 3000);
   };
 
@@ -283,12 +322,14 @@ const SettingsPage = () => {
     ? calcConsumptionValue * currentFuelPrice
     : (calcConsumptionValue / 100) * currentFuelPrice;
 
-  // Calcolo costo gomme dinamico FOUR per categoria specifica
-  const tireCostTractorBEV = lifeKmTractorElectric > 0 ? (6 * tireCostUnit) / lifeKmTractorElectric : 0.054;
-  const tireCostTrailer = lifeKmTrailer > 0 ? (6 * tireCostUnit) / lifeKmTrailer : 0.03375;
-  const tireCostRigidBEV = lifeKmRigidElectric > 0 ? (6 * tireCostUnit) / lifeKmRigidElectric : 0.03375;
-  const tireCostTractorBio = lifeKmTractorBiolng > 0 ? (6 * tireCostUnit) / lifeKmTractorBiolng : 0.03176;
+  // Calcolo costo gomme dinamico FOUR differenziando sia il costo unitario a gomma (€/gomma) sia la durata in km per tipo di mezzo
+  const tireCostTractorBEV = lifeKmTractorElectric > 0 ? (6 * costPerTireTractorElectric) / lifeKmTractorElectric : 0.0624;
+  const tireCostTrailer = lifeKmTrailer > 0 ? (6 * costPerTireTrailer) / lifeKmTrailer : 0.0285;
+  const tireCostRigidBEV = lifeKmRigidElectric > 0 ? (6 * costPerTireRigid) / lifeKmRigidElectric : 0.0315;
+  const tireCostTractorBio = lifeKmTractorBiolng > 0 ? (6 * costPerTireTractorBiolng) / lifeKmTractorBiolng : 0.0325;
+  const tireCostLightDaily = lifeKmLight > 0 ? (6 * costPerTireLight) / lifeKmLight : 0.0222;
   const calculatedTireCostKm = +(tireCostTractorBEV + tireCostTrailer).toFixed(4); // Bilico elettrico completo
+  const calculatedBioArticulatedKm = +(tireCostTractorBio + tireCostTrailer).toFixed(4); // Bilico Bio-LNG completo
 
   if (!settings) return null;
 
@@ -666,128 +707,211 @@ const SettingsPage = () => {
             </div>
           </div>
 
-          {/* B. MODELLO CONSUMO PNEUMATICI / GOMME */}
+          {/* B. MODELLO CONSUMO PNEUMATICI / GOMME DIFFERENZIATO PER TIPO DI MEZZO */}
           <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-4">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <div className="flex items-center space-x-2">
                 <CircleDot className="w-5 h-5 text-amber-600" />
                 <div>
-                  <h2 className="text-sm font-bold text-slate-900">Modello Consumo Pneumatici con Durate Reali FOUR</h2>
-                  <p className="text-[11px] text-slate-500">Durate differenziate per semirimorchi (80k km), trattori elettrici (50k km) e motrici elettriche (80k km)</p>
+                  <h2 className="text-sm font-bold text-slate-900">Costi a Gomma (€/gomma) &amp; Durate Differenziate per Tipo di Mezzo</h2>
+                  <p className="text-[11px] text-slate-500">Costo unitario pneumatico e chilometraggio specifici per ciascuna categoria di veicolo</p>
                 </div>
               </div>
               <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-800">
-                Pneumatici Differenziati
+                5 Categorie Mezzo
               </span>
             </div>
 
             <div className="space-y-3 text-xs">
-              <div className="p-3 bg-slate-50 rounded-xl border border-slate-200/80 flex items-center justify-between">
+              {/* Grid 5 Tipologie di Mezzo con Costo a Gomma (€) + Durata (Km) */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {/* 1. Trattori Elettrici BEV */}
+                <div className="p-3 bg-rose-50/70 rounded-xl border border-rose-200 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="font-extrabold text-rose-950 uppercase text-[10px] tracking-wider">1. Trattori Elettrici (BEV)</span>
+                    <span className="px-1.5 py-0.5 bg-rose-200 text-rose-900 rounded font-black text-[10px]">6 Gomme HL</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[10px] font-bold text-rose-900 mb-0.5">Costo / Gomma (€)</label>
+                      <input
+                        type="number"
+                        step="10"
+                        value={costPerTireTractorElectric}
+                        onChange={(e) => setCostPerTireTractorElectric(parseFloat(e.target.value) || 0)}
+                        className="w-full px-2 py-1 border border-rose-300 rounded font-black text-rose-950 bg-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-rose-900 mb-0.5">Durata (Km)</label>
+                      <input
+                        type="number"
+                        step="5000"
+                        value={lifeKmTractorElectric}
+                        onChange={(e) => setLifeKmTractorElectric(parseFloat(e.target.value) || 50000)}
+                        className="w-full px-2 py-1 border border-rose-300 rounded font-black text-rose-900 bg-white"
+                      />
+                    </div>
+                  </div>
+                  <div className="pt-1 border-t border-rose-200 font-bold text-rose-950 flex justify-between items-center text-[11px]">
+                    <span>Treno 6 gomme: {formatEUR(6 * costPerTireTractorElectric)}</span>
+                    <strong>{tireCostTractorBEV.toFixed(4)} €/km</strong>
+                  </div>
+                </div>
+
+                {/* 2. Trattori Bio-LNG / HVO / Diesel */}
+                <div className="p-3 bg-indigo-50/70 rounded-xl border border-indigo-200 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="font-extrabold text-indigo-950 uppercase text-[10px] tracking-wider">2. Trattori Bio-LNG / Termici</span>
+                    <span className="px-1.5 py-0.5 bg-indigo-200 text-indigo-900 rounded font-black text-[10px]">6 Gomme</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[10px] font-bold text-indigo-900 mb-0.5">Costo / Gomma (€)</label>
+                      <input
+                        type="number"
+                        step="10"
+                        value={costPerTireTractorBiolng}
+                        onChange={(e) => setCostPerTireTractorBiolng(parseFloat(e.target.value) || 0)}
+                        className="w-full px-2 py-1 border border-indigo-300 rounded font-black text-indigo-950 bg-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-indigo-900 mb-0.5">Durata (Km)</label>
+                      <input
+                        type="number"
+                        step="5000"
+                        value={lifeKmTractorBiolng}
+                        onChange={(e) => setLifeKmTractorBiolng(parseFloat(e.target.value) || 85000)}
+                        className="w-full px-2 py-1 border border-indigo-300 rounded font-black text-indigo-900 bg-white"
+                      />
+                    </div>
+                  </div>
+                  <div className="pt-1 border-t border-indigo-200 font-bold text-indigo-950 flex justify-between items-center text-[11px]">
+                    <span>Treno 6 gomme: {formatEUR(6 * costPerTireTractorBiolng)}</span>
+                    <strong>{tireCostTractorBio.toFixed(4)} €/km</strong>
+                  </div>
+                </div>
+
+                {/* 3. Semirimorchi & Casse */}
+                <div className="p-3 bg-blue-50/70 rounded-xl border border-blue-200 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="font-extrabold text-blue-950 uppercase text-[10px] tracking-wider">3. Semirimorchi (Frigo/Box/DD)</span>
+                    <span className="px-1.5 py-0.5 bg-blue-200 text-blue-900 rounded font-black text-[10px]">6 Gomme 385/65</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[10px] font-bold text-blue-900 mb-0.5">Costo / Gomma (€)</label>
+                      <input
+                        type="number"
+                        step="10"
+                        value={costPerTireTrailer}
+                        onChange={(e) => setCostPerTireTrailer(parseFloat(e.target.value) || 0)}
+                        className="w-full px-2 py-1 border border-blue-300 rounded font-black text-blue-950 bg-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-blue-900 mb-0.5">Durata (Km)</label>
+                      <input
+                        type="number"
+                        step="5000"
+                        value={lifeKmTrailer}
+                        onChange={(e) => setLifeKmTrailer(parseFloat(e.target.value) || 80000)}
+                        className="w-full px-2 py-1 border border-blue-300 rounded font-black text-blue-900 bg-white"
+                      />
+                    </div>
+                  </div>
+                  <div className="pt-1 border-t border-blue-200 font-bold text-blue-950 flex justify-between items-center text-[11px]">
+                    <span>Treno 6 gomme: {formatEUR(6 * costPerTireTrailer)}</span>
+                    <strong>{tireCostTrailer.toFixed(4)} €/km</strong>
+                  </div>
+                </div>
+
+                {/* 4. Motrici Pesanti 12-22 Plt */}
+                <div className="p-3 bg-emerald-50/70 rounded-xl border border-emerald-200 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="font-extrabold text-emerald-950 uppercase text-[10px] tracking-wider">4. Motrici (12-22 Pallet)</span>
+                    <span className="px-1.5 py-0.5 bg-emerald-200 text-emerald-900 rounded font-black text-[10px]">6 Gomme</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[10px] font-bold text-emerald-900 mb-0.5">Costo / Gomma (€)</label>
+                      <input
+                        type="number"
+                        step="10"
+                        value={costPerTireRigid}
+                        onChange={(e) => setCostPerTireRigid(parseFloat(e.target.value) || 0)}
+                        className="w-full px-2 py-1 border border-emerald-300 rounded font-black text-emerald-950 bg-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-emerald-900 mb-0.5">Durata (Km)</label>
+                      <input
+                        type="number"
+                        step="5000"
+                        value={lifeKmRigidElectric}
+                        onChange={(e) => setLifeKmRigidElectric(parseFloat(e.target.value) || 80000)}
+                        className="w-full px-2 py-1 border border-emerald-300 rounded font-black text-emerald-900 bg-white"
+                      />
+                    </div>
+                  </div>
+                  <div className="pt-1 border-t border-emerald-200 font-bold text-emerald-950 flex justify-between items-center text-[11px]">
+                    <span>Treno 6 gomme: {formatEUR(6 * costPerTireRigid)}</span>
+                    <strong>{tireCostRigidBEV.toFixed(4)} €/km</strong>
+                  </div>
+                </div>
+              </div>
+
+              {/* 5. Daily 72 / Autocarri Leggeri & Furgoni */}
+              <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex flex-wrap items-center justify-between gap-2">
                 <div>
-                  <span className="font-bold text-slate-900 block">Costo Medio per Pneumatico Nuovo (€):</span>
-                  <span className="text-[11px] text-slate-500">Pneumatici di prima fascia (Michelin, Goodyear, Bridgestone)</span>
+                  <span className="font-extrabold text-slate-900 uppercase text-[10px] tracking-wider block">
+                    5. Daily 72 (7.2t) / Furgoni &amp; Leggeri (R16C - 6 gomme gemellate)
+                  </span>
+                  <span className="text-[10px] text-slate-500">
+                    Treno 6 gomme: {formatEUR(6 * costPerTireLight)} → <strong>{tireCostLightDaily.toFixed(4)} €/km</strong>
+                  </span>
                 </div>
-                <div className="flex items-center space-x-1">
-                  <input
-                    type="number"
-                    step="10"
-                    value={tireCostUnit}
-                    onChange={(e) => setTireCostUnit(parseFloat(e.target.value) || 0)}
-                    className="w-24 px-2.5 py-1.5 border border-slate-300 rounded-lg text-right font-bold bg-white"
-                  />
-                  <span className="text-slate-500 font-bold">€ / gomma</span>
-                </div>
-              </div>
-
-              {/* Grid 3 Durate Specifiche Four */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                {/* 1. Trattori Elettrici: 50.000 km */}
-                <div className="p-3.5 bg-rose-50/70 rounded-xl border border-rose-200 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="font-extrabold text-rose-950 uppercase text-[10px] tracking-wider">Trattori Elettrici (BEV)</span>
-                    <span className="px-1.5 py-0.5 bg-rose-200 text-rose-900 rounded font-black text-[10px]">6 Gomme</span>
+                <div className="flex items-center space-x-2">
+                  <div className="flex items-center space-x-1">
+                    <span className="text-[10px] text-slate-600 font-semibold">€/gomma:</span>
+                    <input
+                      type="number"
+                      step="10"
+                      value={costPerTireLight}
+                      onChange={(e) => setCostPerTireLight(parseFloat(e.target.value) || 0)}
+                      className="w-20 px-2 py-1 border border-slate-300 rounded font-bold bg-white text-right"
+                    />
                   </div>
                   <div className="flex items-center space-x-1">
+                    <span className="text-[10px] text-slate-600 font-semibold">Km:</span>
                     <input
                       type="number"
                       step="5000"
-                      value={lifeKmTractorElectric}
-                      onChange={(e) => setLifeKmTractorElectric(parseFloat(e.target.value) || 50000)}
-                      className="w-24 px-2 py-1 border border-rose-300 rounded font-black text-rose-900 bg-white"
+                      value={lifeKmLight}
+                      onChange={(e) => setLifeKmLight(parseFloat(e.target.value) || 65000)}
+                      className="w-24 px-2 py-1 border border-slate-300 rounded font-bold bg-white text-right"
                     />
-                    <span className="text-rose-900 font-bold">Km</span>
-                  </div>
-                  <p className="text-[10px] text-rose-800 leading-tight">
-                    Forte usura per coppia istantanea elevata (2400+ Nm) e carico batterie.
-                  </p>
-                  <div className="pt-1 border-t border-rose-200 font-bold text-rose-950 text-right">
-                    Costo: <strong>{formatEUR(tireCostTractorBEV)} / km</strong>
-                  </div>
-                </div>
-
-                {/* 2. Semirimorchi: 80.000 km */}
-                <div className="p-3.5 bg-blue-50/70 rounded-xl border border-blue-200 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="font-extrabold text-blue-950 uppercase text-[10px] tracking-wider">Semirimorchi (Casse/Frigo)</span>
-                    <span className="px-1.5 py-0.5 bg-blue-200 text-blue-900 rounded font-black text-[10px]">6 Gomme</span>
-                  </div>
-                  <div className="flex items-center space-x-1">
-                    <input
-                      type="number"
-                      step="5000"
-                      value={lifeKmTrailer}
-                      onChange={(e) => setLifeKmTrailer(parseFloat(e.target.value) || 80000)}
-                      className="w-24 px-2 py-1 border border-blue-300 rounded font-black text-blue-900 bg-white"
-                    />
-                    <span className="text-blue-900 font-bold">Km</span>
-                  </div>
-                  <p className="text-[10px] text-blue-800 leading-tight">
-                    Semirimorchi standard e frigo 3 assi (80.000 km).
-                  </p>
-                  <div className="pt-1 border-t border-blue-200 font-bold text-blue-950 text-right">
-                    Costo: <strong>{formatEUR(tireCostTrailer)} / km</strong>
-                  </div>
-                </div>
-
-                {/* 3. Motrici Elettriche: 80.000 km */}
-                <div className="p-3.5 bg-emerald-50/70 rounded-xl border border-emerald-200 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="font-extrabold text-emerald-950 uppercase text-[10px] tracking-wider">Motrici Elettriche (18/12 plt)</span>
-                    <span className="px-1.5 py-0.5 bg-emerald-200 text-emerald-900 rounded font-black text-[10px]">4-6 Gomme</span>
-                  </div>
-                  <div className="flex items-center space-x-1">
-                    <input
-                      type="number"
-                      step="5000"
-                      value={lifeKmRigidElectric}
-                      onChange={(e) => setLifeKmRigidElectric(parseFloat(e.target.value) || 80000)}
-                      className="w-24 px-2 py-1 border border-emerald-300 rounded font-black text-emerald-900 bg-white"
-                    />
-                    <span className="text-emerald-900 font-bold">Km</span>
-                  </div>
-                  <p className="text-[10px] text-emerald-800 leading-tight">
-                    Distribuzione urbana/regionale Camst, Decathlon, Tigotà (80.000 km).
-                  </p>
-                  <div className="pt-1 border-t border-emerald-200 font-bold text-emerald-950 text-right">
-                    Costo: <strong>{formatEUR(tireCostRigidBEV)} / km</strong>
                   </div>
                 </div>
               </div>
 
-              {/* Riepilogo Combinato Bilico Completo */}
+              {/* Riepilogo Combinato Bilico Elettrico vs Bilico Bio-LNG */}
               <div className="p-3.5 bg-amber-50 rounded-xl border border-amber-200 text-amber-950 flex flex-col sm:flex-row justify-between sm:items-center gap-2 font-bold">
-                <div>
-                  <span className="block text-sm">Bilico Elettrico Completo (Trattore BEV 50k + Semirimorchio 80k):</span>
-                  <span className="text-[11px] text-amber-800 font-normal">
-                    Formula: Trattore ({formatEUR(tireCostTractorBEV)}/km) + Semirimorchio ({formatEUR(tireCostTrailer)}/km)
+                <div className="space-y-0.5">
+                  <span className="block text-xs">
+                    • Bilico Elettrico (Trattore {costPerTireTractorElectric}€ + Rimorchio {costPerTireTrailer}€): <strong>{calculatedTireCostKm.toFixed(4)} €/km</strong>
+                  </span>
+                  <span className="block text-xs text-indigo-950">
+                    • Bilico Bio-LNG (Trattore {costPerTireTractorBiolng}€ + Rimorchio {costPerTireTrailer}€): <strong>{calculatedBioArticulatedKm.toFixed(4)} €/km</strong>
                   </span>
                 </div>
                 <div className="text-right">
-                  <span className="text-lg text-amber-900 font-black">
-                    {formatEUR(calculatedTireCostKm)} / km
+                  <span className="text-sm text-amber-900 font-black block">
+                    BEV: {formatEUR(calculatedTireCostKm * 250)}/gg
                   </span>
-                  <span className="block text-[10px] text-amber-700">
-                    ({formatEUR(calculatedTireCostKm * 250)} / giorno su 250 km)
+                  <span className="text-xs text-indigo-800 font-bold block">
+                    LNG: {formatEUR(calculatedBioArticulatedKm * 250)}/gg (su 250 km)
                   </span>
                 </div>
               </div>
@@ -878,22 +1002,72 @@ const SettingsPage = () => {
             </div>
           </div>
 
-          {/* Prezzi Ufficiali Vettori Energetici */}
+          {/* Prezzi Ufficiali Vettori Energetici ALLA POMPA (Senza Recupero Accise) + Sync Settimanale Fonti Ufficiali */}
           <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-4">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+            <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-100">
               <div className="flex items-center space-x-2">
                 <Zap className="w-5 h-5 text-emerald-600" />
-                <h2 className="text-sm font-bold text-slate-900">Prezzi Base Vettori Energetici (€ / Unità)</h2>
+                <div>
+                  <h2 className="text-sm font-bold text-slate-900">
+                    Prezzi Carburanti &amp; Energia &ldquo;Alla Pompa&rdquo; (Senza Recupero Accise)
+                  </h2>
+                  <p className="text-[11px] text-slate-500">
+                    Valori medi aggiornati settimanalmente da fonti ufficiali (MASE Osservatorio Carburanti / GME / Assogasliquidi)
+                  </p>
+                </div>
               </div>
-              <span className="text-xs text-slate-400">Tariffario FOUR</span>
+              <button
+                type="button"
+                disabled={fuelSyncing}
+                onClick={handleManualFuelWeeklySync}
+                className="inline-flex items-center space-x-1.5 px-3 py-1.5 bg-[#164e87] hover:bg-[#0b2440] text-white rounded-xl text-xs font-bold transition shadow-xs disabled:opacity-50"
+                title="Interroga le fonti ufficiali MASE / GME e ricalcola dinamicamente tutte le commesse"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${fuelSyncing ? 'animate-spin' : ''}`} />
+                <span>{fuelSyncing ? 'Aggiornamento...' : 'Aggiorna Ora da Fonti Ufficiali'}</span>
+              </button>
+            </div>
+
+            {/* Banner Stato Aggiornamento Settimanale Automatico */}
+            <div className="p-3 bg-emerald-50/80 border border-emerald-200 rounded-xl flex flex-wrap items-center justify-between gap-2 text-xs">
+              <div className="space-y-0.5">
+                <div className="font-black text-emerald-950 flex items-center gap-1.5">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                  <span>
+                    Modalità Prezzi &ldquo;Alla Pompa&rdquo; (100% Lordo Accise — Nessun Rimborso Accise)
+                  </span>
+                </div>
+                <p className="text-[11px] text-emerald-800">
+                  {settings.lastFuelSyncMeta?.weekLabel
+                    ? `Ultimo rilevamento settimanale: ${settings.lastFuelSyncMeta.weekLabel} • Fonte: ${settings.lastFuelSyncMeta.sourceLabel}`
+                    : 'Feed collegato a Osservatorio Prezzi Carburanti MASE / MIMIT, Listini Rete HVO/Bio-LNG e GME PUN'}
+                </p>
+              </div>
+              <label className="flex items-center space-x-1.5 cursor-pointer bg-white px-2.5 py-1 rounded-lg border border-emerald-300 font-bold text-[11px] text-emerald-900">
+                <input
+                  type="checkbox"
+                  checked={settings.autoWeeklyFuelSync !== false}
+                  onChange={(e) => setSettings({ ...settings, autoWeeklyFuelSync: e.target.checked })}
+                  className="rounded text-emerald-600 focus:ring-emerald-500"
+                />
+                <span>Sync Settimanale Auto</span>
+              </label>
             </div>
 
             <div className="space-y-3 text-xs">
               {settings.fuelTypes.map((fuel) => (
                 <div key={fuel.id} className="p-3 bg-slate-50 rounded-xl border border-slate-200/80 flex items-center justify-between">
                   <div>
-                    <span className="font-bold text-slate-900 block">{fuel.name}</span>
-                    <span className="text-[11px] text-slate-500">{fuel.notes || fuel.unit}</span>
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold text-slate-900">{fuel.name}</span>
+                      <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-amber-100 text-amber-900 border border-amber-200">
+                        Alla Pompa
+                      </span>
+                    </div>
+                    <span className="text-[11px] text-slate-500 block">{fuel.notes || fuel.unit}</span>
+                    {fuel.marketRange && (
+                      <span className="text-[10px] text-emerald-700 font-semibold">Range rilevato: {fuel.marketRange}</span>
+                    )}
                   </div>
                   <div className="flex items-center space-x-2">
                     <span className="text-slate-500 font-medium">{fuel.unit}:</span>
@@ -1195,55 +1369,21 @@ const SettingsPage = () => {
               </p>
             </div>
 
-            {/* Box Accise */}
+            {/* Box Prezzi Alla Pompa (Senza Recupero Accise) */}
             <div className="p-4 bg-emerald-50/60 rounded-xl border border-emerald-200 space-y-2">
               <div className="flex items-center justify-between">
                 <span className="text-[11px] font-bold text-emerald-950 uppercase tracking-wider">
-                  Recupero Accise
+                  Carburanti Alla Pompa
                 </span>
-                <input
-                  type="checkbox"
-                  checked={settings.treasuryRules?.acciseRecovery?.enabled !== false}
-                  onChange={(e) => {
-                    setSettings({
-                      ...settings,
-                      treasuryRules: {
-                        ...settings.treasuryRules,
-                        acciseRecovery: {
-                          ...settings.treasuryRules?.acciseRecovery,
-                          enabled: e.target.checked
-                        }
-                      }
-                    });
-                  }}
-                  className="w-4 h-4 text-emerald-600 rounded focus:ring-emerald-500"
-                />
+                <span className="px-2 py-0.5 rounded text-[10px] font-black bg-emerald-200 text-emerald-950">
+                  Senza Accise
+                </span>
               </div>
-              <div className="flex items-center space-x-1">
-                <span className="text-[11px] text-emerald-900 font-semibold">Credito:</span>
-                <input
-                  type="number"
-                  step="0.005"
-                  value={settings.treasuryRules?.acciseRecovery?.ratePerLiterDiesel || 0.21418}
-                  onChange={(e) => {
-                    const val = parseFloat(e.target.value) || 0.21418;
-                    setSettings({
-                      ...settings,
-                      treasuryRules: {
-                        ...settings.treasuryRules,
-                        acciseRecovery: {
-                          ...settings.treasuryRules?.acciseRecovery,
-                          ratePerLiterDiesel: val
-                        }
-                      }
-                    });
-                  }}
-                  className="w-20 px-1.5 py-1 border border-emerald-300 rounded text-right font-bold text-xs bg-white"
-                />
-                <span className="text-[11px] text-emerald-900 font-bold">€/L</span>
-              </div>
+              <p className="text-[11px] text-emerald-900 leading-tight">
+                Tutti i calcoli di simulazione, commessa e cash flow utilizzano il <strong>prezzo pieno alla pompa</strong> senza recupero accise.
+              </p>
               <p className="text-[10px] text-emerald-800 leading-tight">
-                Compensazione F24 a <strong>Q+1</strong> (Maggio, Agosto, Novembre, Febbraio).
+                Aggiornamento medio settimanale da Osservatorio MASE / GME.
               </p>
             </div>
           </div>

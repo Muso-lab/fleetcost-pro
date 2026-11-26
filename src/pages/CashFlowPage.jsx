@@ -50,8 +50,8 @@ const CashFlowPage = () => {
   const [stressTestDays, setStressTestDays] = useState(0); // 0, 15, 30, 60 gg di ritardo
   const [factoringEnabled, setFactoringEnabled] = useState(false);
   const [factoringRate, setFactoringRate] = useState(80); // 80% anticipato
-  const [acciseEnabled, setAcciseEnabled] = useState(true); // Toggle Recupero Accise
-  const [acciseRate, setAcciseRate] = useState(0.21418); // €/L rimborso
+  const [acciseEnabled, setAcciseEnabled] = useState(false); // Prezzi carburante sempre "Alla Pompa" senza recupero accise
+  const [acciseRate, setAcciseRate] = useState(0);
   const [activeTab, setActiveTab] = useState('cashflow'); // 'cashflow' | 'biweekly' | 'pnl'
   const [showExpenseDetails, setShowExpenseDetails] = useState(false); // Toggle colonne di dettaglio uscite
 
@@ -62,11 +62,6 @@ const CashFlowPage = () => {
   const loadProjects = () => {
     const prjs = storageService.getProjects();
     setProjects(prjs);
-    const settings = storageService.getSettings();
-    if (settings?.treasuryRules?.acciseRecovery) {
-      setAcciseEnabled(settings.treasuryRules.acciseRecovery.enabled !== false);
-      setAcciseRate(settings.treasuryRules.acciseRecovery.ratePerLiterDiesel || 0.21418);
-    }
   };
 
   const [portfolioScope, setPortfolioScope] = useState('consolidated'); // 'consolidated' | 'activeOnly' | 'potentialOnly'
@@ -643,35 +638,20 @@ const CashFlowPage = () => {
               )}
             </div>
 
-            {/* Recupero Accise Carburante */}
+            {/* Modalità Carburanti Alla Pompa (Senza Recupero Accise) */}
             <div className="space-y-1.5 p-3 bg-emerald-50/70 rounded-xl border border-emerald-200/70">
               <div className="flex items-center justify-between">
                 <label className="font-bold text-emerald-950 flex items-center">
-                  <Shield className="w-3.5 h-3.5 mr-1 text-emerald-700" />
-                  Recupero Accise:
+                  <Fuel className="w-3.5 h-3.5 mr-1 text-emerald-700" />
+                  Prezzi Alla Pompa:
                 </label>
-                <input
-                  type="checkbox"
-                  checked={acciseEnabled}
-                  onChange={(e) => setAcciseEnabled(e.target.checked)}
-                  className="w-4 h-4 text-emerald-600 rounded focus:ring-emerald-500"
-                />
+                <span className="px-2 py-0.5 rounded text-[10px] font-black bg-emerald-200 text-emerald-950">
+                  Senza Accise
+                </span>
               </div>
-              {acciseEnabled ? (
-                <div className="space-y-1 pt-0.5">
-                  <div className="flex items-center justify-between text-[11px] text-emerald-900">
-                    <span>Totale credito annuo:</span>
-                    <span className="font-extrabold">{formatEUR(annualAcciseCredit)}</span>
-                  </div>
-                  <p className="text-[10px] text-emerald-800 leading-tight">
-                    Accredito F24 a <strong>Q+1</strong> (Maggio, Agosto, Novembre, Febbraio).
-                  </p>
-                </div>
-              ) : (
-                <p className="text-[10px] text-emerald-800">
-                  Attiva il recupero di € 0,214/L sui veicoli commerciali &gt; 7.5t.
-                </p>
-              )}
+              <p className="text-[10px] text-emerald-800 leading-tight">
+                Carburanti valorizzati al <strong>prezzo pieno alla pompa</strong> (aggiornamento settimanale MASE/GME), senza recupero accise.
+              </p>
             </div>
           </div>
         </div>

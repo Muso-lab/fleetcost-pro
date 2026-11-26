@@ -3856,16 +3856,11 @@ const ProjectsPage = () => {
 
                     <div>
                       <label className="block font-semibold text-slate-700 mb-1">
-                        Recupero Accise (€ 0,214/L)
+                        Tariffa Carburanti
                       </label>
-                      <select
-                        value={formData.acciseRecoveryEligible !== false ? 'yes' : 'no'}
-                        onChange={(e) => setFormData({ ...formData, acciseRecoveryEligible: e.target.value === 'yes' })}
-                        className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-amber-500 bg-white font-bold text-xs"
-                      >
-                        <option value="yes">Attivo (Mezzi &gt; 7.5t)</option>
-                        <option value="no">Escluso</option>
-                      </select>
+                      <div className="w-full px-3 py-2 border border-emerald-200 rounded-xl bg-emerald-50/70 font-bold text-xs text-emerald-900">
+                        Alla Pompa (Senza Accise)
+                      </div>
                     </div>
 
                     <div>

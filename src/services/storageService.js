@@ -2,7 +2,12 @@
 // Garantisce il funzionamento offline / standalone al 100% in locale
 
 import { DEFAULT_FLEET, DEFAULT_TRAILERS, DEFAULT_PROJECTS, DEFAULT_SETTINGS } from '../data/initialData';
-import { recalculateProjectCost } from '../utils/cashFlowCalculations';
+import { recalculateProjectCost, calculateSpecificInsuranceCost } from '../utils/cashFlowCalculations';
+import {
+  fetchLiveWeeklyFuelPrices,
+  getFuelSyncMetadata,
+  shouldAutoRefreshWeeklyFuelPrices
+} from './fuelPriceService';
 
 const STORAGE_KEYS = {
   FLEET: 'four_fleet_vehicles',
@@ -71,9 +76,30 @@ class StorageService {
         ...(DEFAULT_SETTINGS.licenseTypes || []).filter(l => !existingIds.has(l.id))
       ];
 
+      // Aggiorna i nomi/prezzi dei carburanti in modalità "Alla Pompa (Senza Recupero Accise)" se erano rimasti ai vecchi valori "Netto Accise"
+      const existingFuels = Array.isArray(parsed.fuelTypes) ? parsed.fuelTypes : DEFAULT_SETTINGS.fuelTypes;
+      const mergedFuels = existingFuels.map(f => {
+        const defFuel = (DEFAULT_SETTINGS.fuelTypes || []).find(df => df.id === f.id);
+        if (!defFuel) return f;
+        // Se era rimasto il vecchio prezzo "Netto Accise" (1.42 gasolio, 1.52 hvo, 1.18 biolng) o dicitura "Netto Accise", migra al prezzo Alla Pompa
+        const isLegacyNetPrice =
+          (f.id === 'gasolio' && (Number(f.price) === 1.42 || (f.name || '').includes('Netto Accise'))) ||
+          (f.id === 'hvo' && Number(f.price) === 1.52) ||
+          (f.id === 'biolng' && Number(f.price) === 1.18);
+        return {
+          ...defFuel,
+          ...f,
+          name: defFuel.name,
+          marketRange: defFuel.marketRange,
+          notes: defFuel.notes,
+          price: isLegacyNetPrice ? defFuel.price : f.price
+        };
+      });
+
       const merged = {
         ...DEFAULT_SETTINGS,
         ...parsed,
+        fuelTypes: mergedFuels,
         standardCosts: { ...DEFAULT_SETTINGS.standardCosts, ...(parsed.standardCosts || {}) },
         tireParameters: { ...DEFAULT_SETTINGS.tireParameters, ...(parsed.tireParameters || {}) },
         ownershipDefaults: { ...DEFAULT_SETTINGS.ownershipDefaults, ...(parsed.ownershipDefaults || {}) },
@@ -82,8 +108,10 @@ class StorageService {
           ...DEFAULT_SETTINGS.treasuryRules,
           ...(parsed.treasuryRules || {}),
           acciseRecovery: {
-            ...(DEFAULT_SETTINGS.treasuryRules?.acciseRecovery || {}),
-            ...(parsed.treasuryRules?.acciseRecovery || {})
+            enabled: false,
+            ratePerLiterDiesel: 0,
+            frequency: 'none',
+            creditMonths: []
           }
         },
         refrigerationParams: {
@@ -221,7 +249,29 @@ class StorageService {
   getTrailers() {
     try {
       const data = localStorage.getItem(STORAGE_KEYS.TRAILERS);
-      return data ? JSON.parse(data) : DEFAULT_TRAILERS;
+      let trailers = data ? JSON.parse(data) : DEFAULT_TRAILERS;
+      let updated = false;
+      trailers = trailers.map(t => {
+        if (t.insuranceYearly === undefined && t.insuranceIncluded === undefined) {
+          updated = true;
+          const defTrl = DEFAULT_TRAILERS.find(dt => dt.id === t.id);
+          const defaultIns = defTrl?.insuranceYearly ?? (
+            t.category === 'double_deck' ? 1560 :
+            t.category === 'refrigerato_azoto' ? 1440 :
+            t.category === 'refrigerato' ? 1380 : 960
+          );
+          return {
+            ...t,
+            insuranceIncluded: false,
+            insuranceYearly: defaultIns
+          };
+        }
+        return t;
+      });
+      if (updated && data) {
+        localStorage.setItem(STORAGE_KEYS.TRAILERS, JSON.stringify(trailers));
+      }
+      return trailers;
     } catch (e) {
       console.error('Errore lettura rimorchi:', e);
       return DEFAULT_TRAILERS;
@@ -299,14 +349,19 @@ class StorageService {
       const trailers = this.getTrailers();
       const settings = this.getSettings();
 
-      // Sincronizzazione automatica se i canoni di noleggio o le variazioni per data sono cambiati
+      // Sincronizzazione automatica se i canoni di noleggio, l'assicurazione specifica o le variazioni per data sono cambiati
       let needsSave = false;
       const synchronized = projects.map(p => {
         const veh = fleet.find(v => v.id === p.vehicleId);
         const trl = trailers.find(t => t.id === p.trailerId);
         if (veh || trl) {
-          const expectedVLease = veh && p.workingDaysMonth > 0 ? +(veh.monthlyLease / p.workingDaysMonth).toFixed(2) : p.vehicleLeaseDaily;
-          const expectedTLease = trl && p.workingDaysMonth > 0 ? +(trl.monthlyLease / p.workingDaysMonth).toFixed(2) : p.trailerLeaseDaily;
+          const insCalc = calculateSpecificInsuranceCost(veh, trl, p.workingDaysMonth || 22, settings);
+          const expectedVLease = veh && p.workingDaysMonth > 0
+            ? +((Number(veh.monthlyLease || 0) + insCalc.vehicleInsuranceMonthly) / p.workingDaysMonth).toFixed(2)
+            : p.vehicleLeaseDaily;
+          const expectedTLease = trl && p.workingDaysMonth > 0
+            ? +((Number(trl.monthlyLease || 0) + insCalc.trailerInsuranceMonthly) / p.workingDaysMonth).toFixed(2)
+            : p.trailerLeaseDaily;
           const isDaily72 = veh && ((veh.name || '').includes('72') || (veh.model || '').includes('72'));
           const daily72NeedsDriverUpdate = isDaily72 && p.driverCostDaily === 140 && !p.driverManualOverride;
 
@@ -401,7 +456,13 @@ class StorageService {
       const data = localStorage.getItem(STORAGE_KEYS.SETTINGS);
       if (!data) return DEFAULT_SETTINGS;
       const parsed = JSON.parse(data);
-      if (!parsed.refrigerationParams || !parsed.accessoryParams || !parsed.paymentTermsDefaults) {
+      if (
+        !parsed.refrigerationParams ||
+        !parsed.accessoryParams ||
+        !parsed.paymentTermsDefaults ||
+        parsed.tireParameters?.costPerTireTractorElectric === undefined ||
+        parsed.treasuryRules?.acciseRecovery?.enabled === true
+      ) {
         return this.mergeDefaultSettings();
       }
       return parsed;
@@ -415,6 +476,56 @@ class StorageService {
     localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(settings));
     this.syncAllProjectsWithSettings(settings);
     return settings;
+  }
+
+  /**
+   * Aggiorna i prezzi medi settimanali dei carburanti "Alla Pompa" da fonti ufficiali (MASE / MIMIT / GME)
+   * e ricalcola dinamicamente tutte le commesse.
+   */
+  async refreshWeeklyFuelPricesFromOfficialSources(options = { force: false }) {
+    const currentSettings = this.getSettings();
+    if (!options.force && !shouldAutoRefreshWeeklyFuelPrices(currentSettings)) {
+      return {
+        updated: false,
+        settings: currentSettings,
+        syncMeta: getFuelSyncMetadata()
+      };
+    }
+
+    const syncMeta = await fetchLiveWeeklyFuelPrices();
+    const updatedFuelTypes = (currentSettings.fuelTypes || []).map(f => {
+      const liveItem = syncMeta?.pricesByFuelId?.[f.id];
+      if (!liveItem) return f;
+      return {
+        ...f,
+        price: liveItem.price,
+        lastSource: liveItem.source,
+        lastUpdatedWeek: liveItem.weekLabel,
+        lastUpdatedIso: liveItem.updatedAt
+      };
+    });
+
+    const nextSettings = {
+      ...currentSettings,
+      fuelTypes: updatedFuelTypes,
+      standardCosts: {
+        ...(currentSettings.standardCosts || {}),
+        adbluePricePerLiter: syncMeta?.pricesByFuelId?.adblue?.price ?? currentSettings.standardCosts?.adbluePricePerLiter ?? 0.85
+      },
+      lastFuelSyncMeta: {
+        lastSyncIso: syncMeta.lastSyncIso,
+        weekLabel: syncMeta.weekLabel,
+        sourceLabel: syncMeta.sourceLabel,
+        fetchedFromRemote: syncMeta.fetchedFromRemote
+      }
+    };
+
+    this.saveSettings(nextSettings);
+    return {
+      updated: true,
+      settings: nextSettings,
+      syncMeta
+    };
   }
 
   syncAllProjectsWithSettings(settings) {
