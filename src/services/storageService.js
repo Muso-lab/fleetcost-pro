@@ -437,14 +437,41 @@ class StorageService {
 
   saveSimulation(simulation) {
     const sims = this.getSimulations();
+    const existingIdx = simulation.id ? sims.findIndex(s => s.id === simulation.id) : -1;
+    if (existingIdx !== -1) {
+      sims[existingIdx] = {
+        ...sims[existingIdx],
+        ...simulation,
+        updatedAt: new Date().toISOString()
+      };
+      localStorage.setItem(STORAGE_KEYS.SIMULATIONS, JSON.stringify(sims));
+      return sims[existingIdx];
+    }
     const newSim = {
       ...simulation,
       id: simulation.id || 'sim_' + Date.now(),
+      code: simulation.code || 'PREV-' + Math.floor(100 + Math.random() * 900),
+      status: simulation.status || 'pending', // 'pending' (In Valutazione) | 'accepted' (Accettata / Convertita)
       createdAt: new Date().toISOString()
     };
     sims.unshift(newSim);
     localStorage.setItem(STORAGE_KEYS.SIMULATIONS, JSON.stringify(sims));
     return newSim;
+  }
+
+  updateSimulation(id, patch) {
+    const sims = this.getSimulations();
+    const idx = sims.findIndex(s => s.id === id);
+    if (idx !== -1) {
+      sims[idx] = {
+        ...sims[idx],
+        ...patch,
+        updatedAt: new Date().toISOString()
+      };
+      localStorage.setItem(STORAGE_KEYS.SIMULATIONS, JSON.stringify(sims));
+      return sims[idx];
+    }
+    return null;
   }
 
   deleteSimulation(id) {

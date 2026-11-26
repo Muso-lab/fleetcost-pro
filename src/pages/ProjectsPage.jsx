@@ -18,6 +18,10 @@ import {
   computeMultiClientAllocation
 } from '../utils/cashFlowCalculations';
 import {
+  calculateRouteFromStops,
+  KNOWN_LOGISTICS_HUBS
+} from '../services/routeCalculationService';
+import {
   Briefcase,
   Plus,
   Edit2,
@@ -55,7 +59,10 @@ import {
   ArrowDown,
   MapPin,
   Users,
-  Wallet
+  Wallet,
+  Navigation,
+  Mountain,
+  FolderOpen
 } from 'lucide-react';
 
 const ProjectsPage = () => {
@@ -245,6 +252,18 @@ const ProjectsPage = () => {
         isMultiClient: hasMulti,
         costAllocationMode: project.costAllocationMode || 'equal',
         billingEntities: existingEntities,
+        routeStops: Array.isArray(project.routeStops) && project.routeStops.length >= 2
+          ? project.routeStops
+          : [
+              { id: 's1', address: 'Bologna Interporto (Bentivoglio)' },
+              { id: 's2', address: project.route || 'Firenze' }
+            ],
+        isRoundTrip: project.isRoundTrip !== undefined ? Boolean(project.isRoundTrip) : true,
+        highwayPercent: project.highwayPercent ?? 65,
+        tollRate: project.tollRate ?? 0.12,
+        orographicMultiplier: project.orographicMultiplier ?? 1.0,
+        orographyProfile: project.orographyProfile || null,
+        sourceSimulationCode: project.sourceSimulationCode || null,
         startDate: project.startDate || '2026-01-01',
         operatingMonths: project.operatingMonths || 36,
         workingDaysMonth: project.workingDaysMonth || 22,
@@ -772,7 +791,46 @@ const ProjectsPage = () => {
   });
   const [scenarioNameInput, setScenarioNameInput] = useState('');
   const [showScenarioSaveBox, setShowScenarioSaveBox] = useState(false);
-  const [showStrategicVision, setShowStrategicVision] = useState(false);
+  // Visione Strategica di Portafoglio SEMPRE VISIBILE; Dettaglio elenco commesse apribile in caso di bisogno
+  const [showProjectsDetailList, setShowProjectsDetailList] = useState(false);
+  const [expandedRowDetailId, setExpandedRowDetailId] = useState(null);
+  const [modalRouteCalculating, setModalRouteCalculating] = useState(false);
+  const [modalRouteError, setModalRouteError] = useState('');
+
+  const handleModalCalculateRouteFromStops = async () => {
+    setModalRouteError('');
+    setModalRouteCalculating(true);
+    try {
+      const stops = Array.isArray(formData.routeStops) && formData.routeStops.length >= 2
+        ? formData.routeStops
+        : [
+            { id: 's1', address: 'Bologna Interporto (Bentivoglio)' },
+            { id: 's2', address: formData.route || 'Milano' }
+          ];
+      const veh = fleet.find(v => v.id === formData.vehicleId);
+      const trl = trailers.find(t => t.id === formData.trailerId);
+      const res = await calculateRouteFromStops(stops, {
+        isRoundTrip: formData.isRoundTrip !== false,
+        tripsPerDay: 1,
+        vehicle: veh,
+        trailer: trl
+      });
+      const updated = applyAutoRecalculation({
+        kmDaily: res.totalDailyKm,
+        highwayPercent: res.highwayPercent,
+        tollRate: res.tollEstimation.suggestedRate,
+        orographicMultiplier: res.orography.consumptionMultiplier,
+        orographyProfile: res.orography,
+        routeStops: stops,
+        route: formData.route || res.generatedRouteName
+      });
+      setFormData(updated);
+    } catch (err) {
+      setModalRouteError(err.message || 'Errore calcolo percorso da tappe.');
+    } finally {
+      setModalRouteCalculating(false);
+    }
+  };
 
   // Helper per distinguere commesse operative (Status Quo) da trattative / simulazioni / contratti potenziali
   const isFutureProject = (p) => {
@@ -1287,50 +1345,62 @@ const ProjectsPage = () => {
           </div>
         )}
 
-        {/* CRUSCOTTO STRATEGICO DI PORTAFOGLIO (Alleggerito, Chiaro e Collassabile) */}
+        {/* CRUSCOTTO STRATEGICO DI PORTAFOGLIO (SEMPRE VISIBILE COME RICHIESTO) */}
         <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden transition-all">
-          <div className="p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div className="p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 bg-gradient-to-r from-slate-50 to-blue-50/40 border-b border-slate-200">
             <div className="flex items-center space-x-3">
               <span className="p-2 bg-[#164e87]/10 text-[#164e87] rounded-xl border border-[#164e87]/20 flex-shrink-0">
                 <Layers className="w-5 h-5" />
               </span>
               <div>
-                <div className="flex items-center space-x-2">
+                <div className="flex items-center space-x-2 flex-wrap">
                   <h3 className="text-sm font-black text-slate-900 tracking-tight">
-                    Visione Strategica di Portafoglio
+                    Visione Strategica di Portafoglio (Sempre Visibile)
                   </h3>
                   <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-cyan-50 text-[#164e87] border border-cyan-200">
-                    Status Quo vs Trattative
+                    Status Quo vs Trattative &amp; Simulazioni
                   </span>
                 </div>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  Confronto sintetico tra commesse operative ({statusQuoTotals.count}) e pipeline di trattative simulate (+{simulatedPotentialProjects.length}/{allPotentialProjects.length}).
+                  Confronto economico, finanziario e di flotta tra commesse operative ({statusQuoTotals.count}) e pipeline di trattative simulate (+{simulatedPotentialProjects.length}/{allPotentialProjects.length}).
                 </p>
               </div>
             </div>
 
-            <div className="flex items-center space-x-2 self-start sm:self-center">
+            <div className="flex items-center space-x-2 self-start sm:self-center flex-wrap gap-y-1">
+              <button
+                type="button"
+                onClick={() => navigate('/simulation')}
+                className="px-3 py-1.5 bg-white hover:bg-blue-50 text-[#164e87] font-bold text-xs rounded-xl transition border border-blue-300 shadow-2xs whitespace-nowrap flex items-center space-x-1.5"
+              >
+                <FolderOpen className="w-3.5 h-3.5 text-[#164e87]" />
+                <span>Archivio Simulazioni ({storageService.getSimulations().length})</span>
+              </button>
               <button
                 type="button"
                 onClick={() => setShowScenarioSaveBox(!showScenarioSaveBox)}
                 className="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs rounded-xl transition shadow-xs whitespace-nowrap"
               >
-                Salva Scenario
+                Salva Scenario What-If
               </button>
               <button
                 type="button"
-                onClick={() => setShowStrategicVision(!showStrategicVision)}
-                className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 transition border border-slate-200 whitespace-nowrap"
+                onClick={() => setShowProjectsDetailList(!showProjectsDetailList)}
+                className={`inline-flex items-center space-x-1.5 px-3.5 py-1.5 rounded-xl text-xs font-black transition border whitespace-nowrap ${
+                  showProjectsDetailList
+                    ? 'bg-slate-800 text-white border-slate-900'
+                    : 'bg-[#164e87] hover:bg-[#0e3a6c] text-white border-[#164e87]'
+                }`}
               >
-                <span>{showStrategicVision ? 'Comprimi Box' : 'Espandi Dettaglio'}</span>
-                {showStrategicVision ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                <Eye className="w-3.5 h-3.5" />
+                <span>{showProjectsDetailList ? 'Chiudi Dettaglio Commesse' : `Apri Dettaglio Commesse (${displayProjects.length})`}</span>
               </button>
             </div>
           </div>
 
           {/* Form Salvataggio / Caricamento Scenari se aperto */}
           {showScenarioSaveBox && (
-            <div className="p-3 mx-4 mb-3 bg-slate-50 rounded-xl border border-slate-200 flex flex-wrap items-center gap-2 text-xs">
+            <div className="p-3 mx-4 mt-3 bg-slate-50 rounded-xl border border-slate-200 flex flex-wrap items-center gap-2 text-xs">
               <input
                 type="text"
                 placeholder="Nome scenario (es. 'Ipotesi Espansione Lindt + Conad')..."
@@ -1363,134 +1433,145 @@ const ProjectsPage = () => {
             </div>
           )}
 
-          {/* Sezione Espansa: Le 3 Colonne a Confronto con grafica chiara e leggera */}
-          {showStrategicVision && (
-            <div className="p-5 border-t border-slate-100 bg-slate-50/60 space-y-4">
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-                
-                {/* 1. STATUS QUO (Contratti Attivi) */}
-                <div className="bg-white rounded-xl p-4 border border-emerald-300 shadow-xs flex flex-col justify-between">
-                  <div>
-                    <div className="flex items-center justify-between mb-2">
-                      <div className="flex items-center space-x-1.5">
-                        <div className="w-2 h-2 rounded-full bg-emerald-500"></div>
-                        <h4 className="text-xs font-black text-emerald-800 uppercase tracking-wider">
-                          Status Quo Operativo
-                        </h4>
-                      </div>
-                      <span className="text-[10px] font-black bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full border border-emerald-200">
-                        Attivi
-                      </span>
+          {/* Sezione Sempre Visibile: Le 3 Colonne a Confronto con tutti i dati strategici e di flotta */}
+          <div className="p-5 bg-slate-50/60 space-y-4">
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+              {/* 1. STATUS QUO (Contratti Attivi) */}
+              <div className="bg-white rounded-xl p-4 border border-emerald-300 shadow-xs flex flex-col justify-between">
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center space-x-1.5">
+                      <div className="w-2 h-2 rounded-full bg-emerald-500"></div>
+                      <h4 className="text-xs font-black text-emerald-800 uppercase tracking-wider">
+                        Status Quo Operativo
+                      </h4>
                     </div>
+                    <span className="text-[10px] font-black bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full border border-emerald-200">
+                      Contratti Attivi
+                    </span>
+                  </div>
+                  <div className="flex items-baseline justify-between">
                     <div className="flex items-baseline space-x-2">
                       <span className="text-2xl font-black text-slate-900">{statusQuoTotals.count}</span>
-                      <span className="text-xs text-slate-500 font-medium">commesse 2026</span>
+                      <span className="text-xs text-slate-500 font-medium">commesse ({statusQuoTotals.uniqueClientsCount} clienti)</span>
                     </div>
-                  </div>
-
-                  <div className="mt-3 pt-2.5 border-t border-slate-100 space-y-1.5 text-xs">
-                    <div className="flex justify-between items-center">
-                      <span className="text-slate-500">Fatturato / Mese:</span>
-                      <span className="font-bold text-slate-800">{formatEUR(statusQuoTotals.revenueMonthly)}</span>
-                    </div>
-                    <div className="flex justify-between items-center">
-                      <span className="text-slate-500">Costi Operativi:</span>
-                      <span className="font-medium text-slate-700">{formatEUR(statusQuoTotals.costMonthly)}/m</span>
-                    </div>
-                    <div className="flex justify-between items-center pt-1 border-t border-slate-100">
-                      <span className="text-emerald-700 font-bold">M.O.L. / EBITDA:</span>
-                      <span className="font-black text-emerald-700">{formatEUR(statusQuoTotals.molMonthly)} ({formatPercent(statusQuoTotals.molPercent)})</span>
-                    </div>
-                    <div className="flex justify-between items-center">
-                      <span className="text-slate-500">Circolante Cassa:</span>
-                      <span className="font-bold text-amber-700">{formatEUR(statusQuoTotals.workingCapital)}</span>
-                    </div>
+                    <span className="text-[11px] font-bold text-indigo-800 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200">
+                      🚛 {statusQuoTotals.vehiclesUsedCount} Mezzi
+                    </span>
                   </div>
                 </div>
 
-                {/* 2. PIPELINE TRATTATIVE */}
-                <div className="bg-white rounded-xl p-4 border border-amber-300 shadow-xs flex flex-col justify-between">
-                  <div>
-                    <div className="flex items-center justify-between mb-2">
-                      <div className="flex items-center space-x-1.5">
-                        <Sparkles className="w-3.5 h-3.5 text-amber-500" />
-                        <h4 className="text-xs font-black text-amber-900 uppercase tracking-wider">
-                          Trattative &amp; What-If
-                        </h4>
-                      </div>
-                      <span className="text-[10px] font-black bg-amber-100 text-amber-900 px-2 py-0.5 rounded-full border border-amber-200">
-                        Potenziali
-                      </span>
+                <div className="mt-3 pt-2.5 border-t border-slate-100 space-y-1.5 text-xs">
+                  <div className="flex justify-between items-center">
+                    <span className="text-slate-500">Fatturato (Mese / Anno):</span>
+                    <span className="font-bold text-slate-800">{formatEUR(statusQuoTotals.revenueMonthly)}/m • <strong className="text-[#164e87]">{formatEUR(statusQuoTotals.revenueAnnual)}/a</strong></span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-slate-500">Costi Operativi:</span>
+                    <span className="font-medium text-slate-700">{formatEUR(statusQuoTotals.costMonthly)}/m • {formatEUR(statusQuoTotals.costAnnual)}/a</span>
+                  </div>
+                  <div className="flex justify-between items-center pt-1 border-t border-slate-100">
+                    <span className="text-emerald-700 font-bold">M.O.L. / EBITDA:</span>
+                    <span className="font-black text-emerald-700">{formatEUR(statusQuoTotals.molMonthly)}/m ({formatPercent(statusQuoTotals.molPercent)})</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-slate-500">Circolante Cassa:</span>
+                    <span className="font-bold text-amber-700">{formatEUR(statusQuoTotals.workingCapital)}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* 2. PIPELINE TRATTATIVE */}
+              <div className="bg-white rounded-xl p-4 border border-amber-300 shadow-xs flex flex-col justify-between">
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center space-x-1.5">
+                      <Sparkles className="w-3.5 h-3.5 text-amber-500" />
+                      <h4 className="text-xs font-black text-amber-900 uppercase tracking-wider">
+                        Trattative &amp; What-If
+                      </h4>
                     </div>
+                    <span className="text-[10px] font-black bg-amber-100 text-amber-900 px-2 py-0.5 rounded-full border border-amber-200">
+                      Potenziali
+                    </span>
+                  </div>
+                  <div className="flex items-baseline justify-between">
                     <div className="flex items-baseline space-x-2">
                       <span className="text-2xl font-black text-slate-900">+{simulatedPotentialProjects.length}</span>
-                      <span className="text-xs text-slate-500 font-medium">simulate ({allPotentialProjects.length} a pipeline)</span>
+                      <span className="text-xs text-slate-500 font-medium">simulate ({allPotentialProjects.length} in pipeline)</span>
                     </div>
-                  </div>
-
-                  <div className="mt-3 pt-2.5 border-t border-slate-100 space-y-1.5 text-xs">
-                    <div className="flex justify-between items-center">
-                      <span className="text-slate-500">Delta Fatturato:</span>
-                      <span className="font-bold text-[#164e87]">+{formatEUR(deltaRevenueMonthly)}/m</span>
-                    </div>
-                    <div className="flex justify-between items-center">
-                      <span className="text-slate-500">Delta Costi:</span>
-                      <span className="font-medium text-slate-700">+{formatEUR(deltaCostMonthly)}/m</span>
-                    </div>
-                    <div className="flex justify-between items-center pt-1 border-t border-slate-100">
-                      <span className="text-amber-800 font-bold">Delta M.O.L. Atteso:</span>
-                      <span className="font-black text-amber-800">+{formatEUR(deltaMolMonthly)} ({formatPercent(potentialTotals.molPercent)})</span>
-                    </div>
-                    <div className="flex justify-between items-center">
-                      <span className="text-slate-500">Fabbisogno Extra:</span>
-                      <span className="font-bold text-amber-700">+{formatEUR(deltaWorkingCapital)}</span>
-                    </div>
+                    <span className="text-[11px] font-bold text-amber-900 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
+                      🚛 {potentialTotals.vehiclesUsedCount} Mezzi
+                    </span>
                   </div>
                 </div>
 
-                {/* 3. SCENARIO A REGIME COMBINATO */}
-                <div className="bg-gradient-to-br from-blue-50/80 to-slate-50 rounded-xl p-4 border border-blue-300 shadow-xs flex flex-col justify-between">
-                  <div>
-                    <div className="flex items-center justify-between mb-2">
-                      <div className="flex items-center space-x-1.5">
-                        <TrendingUp className="w-3.5 h-3.5 text-[#164e87]" />
-                        <h4 className="text-xs font-black text-[#164e87] uppercase tracking-wider">
-                          Scenario Globale a Regime
-                        </h4>
-                      </div>
-                      <span className="text-[10px] font-black bg-[#164e87]/15 text-[#164e87] px-2 py-0.5 rounded-full border border-blue-300">
-                        Totale
-                      </span>
+                <div className="mt-3 pt-2.5 border-t border-slate-100 space-y-1.5 text-xs">
+                  <div className="flex justify-between items-center">
+                    <span className="text-slate-500">Delta Fatturato:</span>
+                    <span className="font-bold text-[#164e87]">+{formatEUR(deltaRevenueMonthly)}/m • +{formatEUR(deltaRevenueMonthly * 12)}/a</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-slate-500">Delta Costi:</span>
+                    <span className="font-medium text-slate-700">+{formatEUR(deltaCostMonthly)}/m • +{formatEUR(deltaCostMonthly * 12)}/a</span>
+                  </div>
+                  <div className="flex justify-between items-center pt-1 border-t border-slate-100">
+                    <span className="text-amber-800 font-bold">Delta M.O.L. Atteso:</span>
+                    <span className="font-black text-amber-800">+{formatEUR(deltaMolMonthly)}/m ({formatPercent(potentialTotals.molPercent)})</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-slate-500">Fabbisogno Extra:</span>
+                    <span className="font-bold text-amber-700">+{formatEUR(deltaWorkingCapital)}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* 3. SCENARIO A REGIME COMBINATO */}
+              <div className="bg-gradient-to-br from-blue-50/80 to-slate-50 rounded-xl p-4 border border-blue-300 shadow-xs flex flex-col justify-between">
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center space-x-1.5">
+                      <TrendingUp className="w-3.5 h-3.5 text-[#164e87]" />
+                      <h4 className="text-xs font-black text-[#164e87] uppercase tracking-wider">
+                        Scenario Globale a Regime
+                      </h4>
                     </div>
+                    <span className="text-[10px] font-black bg-[#164e87]/15 text-[#164e87] px-2 py-0.5 rounded-full border border-blue-300">
+                      Totale Consolidato
+                    </span>
+                  </div>
+                  <div className="flex items-baseline justify-between">
                     <div className="flex items-baseline space-x-2">
                       <span className="text-2xl font-black text-slate-900">{combinedTotals.count}</span>
-                      <span className="text-xs text-slate-500 font-medium">commesse previste</span>
+                      <span className="text-xs text-slate-500 font-medium">commesse ({combinedTotals.uniqueClientsCount} clienti)</span>
                     </div>
-                  </div>
-
-                  <div className="mt-3 pt-2.5 border-t border-blue-200/60 space-y-1.5 text-xs">
-                    <div className="flex justify-between items-center">
-                      <span className="text-slate-600">Fatturato Complessivo:</span>
-                      <span className="font-black text-slate-900">{formatEUR(combinedTotals.revenueMonthly)}/m</span>
-                    </div>
-                    <div className="flex justify-between items-center">
-                      <span className="text-slate-600">Costi Totali:</span>
-                      <span className="font-medium text-slate-800">{formatEUR(combinedTotals.costMonthly)}/m</span>
-                    </div>
-                    <div className="flex justify-between items-center pt-1 border-t border-blue-200/60">
-                      <span className="text-[#164e87] font-bold">M.O.L. Globale:</span>
-                      <span className="font-black text-emerald-700">{formatEUR(combinedTotals.molMonthly)} ({formatPercent(combinedTotals.molPercent)})</span>
-                    </div>
-                    <div className="flex justify-between items-center">
-                      <span className="text-slate-600">Picco Fabbisogno:</span>
-                      <span className="font-black text-amber-700">{formatEUR(combinedTotals.workingCapital)}</span>
-                    </div>
+                    <span className="text-[11px] font-black text-[#164e87] bg-white px-2 py-0.5 rounded border border-blue-300">
+                      🚛 {combinedTotals.vehiclesUsedCount}/{fleet.length} Mezzi
+                    </span>
                   </div>
                 </div>
 
+                <div className="mt-3 pt-2.5 border-t border-blue-200/60 space-y-1.5 text-xs">
+                  <div className="flex justify-between items-center">
+                    <span className="text-slate-600">Fatturato Complessivo:</span>
+                    <span className="font-black text-slate-900">{formatEUR(combinedTotals.revenueMonthly)}/m • <strong className="text-[#164e87]">{formatEUR(combinedTotals.revenueAnnual)}/a</strong></span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-slate-600">Costi Totali:</span>
+                    <span className="font-medium text-slate-800">{formatEUR(combinedTotals.costMonthly)}/m • {formatEUR(combinedTotals.costAnnual)}/a</span>
+                  </div>
+                  <div className="flex justify-between items-center pt-1 border-t border-blue-200/60">
+                    <span className="text-[#164e87] font-bold">M.O.L. Globale:</span>
+                    <span className="font-black text-emerald-700">{formatEUR(combinedTotals.molMonthly)}/m ({formatPercent(combinedTotals.molPercent)})</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-slate-600">Picco Fabbisogno:</span>
+                    <span className="font-black text-amber-700">{formatEUR(combinedTotals.workingCapital)}</span>
+                  </div>
+                </div>
               </div>
             </div>
-          )}
+          </div>
         </div>
 
         {/* Filter Controls con design moderno */}
@@ -1806,349 +1887,429 @@ const ProjectsPage = () => {
           </div>
         </div>
 
-        {/* Projects List / Table Ottimizzata al 100% senza tagli orizzontali */}
+        {/* DETTAGLIO DELLE COMMESSE (APRIBILE IN CASO DI BISOGNO COME RICHIESTO) */}
         <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-          <div className="w-full">
-            <table className="w-full divide-y divide-slate-200 text-left text-xs">
-              <thead className="bg-[#f0f4f9] text-[#164e87] font-extrabold uppercase tracking-wider text-[11px] border-b border-slate-200">
-                <tr>
-                  <th className="py-3 px-2 w-[4%] text-center">Pos.</th>
-                  <th className="py-3 px-4 w-[28%]">Commessa, Cliente &amp; Stato</th>
-                  <th className="py-3 px-3 w-[25%]">Mezzo Assegnato &amp; Risorse</th>
-                  <th className="py-3 px-3 w-[19%] text-right">Conto Economico / Mese</th>
-                  <th className="py-3 px-3 w-[13%] text-right">Cassa &amp; Termini</th>
-                  <th className="py-3 px-3 w-[11%] text-center">Azioni</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {displayProjects.map((project, idx) => {
-                  const metrics = calculateSingleProjectMetrics(project);
-                  const validity = getContractValidity(project);
-                  const isNegative = metrics.monthlyMol < 0;
-                  const isLowMargin = !isNegative && metrics.molPercent < 15;
-                  const assignedVeh = fleet.find(v => v.id === project.vehicleId);
-                  const assignedTrailer = trailers.find(t => t.id === project.trailerId);
-                  const isPot = isFutureProject(project);
-                  const hubName = getProjectOperatingUnit(project, assignedVeh);
+          {/* Barra di Controllo Apertura / Chiusura Dettaglio Elenco Commesse */}
+          <div
+            onClick={() => setShowProjectsDetailList(!showProjectsDetailList)}
+            className="p-4 bg-gradient-to-r from-slate-50 via-white to-blue-50/40 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3 cursor-pointer hover:bg-blue-50/30 transition"
+          >
+            <div className="flex items-center space-x-3">
+              <span className="p-2 bg-[#164e87] text-white rounded-xl shadow-2xs">
+                <Briefcase className="w-4 h-4" />
+              </span>
+              <div>
+                <div className="flex items-center space-x-2 flex-wrap">
+                  <h3 className="text-sm font-black text-slate-900">
+                    Dettaglio Analitico Singole Commesse ({displayProjects.length} linee nel perimetro)
+                  </h3>
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-blue-100 text-[#164e87] border border-blue-200">
+                    {activeFilteredTotals.totalBillingSlices} Entità di Fatturazione • {activeFilteredTotals.vehiclesUsedCount} Mezzi
+                  </span>
+                </div>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  {(showProjectsDetailList || hasActiveFilters)
+                    ? 'Clicca su qualsiasi commessa per modificarla, riordinarla con Drag & Drop o aprire il dettaglio voci di costo.'
+                    : 'La Visione Strategica e lo Scenario sopra sono sempre visibili. Clicca qui per aprire ed esplorare il dettaglio delle singole commesse.'}
+                </p>
+              </div>
+            </div>
 
-                  return (
-                    <tr
-                      key={project.id}
-                      draggable={sortBy === 'custom'}
-                      onDragStart={(e) => handleDragStart(e, project.id)}
-                      onDragOver={(e) => e.preventDefault()}
-                      onDrop={(e) => handleDrop(e, project.id)}
-                      onClick={() => handleOpenModal(project)}
-                      className={`cursor-pointer transition group ${
-                        isPot
-                          ? 'bg-amber-50/20 hover:bg-amber-100/40 border-l-4 border-l-amber-500'
-                          : isNegative
-                            ? 'bg-rose-50/40 hover:bg-rose-100/40'
-                            : isLowMargin
-                              ? 'bg-amber-50/30 hover:bg-amber-100/30'
-                              : 'hover:bg-blue-50/40'
-                      }`}
-                    >
-                      {/* Colonna Posizione / Riordino Drag & Drop */}
-                      <td className="py-3.5 px-2 text-center" onClick={(e) => e.stopPropagation()}>
-                        {sortBy === 'custom' ? (
-                          <div className="flex items-center justify-center space-x-1">
-                            <GripVertical className="w-3.5 h-3.5 text-slate-400 group-hover:text-slate-700 cursor-grab active:cursor-grabbing" title="Trascina riga per riordinare" />
-                            <div className="flex flex-col text-[8px] leading-tight text-slate-400">
-                              <button
-                                type="button"
-                                onClick={() => handleMoveProject(project.id, 'up')}
-                                disabled={idx === 0}
-                                className="hover:text-blue-700 hover:bg-slate-200 px-0.5 rounded disabled:opacity-20"
-                                title="Sposta su"
-                              >▲</button>
-                              <button
-                                type="button"
-                                onClick={() => handleMoveProject(project.id, 'down')}
-                                disabled={idx === displayProjects.length - 1}
-                                className="hover:text-blue-700 hover:bg-slate-200 px-0.5 rounded disabled:opacity-20"
-                                title="Sposta giù"
-                              >▼</button>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowProjectsDetailList(!showProjectsDetailList);
+              }}
+              className={`inline-flex items-center space-x-2 px-4 py-2 rounded-xl font-black text-xs shadow-sm transition ${
+                (showProjectsDetailList || hasActiveFilters)
+                  ? 'bg-slate-200 hover:bg-slate-300 text-slate-800'
+                  : 'bg-[#164e87] hover:bg-[#0e3a6c] text-white'
+              }`}
+            >
+              <Eye className="w-4 h-4" />
+              <span>
+                {(showProjectsDetailList || hasActiveFilters)
+                  ? 'Chiudi Dettaglio Commesse'
+                  : `Apri Dettaglio Commesse (${displayProjects.length})`}
+              </span>
+              {(showProjectsDetailList || hasActiveFilters) ? (
+                <ChevronUp className="w-4 h-4" />
+              ) : (
+                <ChevronDown className="w-4 h-4" />
+              )}
+            </button>
+          </div>
+
+          {(showProjectsDetailList || hasActiveFilters) && (
+            <div className="w-full">
+              <table className="w-full divide-y divide-slate-200 text-left text-xs">
+                <thead className="bg-[#f0f4f9] text-[#164e87] font-extrabold uppercase tracking-wider text-[11px] border-b border-slate-200">
+                  <tr>
+                    <th className="py-3 px-2 w-[4%] text-center">Pos.</th>
+                    <th className="py-3 px-4 w-[28%]">Commessa, Cliente &amp; Stato</th>
+                    <th className="py-3 px-3 w-[25%]">Mezzo Assegnato &amp; Risorse</th>
+                    <th className="py-3 px-3 w-[19%] text-right">Conto Economico / Mese</th>
+                    <th className="py-3 px-3 w-[13%] text-right">Cassa &amp; Termini</th>
+                    <th className="py-3 px-3 w-[11%] text-center">Azioni</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {displayProjects.map((project, idx) => {
+                    const metrics = calculateSingleProjectMetrics(project);
+                    const validity = getContractValidity(project);
+                    const isNegative = metrics.monthlyMol < 0;
+                    const isLowMargin = !isNegative && metrics.molPercent < 15;
+                    const assignedVeh = fleet.find(v => v.id === project.vehicleId);
+                    const assignedTrailer = trailers.find(t => t.id === project.trailerId);
+                    const isPot = isFutureProject(project);
+                    const hubName = getProjectOperatingUnit(project, assignedVeh);
+                    const isRowExpanded = expandedRowDetailId === project.id;
+
+                    return (
+                      <tr
+                        key={project.id}
+                        draggable={sortBy === 'custom'}
+                        onDragStart={(e) => handleDragStart(e, project.id)}
+                        onDragOver={(e) => e.preventDefault()}
+                        onDrop={(e) => handleDrop(e, project.id)}
+                        onClick={() => handleOpenModal(project)}
+                        className={`cursor-pointer transition group ${
+                          isPot
+                            ? 'bg-amber-50/20 hover:bg-amber-100/40 border-l-4 border-l-amber-500'
+                            : isNegative
+                              ? 'bg-rose-50/40 hover:bg-rose-100/40'
+                              : isLowMargin
+                                ? 'bg-amber-50/30 hover:bg-amber-100/30'
+                                : 'hover:bg-blue-50/40'
+                        }`}
+                      >
+                        {/* Colonna Posizione / Riordino Drag & Drop */}
+                        <td className="py-3.5 px-2 text-center" onClick={(e) => e.stopPropagation()}>
+                          {sortBy === 'custom' ? (
+                            <div className="flex items-center justify-center space-x-1">
+                              <GripVertical className="w-3.5 h-3.5 text-slate-400 group-hover:text-slate-700 cursor-grab active:cursor-grabbing" title="Trascina riga per riordinare" />
+                              <div className="flex flex-col text-[8px] leading-tight text-slate-400">
+                                <button
+                                  type="button"
+                                  onClick={() => handleMoveProject(project.id, 'up')}
+                                  disabled={idx === 0}
+                                  className="hover:text-blue-700 hover:bg-slate-200 px-0.5 rounded disabled:opacity-20"
+                                  title="Sposta su"
+                                >▲</button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleMoveProject(project.id, 'down')}
+                                  disabled={idx === displayProjects.length - 1}
+                                  className="hover:text-blue-700 hover:bg-slate-200 px-0.5 rounded disabled:opacity-20"
+                                  title="Sposta giù"
+                                >▼</button>
+                              </div>
                             </div>
-                          </div>
-                        ) : (
-                          <span className="text-[10px] text-slate-400 font-mono font-bold">
-                            {idx + 1}
-                          </span>
-                        )}
-                      </td>
-
-                      {/* Colonna 1: Commessa, Cliente & Stato */}
-                      <td className="py-3.5 px-4 font-semibold text-slate-900">
-                        {/* Riga Superiore: Checkbox + Codice + Unità Operativa + Badge Stato + Tasto Attiva */}
-                        <div className="flex items-center space-x-1.5 flex-wrap gap-y-1 mb-1" onClick={(e) => e.stopPropagation()}>
-                          {isPot && (
-                            <input
-                              type="checkbox"
-                              checked={whatIfIncludedIds.has(project.id)}
-                              onChange={() => handleToggleWhatIf(project.id)}
-                              className="w-4 h-4 text-amber-600 rounded cursor-pointer accent-amber-600 focus:ring-amber-500"
-                              title="Includi / Escludi dalla simulazione What-If"
-                            />
-                          )}
-
-                          <span className={`font-mono text-xs font-bold px-2 py-0.5 rounded border ${
-                            isPot
-                              ? 'bg-amber-100 text-amber-900 border-amber-300'
-                              : 'bg-slate-100 text-slate-700 border-slate-200'
-                          }`}>
-                            {project.code || (isPot ? 'SIM' : 'PRJ')}
-                          </span>
-
-                          {/* Unità Operativa / Polo Badge */}
-                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-50 text-[#164e87] border border-blue-200 flex items-center gap-1">
-                            <MapPin className="w-2.5 h-2.5 text-blue-600" />
-                            <span>{hubName}</span>
-                          </span>
-
-                          {/* Badge Multi-Commessa (2-4 Clienti con Costi Condivisi) */}
-                          {metrics.isMultiClient && (
-                            <span
-                              className="text-[10px] font-black px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-900 border border-indigo-300 flex items-center gap-1"
-                              title={`Costi a fattor comune ribaltati su ${metrics.billingEntities.length} clienti (${COST_ALLOCATION_MODES[project.costAllocationMode]?.shortLabel || 'Condiviso'})`}
-                            >
-                              <Users className="w-2.5 h-2.5 text-indigo-700" />
-                              <span>Multi-Commessa ({metrics.billingEntities.length} Clienti • {COST_ALLOCATION_MODES[project.costAllocationMode]?.shortLabel || 'Riparto'})</span>
+                          ) : (
+                            <span className="text-[10px] text-slate-400 font-mono font-bold">
+                              {idx + 1}
                             </span>
                           )}
+                        </td>
 
-                          {isPot ? (
-                            <div className="inline-flex items-center space-x-1.5 flex-wrap gap-y-1">
-                              <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300 flex items-center gap-1">
-                                <Sparkles className="w-3 h-3 text-amber-600" />
-                                <span>Trattativa / Potenziale</span>
+                        {/* Colonna 1: Commessa, Cliente & Stato */}
+                        <td className="py-3.5 px-4 font-semibold text-slate-900">
+                          {/* Riga Superiore: Checkbox + Codice + Unità Operativa + Badge Stato + Tasto Attiva */}
+                          <div className="flex items-center space-x-1.5 flex-wrap gap-y-1 mb-1" onClick={(e) => e.stopPropagation()}>
+                            {isPot && (
+                              <input
+                                type="checkbox"
+                                checked={whatIfIncludedIds.has(project.id)}
+                                onChange={() => handleToggleWhatIf(project.id)}
+                                className="w-4 h-4 text-amber-600 rounded cursor-pointer accent-amber-600 focus:ring-amber-500"
+                                title="Includi / Escludi dalla simulazione What-If"
+                              />
+                            )}
+
+                            <span className={`font-mono text-xs font-bold px-2 py-0.5 rounded border ${
+                              isPot
+                                ? 'bg-amber-100 text-amber-900 border-amber-300'
+                                : 'bg-slate-100 text-slate-700 border-slate-200'
+                            }`}>
+                              {project.code || (isPot ? 'SIM' : 'PRJ')}
+                            </span>
+
+                            {/* Unità Operativa / Polo Badge */}
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-50 text-[#164e87] border border-blue-200 flex items-center gap-1">
+                              <MapPin className="w-2.5 h-2.5 text-blue-600" />
+                              <span>{hubName}</span>
+                            </span>
+
+                            {/* Badge Multi-Commessa (2-4 Clienti con Costi Condivisi) */}
+                            {metrics.isMultiClient && (
+                              <span
+                                className="text-[10px] font-black px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-900 border border-indigo-300 flex items-center gap-1"
+                                title={`Costi a fattor comune ribaltati su ${metrics.billingEntities.length} clienti (${COST_ALLOCATION_MODES[project.costAllocationMode]?.shortLabel || 'Condiviso'})`}
+                              >
+                                <Users className="w-2.5 h-2.5 text-indigo-700" />
+                                <span>Multi-Commessa ({metrics.billingEntities.length} Clienti • {COST_ALLOCATION_MODES[project.costAllocationMode]?.shortLabel || 'Riparto'})</span>
                               </span>
+                            )}
+
+                            {project.orographyProfile && (
+                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200">
+                                ⛰️ {project.orographyProfile.terrainLabel} (D+ {project.orographyProfile.elevationGainM}m)
+                              </span>
+                            )}
+
+                            {isPot ? (
+                              <div className="inline-flex items-center space-x-1.5 flex-wrap gap-y-1">
+                                <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300 flex items-center gap-1">
+                                  <Sparkles className="w-3 h-3 text-amber-600" />
+                                  <span>Trattativa / Potenziale</span>
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handlePromoteToActive(project.id);
+                                  }}
+                                  className="inline-flex items-center space-x-1 text-[11px] font-black px-2 py-0.5 rounded-full bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs transition"
+                                  title="Converti questa trattativa in un contratto vero e operativo a budget"
+                                >
+                                  <CheckCircle2 className="w-3 h-3" />
+                                  <span>Converti in Attiva</span>
+                                </button>
+                              </div>
+                            ) : (
                               <button
                                 type="button"
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  handlePromoteToActive(project.id);
+                                  handleToggleFutureStatus(project.id);
                                 }}
-                                className="inline-flex items-center space-x-1 text-[11px] font-black px-2 py-0.5 rounded-full bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs transition"
-                                title="Converti questa trattativa in un contratto vero e operativo a budget"
+                                className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 hover:bg-emerald-200 flex items-center gap-1 cursor-pointer transition"
+                                title="Commessa operativa a budget. Clicca per retrocederla a simulazione."
                               >
-                                <CheckCircle2 className="w-3 h-3" />
-                                <span>Converti in Attiva</span>
+                                <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                                <span>Attivo 2026</span>
                               </button>
-                            </div>
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleToggleFutureStatus(project.id);
-                              }}
-                              className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 hover:bg-emerald-200 flex items-center gap-1 cursor-pointer transition"
-                              title="Commessa operativa a budget. Clicca per retrocederla a simulazione."
-                            >
-                              <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                              <span>Attivo 2026</span>
-                            </button>
-                          )}
+                            )}
 
-                          {isNegative && (
-                            <span title="Attenzione: Commessa in perdita!" className="text-rose-600">
-                              <AlertTriangle className="w-4 h-4 inline" />
-                            </span>
-                          )}
-                        </div>
-
-                        {/* Riga Centrale: Nome Commessa */}
-                        <div className="text-sm font-black text-slate-900 group-hover:text-[#164e87] transition">
-                          {project.name}
-                        </div>
-
-                        {/* Riga Inferiore: Cliente e Tratta */}
-                        <div className="text-xs text-slate-500 mt-0.5 flex items-center gap-1.5 flex-wrap">
-                          <strong className="text-[#164e87]">{project.client}</strong>
-                          {project.route && (
-                            <>
-                              <span>•</span>
-                              <span className="text-slate-500">{project.route}</span>
-                            </>
-                          )}
-                        </div>
-
-                        {/* Breakdown Entità di Fatturazione se Multi-Commessa */}
-                        {metrics.isMultiClient && Array.isArray(metrics.billingEntities) && (
-                          <div className="mt-2 p-2 bg-indigo-50/50 rounded-xl border border-indigo-200/80 space-y-1">
-                            {metrics.billingEntities.map((be, bIdx) => (
-                              <div key={be.id || bIdx} className="flex flex-wrap items-center justify-between gap-2 text-[10px]">
-                                <div className="flex items-center space-x-1.5">
-                                  <span className="font-mono font-black text-indigo-800 bg-white px-1.5 py-0.2 rounded border border-indigo-200">
-                                    {formatPercent(be.costSharePercent)}
-                                  </span>
-                                  <span className="font-bold text-slate-800">{be.clientName || `Cliente ${bIdx + 1}`}</span>
-                                  {be.route && <span className="text-slate-400">({be.route})</span>}
-                                </div>
-                                <div className="flex items-center space-x-2">
-                                  <span className="text-slate-500">Costo: <strong>{formatEUR(be.allocatedCostMonthly)}/m</strong></span>
-                                  <span className="text-[#164e87] font-bold">Ricavo: {formatEUR(be.revenueMonthly)}/m</span>
-                                  <span className={`font-black px-1.5 py-0.2 rounded border ${
-                                    be.molPercent < 0
-                                      ? 'bg-rose-100 text-rose-800 border-rose-200'
-                                      : be.molPercent < 15
-                                        ? 'bg-amber-100 text-amber-800 border-amber-200'
-                                        : 'bg-emerald-100 text-emerald-800 border-emerald-200'
-                                  }`}>
-                                    MOL {formatPercent(be.molPercent)}
-                                  </span>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </td>
-
-                      {/* Colonna 2: Mezzo Assegnato & Risorse */}
-                      <td className="py-3.5 px-3">
-                        {/* Veicolo e Targa */}
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          <span
-                            className={`inline-flex items-center justify-center px-1.5 py-0.5 rounded text-[10px] font-black ${
-                              project.managementType === 'D'
-                                ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                                : 'bg-blue-100 text-blue-800 border border-blue-300'
-                            }`}
-                          >
-                            {project.managementType === 'D' ? 'Dir.' : 'Terzi'}
-                          </span>
-
-                          <span className="text-slate-900 font-bold text-xs" title={assignedVeh?.name}>
-                            {assignedVeh ? assignedVeh.name : 'Mezzo non assegnato'}
-                          </span>
-
-                          {assignedVeh?.plate ? (
-                            <span className="font-mono text-[11px] font-bold bg-white text-slate-800 px-1.5 py-0.5 rounded border border-slate-300 shadow-2xs tracking-wider inline-flex items-center gap-0.5">
-                              <span className="text-[8px] text-blue-700 font-black">IT</span> {assignedVeh.plate}
-                            </span>
-                          ) : (
-                            <span className="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded font-semibold">
-                              Targa da assegnare
-                            </span>
-                          )}
-                        </div>
-
-                        {/* Semirimorchio se presente */}
-                        {assignedTrailer && (
-                          <div className="flex items-center gap-1.5 text-xs text-slate-600 mt-1">
-                            <span className="font-medium text-slate-700">{assignedTrailer.name}</span>
-                            {assignedTrailer.plate && (
-                              <span className="font-mono text-[10px] bg-slate-100 text-slate-700 font-bold px-1.5 py-0.2 rounded border border-slate-200">
-                                {assignedTrailer.plate}
+                            {isNegative && (
+                              <span title="Attenzione: Commessa in perdita!" className="text-rose-600">
+                                <AlertTriangle className="w-4 h-4 inline" />
                               </span>
                             )}
                           </div>
-                        )}
 
-                        {/* Tag Operativi + Tasto Cambia Mezzo */}
-                        <div className="flex items-center gap-1.5 mt-1 text-[11px] text-slate-500 flex-wrap">
-                          <span className="font-semibold">{project.workingDaysMonth || 22} gg/m</span>
-                          <span>•</span>
-                          <span className="font-semibold">{project.kmDaily || 200} km/gg</span>
-                          {project.energyPayer === 'client' && (
-                            <span className="bg-emerald-50 text-emerald-800 border border-emerald-200 font-bold text-[10px] px-1.5 py-0.5 rounded">
-                              ⚡ Energia Cliente
-                            </span>
+                          {/* Riga Centrale: Nome Commessa */}
+                          <div className="text-sm font-black text-slate-900 group-hover:text-[#164e87] transition">
+                            {project.name}
+                          </div>
+
+                          {/* Riga Inferiore: Cliente e Tratta */}
+                          <div className="text-xs text-slate-500 mt-0.5 flex items-center gap-1.5 flex-wrap">
+                            <strong className="text-[#164e87]">{project.client}</strong>
+                            {project.route && (
+                              <>
+                                <span>•</span>
+                                <span className="text-slate-500">{project.route}</span>
+                              </>
+                            )}
+                          </div>
+
+                          {/* Breakdown Entità di Fatturazione se Multi-Commessa */}
+                          {metrics.isMultiClient && Array.isArray(metrics.billingEntities) && (
+                            <div className="mt-2 p-2 bg-indigo-50/50 rounded-xl border border-indigo-200/80 space-y-1">
+                              {metrics.billingEntities.map((be, bIdx) => (
+                                <div key={be.id || bIdx} className="flex flex-wrap items-center justify-between gap-2 text-[10px]">
+                                  <div className="flex items-center space-x-1.5">
+                                    <span className="font-mono font-black text-indigo-800 bg-white px-1.5 py-0.2 rounded border border-indigo-200">
+                                      {formatPercent(be.costSharePercent)}
+                                    </span>
+                                    <span className="font-bold text-slate-800">{be.clientName || `Cliente ${bIdx + 1}`}</span>
+                                    {be.route && <span className="text-slate-400">({be.route})</span>}
+                                  </div>
+                                  <div className="flex items-center space-x-2">
+                                    <span className="text-slate-500">Costo: <strong>{formatEUR(be.allocatedCostMonthly)}/m</strong></span>
+                                    <span className="text-[#164e87] font-bold">Ricavo: {formatEUR(be.revenueMonthly)}/m</span>
+                                    <span className={`font-black px-1.5 py-0.2 rounded border ${
+                                      be.molPercent < 0
+                                        ? 'bg-rose-100 text-rose-800 border-rose-200'
+                                        : be.molPercent < 15
+                                          ? 'bg-amber-100 text-amber-800 border-amber-200'
+                                          : 'bg-emerald-100 text-emerald-800 border-emerald-200'
+                                    }`}>
+                                      MOL {formatPercent(be.molPercent)}
+                                    </span>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
                           )}
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleOpenModal(project);
-                            }}
-                            className="text-[#164e87] hover:underline font-bold text-[11px] inline-flex items-center gap-0.5 ml-1"
-                            title="Cambia il mezzo assegnato a questa commessa"
-                          >
-                            <RotateCw className="w-3 h-3 text-[#164e87]" />
-                            <span>Cambia Mezzo</span>
-                          </button>
-                        </div>
-                      </td>
 
-                      {/* Colonna 3: Conto Economico Mensile */}
-                      <td className="py-3.5 px-3 text-right">
-                        <div className="flex items-baseline justify-end space-x-2 text-xs">
-                          <span className="text-slate-500">Ricavi:</span>
-                          <span className="font-black text-slate-900 text-sm">{formatEUR(metrics.monthlyRevenue)}</span>
-                        </div>
-                        <div className="flex items-baseline justify-end space-x-2 text-[11px] text-slate-500 mt-0.5">
-                          <span>Costi:</span>
-                          <span className="font-semibold text-slate-700">{formatEUR(metrics.monthlyCost)}</span>
-                        </div>
-                        <div className="flex items-baseline justify-end space-x-2 mt-1.5 pt-1 border-t border-slate-100">
-                          <span className="text-xs font-bold text-slate-600">M.O.L.:</span>
-                          <span className={`text-sm font-black ${isNegative ? 'text-rose-600' : isLowMargin ? 'text-amber-600' : 'text-emerald-700'}`}>
-                            {formatEUR(metrics.monthlyMol)}
-                          </span>
-                          <span className={`text-[10px] font-black px-1.5 py-0.5 rounded border ${
-                            isNegative
-                              ? 'bg-rose-100 text-rose-800 border-rose-200'
-                              : isLowMargin
-                                ? 'bg-amber-100 text-amber-800 border-amber-200'
-                                : 'bg-emerald-100 text-emerald-800 border-emerald-200'
-                          }`}>
-                            {formatPercent(metrics.molPercent)}
-                          </span>
-                        </div>
-                      </td>
+                          {/* Dettaglio Analitico Voci di Costo Apribile sulla singola commessa */}
+                          {isRowExpanded && (
+                            <div
+                              onClick={(e) => e.stopPropagation()}
+                              className="mt-2.5 p-2.5 bg-slate-50 rounded-xl border border-slate-200 text-[10px] space-y-1.5"
+                            >
+                              <div className="font-black text-slate-800 flex items-center justify-between border-b border-slate-200 pb-1">
+                                <span>Scomposizione Costi Giornalieri ({formatEUR(metrics.totalCostDaily)}/gg)</span>
+                                <span className="text-[#164e87]">Ricavo: {formatEUR(metrics.revenueDaily)}/gg • M.O.L.: {formatEUR(metrics.molDaily)}/gg</span>
+                              </div>
+                              <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 text-slate-600">
+                                <div>Autista: <strong className="text-slate-900">{formatEUR(project.driverCostDaily || 0)}/gg</strong></div>
+                                <div>Energia: <strong className="text-slate-900">{formatEUR(project.energyPayer === 'client' ? 0 : (project.fuelCostDaily || 0))}/gg</strong></div>
+                                <div>Pedaggi: <strong className="text-slate-900">{formatEUR(project.tollsDaily || 0)}/gg</strong></div>
+                                <div>Pneumatici: <strong className="text-slate-900">{formatEUR(project.tiresDaily || 0)}/gg</strong></div>
+                                <div>Nolo Mezzo: <strong className="text-slate-900">{formatEUR(project.vehicleLeaseDaily || 0)}/gg</strong></div>
+                                <div>Nolo Rimorchio: <strong className="text-slate-900">{formatEUR(project.trailerLeaseDaily || 0)}/gg</strong></div>
+                                <div>Telematica/Lav.: <strong className="text-slate-900">{formatEUR((Number(project.telematicsCostDaily) || 0) + (Number(project.washingCostDaily) || 0))}/gg</strong></div>
+                                <div>Partner/Terzi: <strong className="text-slate-900">{formatEUR(project.partnerMarginDaily || 0)}/gg</strong></div>
+                              </div>
+                            </div>
+                          )}
+                        </td>
 
-                      {/* Colonna 4: Cassa & Termini */}
-                      <td className="py-3.5 px-3 text-right">
-                        <div className="text-xs font-black text-amber-900 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200 inline-block">
-                          {formatEUR(metrics.estimatedWorkingCapitalGap)}
-                        </div>
-                        <div className="text-[11px] text-slate-500 font-medium mt-1">
-                          Inc: <strong>{project.paymentTermsClient ?? 60}gg</strong> • Pag: <strong>{metrics.weightedDpoDays}gg</strong>
-                        </div>
-                        <div className="text-[10px] text-slate-400 mt-0.5">
-                          {validity.formattedEnd ? `Fino a ${validity.formattedEnd}` : 'Durata 12m'}
-                        </div>
-                      </td>
+                        {/* Colonna 2: Mezzo Assegnato & Risorse */}
+                        <td className="py-3.5 px-3">
+                          {/* Veicolo e Targa */}
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span
+                              className={`inline-flex items-center justify-center px-1.5 py-0.5 rounded text-[10px] font-black ${
+                                project.managementType === 'D'
+                                  ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                                  : 'bg-blue-100 text-blue-800 border border-blue-300'
+                              }`}
+                            >
+                              {project.managementType === 'D' ? 'Dir.' : 'Terzi'}
+                            </span>
 
-                      {/* Colonna 5: Azioni Rapide */}
-                      <td className="py-3.5 px-4 text-center whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
-                        <div className="flex items-center justify-center space-x-1.5">
-                          <button
-                            type="button"
-                            onClick={() => handleOpenModal(project)}
-                            className="inline-flex items-center space-x-1 px-2.5 py-1.5 bg-[#164e87] hover:bg-[#0b2440] text-white rounded-lg text-xs font-bold transition shadow-xs"
-                            title="Modifica parametri, mezzo, costi e marginalità"
-                          >
-                            <Edit2 className="w-3.5 h-3.5" />
-                            <span>Modifica</span>
-                          </button>
+                            <span className="text-slate-900 font-bold text-xs" title={assignedVeh?.name}>
+                              {assignedVeh ? assignedVeh.name : 'Mezzo non assegnato'}
+                            </span>
 
-                          <button
-                            type="button"
-                            onClick={() => handleDuplicateProject(project)}
-                            className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-slate-100 rounded-lg transition"
-                            title="Duplica Commessa"
-                          >
-                            <Copy className="w-4 h-4" />
-                          </button>
+                            {assignedVeh?.plate ? (
+                              <span className="font-mono text-[11px] font-bold bg-white text-slate-800 px-1.5 py-0.5 rounded border border-slate-300 shadow-2xs tracking-wider inline-flex items-center gap-0.5">
+                                <span className="text-[8px] text-blue-700 font-black">IT</span> {assignedVeh.plate}
+                              </span>
+                            ) : (
+                              <span className="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded font-semibold">
+                                Targa da assegnare
+                              </span>
+                            )}
+                          </div>
 
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteProject(project.id)}
-                            className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-slate-100 rounded-lg transition"
-                            title="Elimina"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+                          {/* Semirimorchio se presente */}
+                          {assignedTrailer && (
+                            <div className="flex items-center gap-1.5 text-xs text-slate-600 mt-1">
+                              <span className="font-medium text-slate-700">{assignedTrailer.name}</span>
+                              {assignedTrailer.plate && (
+                                <span className="font-mono text-[10px] bg-slate-100 text-slate-700 font-bold px-1.5 py-0.2 rounded border border-slate-200">
+                                  {assignedTrailer.plate}
+                                </span>
+                              )}
+                            </div>
+                          )}
+
+                          {/* Tag Operativi + Tasto Cambia Mezzo + Dettaglio Voci */}
+                          <div className="flex items-center gap-1.5 mt-1 text-[11px] text-slate-500 flex-wrap" onClick={(e) => e.stopPropagation()}>
+                            <span className="font-semibold">{project.workingDaysMonth || 22} gg/m</span>
+                            <span>•</span>
+                            <span className="font-semibold">{project.kmDaily || 200} km/gg</span>
+                            {project.energyPayer === 'client' && (
+                              <span className="bg-emerald-50 text-emerald-800 border border-emerald-200 font-bold text-[10px] px-1.5 py-0.5 rounded">
+                                ⚡ Energia Cliente
+                              </span>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => setExpandedRowDetailId(isRowExpanded ? null : project.id)}
+                              className="text-slate-700 hover:text-[#164e87] bg-slate-100 hover:bg-blue-50 px-1.5 py-0.5 rounded font-bold text-[10px] border border-slate-200 transition"
+                              title="Apri/chiudi scomposizione costi di questa commessa"
+                            >
+                              {isRowExpanded ? '▲ Chiudi Voci' : '▼ Dettaglio Costi'}
+                            </button>
+                          </div>
+                        </td>
+
+                        {/* Colonna 3: Conto Economico Mensile */}
+                        <td className="py-3.5 px-3 text-right">
+                          <div className="flex items-baseline justify-end space-x-2 text-xs">
+                            <span className="text-slate-500">Ricavi:</span>
+                            <span className="font-black text-slate-900 text-sm">{formatEUR(metrics.monthlyRevenue)}</span>
+                          </div>
+                          <div className="flex items-baseline justify-end space-x-2 text-[11px] text-slate-500 mt-0.5">
+                            <span>Costi:</span>
+                            <span className="font-semibold text-slate-700">{formatEUR(metrics.monthlyCost)}</span>
+                          </div>
+                          <div className="flex items-baseline justify-end space-x-2 mt-1.5 pt-1 border-t border-slate-100">
+                            <span className="text-xs font-bold text-slate-600">M.O.L.:</span>
+                            <span className={`text-sm font-black ${isNegative ? 'text-rose-600' : isLowMargin ? 'text-amber-600' : 'text-emerald-700'}`}>
+                              {formatEUR(metrics.monthlyMol)}
+                            </span>
+                            <span className={`text-[10px] font-black px-1.5 py-0.5 rounded border ${
+                              isNegative
+                                ? 'bg-rose-100 text-rose-800 border-rose-200'
+                                : isLowMargin
+                                  ? 'bg-amber-100 text-amber-800 border-amber-200'
+                                  : 'bg-emerald-100 text-emerald-800 border-emerald-200'
+                            }`}>
+                              {formatPercent(metrics.molPercent)}
+                            </span>
+                          </div>
+                        </td>
+
+                        {/* Colonna 4: Cassa & Termini */}
+                        <td className="py-3.5 px-3 text-right">
+                          <div className="text-xs font-black text-amber-900 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200 inline-block">
+                            {formatEUR(metrics.estimatedWorkingCapitalGap)}
+                          </div>
+                          <div className="text-[11px] text-slate-500 font-medium mt-1">
+                            Inc: <strong>{project.paymentTermsClient ?? 60}gg</strong> • Pag: <strong>{metrics.weightedDpoDays}gg</strong>
+                          </div>
+                          <div className="text-[10px] text-slate-400 mt-0.5">
+                            {validity.formattedEnd ? `Fino a ${validity.formattedEnd}` : 'Durata 12m'}
+                          </div>
+                        </td>
+
+                        {/* Colonna 5: Azioni Rapide */}
+                        <td className="py-3.5 px-4 text-center whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                          <div className="flex items-center justify-center space-x-1.5">
+                            <button
+                              type="button"
+                              onClick={() => handleOpenModal(project)}
+                              className="inline-flex items-center space-x-1 px-2.5 py-1.5 bg-[#164e87] hover:bg-[#0b2440] text-white rounded-lg text-xs font-bold transition shadow-xs"
+                              title="Modifica parametri, mezzo, costi e marginalità"
+                            >
+                              <Edit2 className="w-3.5 h-3.5" />
+                              <span>Modifica</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => handleDuplicateProject(project)}
+                              className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-slate-100 rounded-lg transition"
+                              title="Duplica Commessa"
+                            >
+                              <Copy className="w-4 h-4" />
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteProject(project.id)}
+                              className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-slate-100 rounded-lg transition"
+                              title="Elimina"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
 
         {/* Modal Modifica/Crea Commessa */}
@@ -2491,6 +2652,112 @@ const ProjectsPage = () => {
                       <option value="Altro / Sede">🏢 Altro / Sede Centrale</option>
                     </select>
                   </div>
+                </div>
+
+                {/* CALCOLATORE AUTOMATICO KM, AUTOSTRADA, PEDAGGI & OROGRAFIA CONSUMI DA TAPPE IN REALIZZAZIONE COMMESSA */}
+                <div className="p-3.5 bg-gradient-to-br from-emerald-50/80 to-teal-50/40 rounded-xl border border-emerald-200 space-y-2.5">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center space-x-1.5">
+                      <Navigation className="w-4 h-4 text-emerald-700" />
+                      <span className="font-extrabold text-emerald-950 text-xs uppercase tracking-wider">
+                        Calcolo Automatico Km, Autostrada, Pedaggi &amp; Orografia da Tappe
+                      </span>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      {formData.sourceSimulationCode && (
+                        <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-blue-100 text-[#164e87] border border-blue-300">
+                          Da Preventivo {formData.sourceSimulationCode}
+                        </span>
+                      )}
+                      {formData.orographyProfile && (
+                        <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300">
+                          ⛰️ {formData.orographyProfile.terrainLabel} (D+ {formData.orographyProfile.elevationGainM}m • Consumi {formData.orographicMultiplier || 1}x)
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  <datalist id="modal-known-hubs-list">
+                    {KNOWN_LOGISTICS_HUBS.map(h => (
+                      <option key={h.name} value={h.name} />
+                    ))}
+                  </datalist>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {(Array.isArray(formData.routeStops) && formData.routeStops.length >= 2
+                      ? formData.routeStops
+                      : [{ id: 's1', address: 'Bologna Interporto (Bentivoglio)' }, { id: 's2', address: '' }]
+                    ).map((st, sIdx, arr) => (
+                      <div key={st.id || sIdx} className="flex items-center space-x-1.5">
+                        <span className="w-5 h-5 rounded-full bg-emerald-700 text-white font-black text-[10px] flex items-center justify-center flex-shrink-0">
+                          {sIdx + 1}
+                        </span>
+                        <input
+                          type="text"
+                          list="modal-known-hubs-list"
+                          placeholder={sIdx === 0 ? 'Partenza / Hub Carico' : `Tappa / Scarico #${sIdx}`}
+                          value={st.address}
+                          onChange={(e) => {
+                            const nextStops = arr.map((item, i) => (i === sIdx ? { ...item, address: e.target.value } : item));
+                            setFormData({ ...formData, routeStops: nextStops });
+                          }}
+                          className="w-full px-2.5 py-1.5 border border-emerald-300 rounded-lg bg-white font-semibold text-xs"
+                        />
+                        {arr.length > 2 && (
+                          <button
+                            type="button"
+                            onClick={() => setFormData({ ...formData, routeStops: arr.filter((_, i) => i !== sIdx) })}
+                            className="text-slate-400 hover:text-rose-600 p-1"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                    <div className="flex items-center space-x-3">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const cur = Array.isArray(formData.routeStops) && formData.routeStops.length >= 2
+                            ? formData.routeStops
+                            : [{ id: 's1', address: 'Bologna Interporto (Bentivoglio)' }, { id: 's2', address: '' }];
+                          if (cur.length >= 8) return;
+                          setFormData({ ...formData, routeStops: [...cur, { id: 's_' + Date.now(), address: '' }] });
+                        }}
+                        className="text-[11px] font-bold text-[#164e87] hover:underline"
+                      >
+                        + Aggiungi Tappa
+                      </button>
+                      <label className="inline-flex items-center space-x-1.5 text-[11px] font-bold text-emerald-950 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={formData.isRoundTrip !== false}
+                          onChange={(e) => setFormData({ ...formData, isRoundTrip: e.target.checked })}
+                          className="rounded text-emerald-600"
+                        />
+                        <span>Andata e Ritorno (A/R)</span>
+                      </label>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={handleModalCalculateRouteFromStops}
+                      disabled={modalRouteCalculating}
+                      className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 disabled:bg-emerald-400 text-white rounded-lg font-black text-xs shadow-2xs transition flex items-center space-x-1.5"
+                    >
+                      <MapPin className="w-3.5 h-3.5" />
+                      <span>{modalRouteCalculating ? 'Calcolo API in corso...' : 'Calcola Km, Pedaggi & Consumi Orografici'}</span>
+                    </button>
+                  </div>
+
+                  {modalRouteError && (
+                    <div className="text-[11px] text-rose-700 font-semibold bg-rose-50 px-2.5 py-1 rounded border border-rose-200">
+                      ⚠️ {modalRouteError}
+                    </div>
+                  )}
                 </div>
 
                 {/* Selezione Mezzo dalla Flotta & Tipologia Gestione */}

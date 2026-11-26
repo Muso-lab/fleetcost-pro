@@ -15,6 +15,10 @@ import {
   computeMultiClientAllocation
 } from '../utils/cashFlowCalculations';
 import {
+  calculateRouteFromStops,
+  KNOWN_LOGISTICS_HUBS
+} from '../services/routeCalculationService';
+import {
   Calculator,
   TrendingUp,
   Download,
@@ -35,7 +39,15 @@ import {
   ChevronUp,
   Sparkles,
   Briefcase,
-  Users
+  Users,
+  MapPin,
+  Navigation,
+  Mountain,
+  Plus,
+  Trash2,
+  RotateCw,
+  FolderOpen,
+  Check
 } from 'lucide-react';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -151,9 +163,86 @@ const SimulationPage = () => {
   const [paymentTermsExtra, setPaymentTermsExtra] = useState(30);
   const [showPerItemTerms, setShowPerItemTerms] = useState(false);
 
-  // Results State
+  // Results State & Registro Simulazioni Salvate
   const [simulationResult, setSimulationResult] = useState(null);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [savedSimulations, setSavedSimulations] = useState([]);
+  const [activeSimulationId, setActiveSimulationId] = useState(null);
+  const [activeSimulationCode, setActiveSimulationCode] = useState('');
+  const [showSavedRegistry, setShowSavedRegistry] = useState(true);
+  const [regSaveBanner, setRegSaveBanner] = useState('');
+
+  // Calcolatore Automatico Km, Autostrada & Orografia da Indirizzi Tappe (API Pubbliche OSM/OSRM/Open-Meteo)
+  const [routeStops, setRouteStops] = useState([
+    { id: 'stop_1', address: 'Bologna Interporto (Bentivoglio)', label: 'Partenza / Carico' },
+    { id: 'stop_2', address: 'Firenze', label: 'Destinazione / Scarico 1' }
+  ]);
+  const [isRoundTrip, setIsRoundTrip] = useState(true);
+  const [routeCalculating, setRouteCalculating] = useState(false);
+  const [routeError, setRouteError] = useState('');
+  const [routeAnalysis, setRouteAnalysis] = useState(null);
+  const [orographicMultiplier, setOrographicMultiplier] = useState(1.0);
+
+  const handleAddRouteStop = () => {
+    if (routeStops.length >= 8) return;
+    setRouteStops(prev => [
+      ...prev,
+      {
+        id: 'stop_' + Date.now(),
+        address: '',
+        label: `Tappa / Scarico ${prev.length}`
+      }
+    ]);
+  };
+
+  const handleRemoveRouteStop = (idx) => {
+    if (routeStops.length <= 2) return;
+    setRouteStops(prev => prev.filter((_, i) => i !== idx));
+  };
+
+  const handleUpdateRouteStop = (idx, address) => {
+    setRouteStops(prev => prev.map((s, i) => (i === idx ? { ...s, address } : s)));
+  };
+
+  const handleCalculateRouteFromApi = async () => {
+    setRouteError('');
+    setRouteCalculating(true);
+    try {
+      const vehicle = fleet.find(v => v.id === selectedVehicleId);
+      const trailer = trailers.find(t => t.id === selectedTrailerId);
+      const res = await calculateRouteFromStops(routeStops, {
+        isRoundTrip,
+        tripsPerDay,
+        vehicle,
+        trailer
+      });
+      setRouteAnalysis(res);
+      setKmTotal(res.totalDailyKm);
+      setKmHighwayPercent(res.highwayPercent);
+      setTollRate(res.tollEstimation.suggestedRate);
+      setOrographicMultiplier(res.orography.consumptionMultiplier);
+      if (!routeName || routeName.includes('→')) {
+        setRouteName(res.generatedRouteName);
+      }
+
+      // Se in modalità Multi-Commessa proporzionale ai Km, pre-assegna i km delle singole tratte ai clienti
+      if (clientCount > 1 && res.legSummaries.length > 0) {
+        setBillingEntities(prev => prev.map((be, idx) => {
+          if (idx >= clientCount) return be;
+          const leg = res.legSummaries[idx];
+          return {
+            ...be,
+            route: be.route || (leg ? `${leg.from.split(',')[0]} → ${leg.to.split(',')[0]}` : be.route),
+            driverMetric: leg ? Math.round(leg.km) : Math.round(res.singleTripKm / clientCount)
+          };
+        }));
+      }
+    } catch (err) {
+      setRouteError(err.message || 'Errore durante il calcolo automatico del percorso.');
+    } finally {
+      setRouteCalculating(false);
+    }
+  };
 
   useEffect(() => {
     loadData();
@@ -163,9 +252,11 @@ const SimulationPage = () => {
     const f = storageService.getFleet();
     const t = storageService.getTrailers();
     const s = storageService.getSettings();
+    const sims = storageService.getSimulations();
     setFleet(f);
     setTrailers(t);
     setSettings(s);
+    setSavedSimulations(sims);
 
     const washDef = s?.accessoryParams?.washing;
     if (washDef) {
@@ -280,21 +371,23 @@ const SimulationPage = () => {
     const urbanKm = km - highwayKm;
     const workingDays = Number(workingDaysMonth) || 22;
 
-    // 1. Carburante / Energia (NOTA 1.2: 0 € se a carico del cliente)
-    let fuelDaily = 0;
+    // 1. Carburante / Energia (NOTA 1.2: 0 € se a carico del cliente) + Correzione Orografica Consumi
+    let baseFuelDaily = 0;
+    const safeOroMultiplier = Number(orographicMultiplier) > 0 ? Number(orographicMultiplier) : 1.0;
     if (energyPayer !== 'client') {
       if (vehicle.fuelTypeId === 'elettrico') {
-        fuelDaily = (vehicle.avgConsumption || 1.2) * km * fuelPrice;
+        baseFuelDaily = (vehicle.avgConsumption || 1.2) * km * fuelPrice;
       } else if (vehicle.fuelTypeId === 'biolng') {
         if (vehicle.yieldKmPerUnit && vehicle.yieldKmPerUnit > 0) {
-          fuelDaily = (km / vehicle.yieldKmPerUnit) * fuelPrice;
+          baseFuelDaily = (km / vehicle.yieldKmPerUnit) * fuelPrice;
         } else {
-          fuelDaily = ((vehicle.avgConsumption || 30) / 100) * km * fuelPrice;
+          baseFuelDaily = ((vehicle.avgConsumption || 30) / 100) * km * fuelPrice;
         }
       } else {
-        fuelDaily = ((vehicle.avgConsumption || 32) / 100) * km * fuelPrice;
+        baseFuelDaily = ((vehicle.avgConsumption || 32) / 100) * km * fuelPrice;
       }
     }
+    const fuelDaily = +(baseFuelDaily * safeOroMultiplier).toFixed(2);
 
     // 2. Autostrada
     const tollsDaily = highwayKm * (Number(tollRate) || 0.12);
@@ -400,7 +493,7 @@ const SimulationPage = () => {
     };
     const financialMetrics = calculateSingleProjectMetrics(simulatedProjectObj);
 
-    setSimulationResult({
+    const computedResult = {
       vehicle,
       trailer,
       kmTotal: km,
@@ -410,6 +503,14 @@ const SimulationPage = () => {
       operatingMonths: Number(operatingMonths) || 36,
       driverShiftType: currentShiftType,
       energyPayer,
+      baseFuelDaily: +baseFuelDaily.toFixed(2),
+      orographicMultiplier: safeOroMultiplier,
+      routeStops,
+      isRoundTrip,
+      routeAnalysis,
+      tollRate: Number(tollRate) || 0.12,
+      tireRate: Number(tireRate) || 0.04,
+      fuelPrice: Number(fuelPrice) || 0.38,
       fuelDaily,
       tollsDaily,
       tiresDaily,
@@ -452,7 +553,300 @@ const SimulationPage = () => {
       weightedDpoDays: financialMetrics.weightedDpoDays,
       workingCapitalNeed: financialMetrics.estimatedWorkingCapitalGap,
       workingCapitalBreakdown: financialMetrics.workingCapitalBreakdown
+    };
+
+    setSimulationResult(computedResult);
+
+    // Registrazione automatica della simulazione nell'Archivio Preventivi per poterla ricaricare o convertire se accettata dal cliente
+    const simCode = activeSimulationCode || ('PREV-' + Math.floor(100 + Math.random() * 900));
+    const displayClient = isMulti
+      ? multiAlloc.combinedClientLabel
+      : (clientName || 'Trattativa Commerciale');
+    const displayRoute = routeName || (routeAnalysis?.generatedRouteName) || `${km} km/gg`;
+
+    const savedSim = storageService.saveSimulation({
+      id: activeSimulationId || undefined,
+      code: simCode,
+      status: 'pending',
+      clientName: displayClient,
+      rawClientName: clientName,
+      routeName: displayRoute,
+      vehicleId: vehicle.id,
+      vehicleName: vehicle.name,
+      trailerId: trailer ? trailer.id : '',
+      trailerName: trailer ? trailer.name : '',
+      kmTotal: km,
+      kmHighwayPercent: Number(kmHighwayPercent) || 0,
+      workingDaysMonth: workingDays,
+      operatingMonths: Number(operatingMonths) || 36,
+      doubleDrivers,
+      isNightShift,
+      energyPayer,
+      fuelPrice: Number(fuelPrice) || 0.38,
+      tollRate: Number(tollRate) || 0.12,
+      tireRate: Number(tireRate) || 0.04,
+      targetMarginPercent: +marginPct.toFixed(2),
+      refrigerationEnabled,
+      refrigerationTech,
+      refrigerationUnitCost,
+      refrigerationHourlyConsumption,
+      refrigerationHoursDaily,
+      telematicsEnabled,
+      telematicsAuto,
+      telematicsMonthly,
+      washingEnabled,
+      washingUnitCost,
+      washingCountPerMonth,
+      extraCostDescription,
+      extraCostAmount,
+      extraCostFrequency,
+      partnerFeePerTrip: Number(partnerFeePerTrip) || 0,
+      tripsPerDay: Number(tripsPerDay) || 1,
+      paymentTermsClient,
+      paymentTermsSuppliers,
+      leasePaymentTiming,
+      trailerLeasePaymentTiming,
+      paymentTermsDriver,
+      paymentTermsFuel,
+      paymentTermsTolls,
+      paymentTermsTires,
+      paymentTermsRefrigeration,
+      paymentTermsTelematics,
+      paymentTermsWashing,
+      paymentTermsExtra,
+      isMultiClient: isMulti,
+      clientCount,
+      costAllocationMode,
+      billingEntities: isMulti ? multiAlloc.entities : billingEntities,
+      routeStops,
+      isRoundTrip,
+      orographicMultiplier: safeOroMultiplier,
+      orographyProfile: routeAnalysis?.orography || null,
+      resultSnapshot: {
+        totalCostDaily: financialMetrics.totalCostDaily,
+        revenueDailyTarget,
+        molDailyTarget,
+        molPercent: +marginPct.toFixed(2),
+        monthlyCost: financialMetrics.monthlyCost,
+        monthlyRevenue: financialMetrics.monthlyRevenue,
+        monthlyMol: financialMetrics.monthlyMol,
+        workingCapitalNeed: financialMetrics.estimatedWorkingCapitalGap
+      }
     });
+
+    setActiveSimulationId(savedSim.id);
+    setActiveSimulationCode(savedSim.code);
+    setSavedSimulations(storageService.getSimulations());
+    setRegSaveBanner(`Simulazione ${savedSim.code} registrata automaticamente nell'archivio preventivi.`);
+    setTimeout(() => setRegSaveBanner(''), 4000);
+  };
+
+  // Crea una nuova simulazione pulita (per non sovrascrivere quella precedente in archivio)
+  const handleNewBlankSimulation = () => {
+    setActiveSimulationId(null);
+    setActiveSimulationCode('');
+    setSimulationResult(null);
+    setRegSaveBanner('Pronto per una nuova simulazione (verrà registrata con un nuovo codice).');
+    setTimeout(() => setRegSaveBanner(''), 3000);
+  };
+
+  // Ricarica una simulazione salvata nel form del Simulatore
+  const handleLoadSavedSimulation = (sim) => {
+    if (!sim) return;
+    setActiveSimulationId(sim.id);
+    setActiveSimulationCode(sim.code || '');
+    setClientName(sim.rawClientName !== undefined ? sim.rawClientName : (sim.clientName || ''));
+    setRouteName(sim.routeName || '');
+    if (sim.vehicleId) setSelectedVehicleId(sim.vehicleId);
+    setSelectedTrailerId(sim.trailerId || '');
+    setKmTotal(sim.kmTotal ?? 250);
+    setKmHighwayPercent(sim.kmHighwayPercent ?? 60);
+    setWorkingDaysMonth(sim.workingDaysMonth ?? 22);
+    setOperatingMonths(sim.operatingMonths ?? 36);
+    setDoubleDrivers(Boolean(sim.doubleDrivers));
+    setIsNightShift(Boolean(sim.isNightShift));
+    setEnergyPayer(sim.energyPayer || 'four');
+    if (sim.fuelPrice !== undefined) setFuelPrice(sim.fuelPrice);
+    if (sim.tollRate !== undefined) setTollRate(sim.tollRate);
+    if (sim.tireRate !== undefined) setTireRate(sim.tireRate);
+    if (sim.targetMarginPercent !== undefined) setTargetMarginPercent(sim.targetMarginPercent);
+    setRefrigerationEnabled(Boolean(sim.refrigerationEnabled));
+    if (sim.refrigerationTech) setRefrigerationTech(sim.refrigerationTech);
+    if (sim.refrigerationUnitCost !== undefined) setRefrigerationUnitCost(sim.refrigerationUnitCost);
+    if (sim.refrigerationHourlyConsumption !== undefined) setRefrigerationHourlyConsumption(sim.refrigerationHourlyConsumption);
+    if (sim.refrigerationHoursDaily !== undefined) setRefrigerationHoursDaily(sim.refrigerationHoursDaily);
+    if (sim.telematicsEnabled !== undefined) setTelematicsEnabled(sim.telematicsEnabled);
+    if (sim.telematicsAuto !== undefined) setTelematicsAuto(sim.telematicsAuto);
+    if (sim.telematicsMonthly !== undefined) setTelematicsMonthly(sim.telematicsMonthly);
+    if (sim.washingEnabled !== undefined) setWashingEnabled(sim.washingEnabled);
+    if (sim.washingUnitCost !== undefined) setWashingUnitCost(sim.washingUnitCost);
+    if (sim.washingCountPerMonth !== undefined) setWashingCountPerMonth(sim.washingCountPerMonth);
+    setExtraCostDescription(sim.extraCostDescription || '');
+    setExtraCostAmount(sim.extraCostAmount || 0);
+    setExtraCostFrequency(sim.extraCostFrequency || 'monthly');
+    setPartnerFeePerTrip(sim.partnerFeePerTrip || 0);
+    setTripsPerDay(sim.tripsPerDay || 1);
+    setPaymentTermsClient(sim.paymentTermsClient ?? 60);
+    setPaymentTermsSuppliers(sim.paymentTermsSuppliers ?? 30);
+    if (sim.leasePaymentTiming) setLeasePaymentTiming(sim.leasePaymentTiming);
+    if (sim.trailerLeasePaymentTiming) setTrailerLeasePaymentTiming(sim.trailerLeasePaymentTiming);
+    setClientCount(sim.clientCount || 1);
+    setCostAllocationMode(sim.costAllocationMode || 'equal');
+    if (Array.isArray(sim.billingEntities) && sim.billingEntities.length > 0) {
+      setBillingEntities(prev => prev.map((def, i) => sim.billingEntities[i] || def));
+    }
+    if (Array.isArray(sim.routeStops) && sim.routeStops.length >= 2) {
+      setRouteStops(sim.routeStops);
+    }
+    if (sim.isRoundTrip !== undefined) setIsRoundTrip(Boolean(sim.isRoundTrip));
+    setOrographicMultiplier(sim.orographicMultiplier || 1.0);
+    if (sim.orographyProfile) {
+      setRouteAnalysis(prev => ({
+        ...(prev || {}),
+        orography: sim.orographyProfile,
+        generatedRouteName: sim.routeName
+      }));
+    }
+    setRegSaveBanner(`Simulazione ${sim.code} caricata nel configuratore. Clicca "Calcola Preventivo" per aggiornare.`);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleDeleteSavedSimulation = (id) => {
+    storageService.deleteSimulation(id);
+    if (activeSimulationId === id) {
+      setActiveSimulationId(null);
+      setActiveSimulationCode('');
+    }
+    setSavedSimulations(storageService.getSimulations());
+  };
+
+  // Converte direttamente una simulazione registrata nell'archivio in una Commessa Attiva o Trattativa in ProjectsPage
+  const handleConvertSavedSimToProject = (sim, statusType = 'active') => {
+    if (!sim) return;
+    const isPotential = statusType === 'potential';
+    const veh = fleet.find(v => v.id === sim.vehicleId) || fleet[0];
+    const trl = trailers.find(t => t.id === sim.trailerId) || null;
+    const snap = sim.resultSnapshot || {};
+    const workingDays = sim.workingDaysMonth || 22;
+    const leaseTiming = sim.leasePaymentTiming || 'M1_D10';
+    const leaseTerms = leaseTiming === 'M1_D10' ? 0 : leaseTiming === 'M1_D30' ? 30 : 60;
+    const isMulti = Boolean(sim.isMultiClient) && Array.isArray(sim.billingEntities) && sim.billingEntities.length > 1;
+    const shiftType = sim.doubleDrivers ? '2_turni' : (sim.isNightShift ? '1_notturno' : '1_diurno');
+    const driverDaily = calculateDriverDailyCost(veh, shiftType, settings || {});
+    const vLeaseDaily = workingDays > 0 ? (Number(veh?.monthlyLease) || 0) / workingDays : 0;
+    const tLeaseDaily = (trl && workingDays > 0) ? (Number(trl.monthlyLease) || 0) / workingDays : 0;
+    const highwayKm = ((Number(sim.kmTotal) || 0) * (Number(sim.kmHighwayPercent) || 60)) / 100;
+    const tollsDaily = +(highwayKm * (Number(sim.tollRate) || 0.12)).toFixed(2);
+    const tiresDaily = +((Number(sim.kmTotal) || 0) * (Number(sim.tireRate) || 0.04)).toFixed(2);
+    const partnerDaily = +((Number(sim.partnerFeePerTrip) || 0) * (Number(sim.tripsPerDay) || 1)).toFixed(2);
+
+    let fuelDaily = 0;
+    if (sim.energyPayer !== 'client' && veh) {
+      const fPrice = Number(sim.fuelPrice) || 0.38;
+      const km = Number(sim.kmTotal) || 0;
+      const oro = Number(sim.orographicMultiplier) || 1.0;
+      if (veh.fuelTypeId === 'elettrico') fuelDaily = +((veh.avgConsumption || 1.2) * km * fPrice * oro).toFixed(2);
+      else if (veh.fuelTypeId === 'biolng') {
+        const base = veh.yieldKmPerUnit > 0 ? (km / veh.yieldKmPerUnit) * fPrice : ((veh.avgConsumption || 30) / 100) * km * fPrice;
+        fuelDaily = +(base * oro).toFixed(2);
+      } else {
+        fuelDaily = +(((veh.avgConsumption || 32) / 100) * km * fPrice * oro).toFixed(2);
+      }
+    }
+
+    const newProject = {
+      code: (isPotential ? 'SIM-' : 'PRJ-') + Math.floor(100 + Math.random() * 900),
+      sourceSimulationId: sim.id,
+      sourceSimulationCode: sim.code,
+      name: isMulti
+        ? `Multi-Commessa (${sim.clientCount} Clienti): ${sim.routeName || sim.clientName}`
+        : `${sim.clientName || 'Cliente'} - ${sim.routeName || `${sim.kmTotal} km/gg`}`,
+      client: sim.clientName || 'Cliente',
+      route: sim.routeName || `${sim.kmTotal} km giornalieri`,
+      routeStops: sim.routeStops || [],
+      isRoundTrip: sim.isRoundTrip !== undefined ? sim.isRoundTrip : true,
+      orographicMultiplier: sim.orographicMultiplier || 1.0,
+      orographyProfile: sim.orographyProfile || null,
+      tollRate: sim.tollRate || 0.12,
+      isMultiClient: isMulti,
+      costAllocationMode: sim.costAllocationMode || 'equal',
+      billingEntities: isMulti ? sim.billingEntities : [],
+      startDate: new Date().toISOString().slice(0, 10),
+      operatingMonths: Number(sim.operatingMonths) || 36,
+      workingDaysMonth: workingDays,
+      kmDaily: Number(sim.kmTotal) || 250,
+      highwayPercent: Number(sim.kmHighwayPercent) || 65,
+      managementType: veh?.ownershipType === 'terzi' ? 'T' : 'D',
+      vehicleId: veh?.id || '',
+      trailerId: trl ? trl.id : '',
+      driverShiftType: shiftType,
+      driverManualOverride: false,
+      driverCostDaily: +driverDaily.toFixed(2),
+      energyPayer: sim.energyPayer || 'four',
+      fuelCostDaily: fuelDaily,
+      tollsDaily,
+      tiresDaily,
+      refrigerationEnabled: Boolean(sim.refrigerationEnabled),
+      refrigerationTech: sim.refrigerationTech || 'gasolio',
+      refrigerationUnitCost: Number(sim.refrigerationUnitCost) || 1.80,
+      refrigerationHourlyConsumption: Number(sim.refrigerationHourlyConsumption) || 3.0,
+      refrigerationHoursDaily: Number(sim.refrigerationHoursDaily) || 8,
+      refrigerationCostDaily: 0,
+      telematicsEnabled: sim.telematicsEnabled !== false,
+      telematicsAuto: sim.telematicsAuto !== false,
+      telematicsMonthly: Number(sim.telematicsMonthly) || 14,
+      telematicsCostDaily: +((Number(sim.telematicsMonthly) || 14) / workingDays).toFixed(2),
+      washingEnabled: sim.washingEnabled !== false,
+      washingUnitCost: Number(sim.washingUnitCost) || 80,
+      washingCountPerMonth: Number(sim.washingCountPerMonth) || 2,
+      washingCostDaily: +(((Number(sim.washingUnitCost) || 80) * (Number(sim.washingCountPerMonth) || 2)) / workingDays).toFixed(2),
+      extraCostDescription: sim.extraCostDescription || '',
+      extraCostAmount: Number(sim.extraCostAmount) || 0,
+      extraCostFrequency: sim.extraCostFrequency || 'monthly',
+      extraCostDaily: 0,
+      otherCostsDaily: 0,
+      partnerMarginDaily: partnerDaily,
+      porterageDaily: 0,
+      vehicleLeaseDaily: +vLeaseDaily.toFixed(2),
+      trailerLeaseDaily: +tLeaseDaily.toFixed(2),
+      revenueDaily: +(snap.revenueDailyTarget || 750).toFixed(2),
+      totalCostDaily: +(snap.totalCostDaily || 600).toFixed(2),
+      molDaily: +(snap.molDailyTarget || 150).toFixed(2),
+      monthlyCost: +(snap.monthlyCost || 13200).toFixed(2),
+      monthlyRevenue: +(snap.monthlyRevenue || 16500).toFixed(2),
+      monthlyMol: +(snap.monthlyMol || 3300).toFixed(2),
+      molPercent: snap.molPercent ?? 21,
+      targetMarginPercent: snap.molPercent ?? 21,
+      contractStatus: isPotential ? 'potential' : 'active',
+      isPipelineFuture: isPotential,
+      paymentTermsClient: sim.paymentTermsClient ?? 60,
+      paymentTermsSuppliers: sim.paymentTermsSuppliers ?? 30,
+      paymentTermsLease: leaseTerms,
+      leasePaymentTiming: leaseTiming,
+      trailerLeasePaymentTiming: sim.trailerLeasePaymentTiming || 'M1_D30',
+      paymentTermsDriver: sim.paymentTermsDriver ?? 16,
+      paymentTermsFuel: sim.paymentTermsFuel ?? 30,
+      paymentTermsTolls: sim.paymentTermsTolls ?? 15,
+      paymentTermsTires: sim.paymentTermsTires ?? 30,
+      paymentTermsRefrigeration: sim.paymentTermsRefrigeration ?? 30,
+      paymentTermsTelematics: sim.paymentTermsTelematics ?? 30,
+      paymentTermsWashing: sim.paymentTermsWashing ?? 30,
+      paymentTermsExtra: sim.paymentTermsExtra ?? 30,
+      acciseRecoveryEligible: sim.energyPayer !== 'client',
+      depositAmount: 0,
+      cashAdvanceRequired: +(snap.workingCapitalNeed || 15000).toFixed(2),
+      notes: `Convertita da Simulazione registrata ${sim.code}${sim.orographyProfile ? ` | Orografia: ${sim.orographyProfile.terrainLabel} (D+ ${sim.orographyProfile.elevationGainM}m, fattore consumi ${sim.orographicMultiplier}x)` : ''}`
+    };
+
+    const createdProj = storageService.addProject(newProject);
+    storageService.updateSimulation(sim.id, {
+      status: isPotential ? 'in_negotiation' : 'accepted',
+      convertedProjectId: createdProj.id,
+      convertedProjectCode: createdProj.code,
+      convertedAt: new Date().toISOString()
+    });
+    setSavedSimulations(storageService.getSimulations());
+    navigate('/projects');
   };
 
   // Salva direttamente nel Budget Commesse FOUR passando TUTTI i parametri e le nuove voci
@@ -633,11 +1027,26 @@ const SimulationPage = () => {
       paymentTermsExtra,
       acciseRecoveryEligible: energyPayer !== 'client',
       depositAmount: 0,
+      sourceSimulationId: activeSimulationId || null,
+      sourceSimulationCode: activeSimulationCode || null,
+      routeStops: simulationResult.routeStops || routeStops || [],
+      isRoundTrip: simulationResult.isRoundTrip !== undefined ? simulationResult.isRoundTrip : isRoundTrip,
+      orographicMultiplier: simulationResult.orographicMultiplier || orographicMultiplier || 1.0,
+      orographyProfile: simulationResult.routeAnalysis?.orography || routeAnalysis?.orography || null,
+      tollRate: simulationResult.tollRate || tollRate || 0.12,
       cashAdvanceRequired: +simulationResult.workingCapitalNeed.toFixed(2),
-      notes: `${isPotential ? 'Trattativa / Simulazione potenziale' : 'Contratto operativo attivo'}${isMulti ? ` Multi-Commessa (${simulationResult.clientCount} clienti • Riparto: ${COST_ALLOCATION_MODES[simulationResult.costAllocationMode]?.shortLabel})` : ''} generato dal simulatore con margine ${simulationResult.molPercent}%${extraCostDescription ? ` | Extra: ${extraCostDescription}` : ''}`
+      notes: `${isPotential ? 'Trattativa / Simulazione potenziale' : 'Contratto operativo attivo'}${isMulti ? ` Multi-Commessa (${simulationResult.clientCount} clienti • Riparto: ${COST_ALLOCATION_MODES[simulationResult.costAllocationMode]?.shortLabel})` : ''}${routeAnalysis?.orography ? ` | Orografia: ${routeAnalysis.orography.terrainLabel} (D+ ${routeAnalysis.orography.elevationGainM}m, fattore consumi ${simulationResult.orographicMultiplier || 1}x)` : ''} generato dal simulatore con margine ${simulationResult.molPercent}%${extraCostDescription ? ` | Extra: ${extraCostDescription}` : ''}`
     };
 
-    storageService.addProject(newProject);
+    const createdProj = storageService.addProject(newProject);
+    if (activeSimulationId) {
+      storageService.updateSimulation(activeSimulationId, {
+        status: isPotential ? 'in_negotiation' : 'accepted',
+        convertedProjectId: createdProj.id,
+        convertedProjectCode: createdProj.code,
+        convertedAt: new Date().toISOString()
+      });
+    }
     setSaveMode(statusType);
     setSaveSuccess(true);
     setTimeout(() => {
@@ -780,14 +1189,225 @@ const SimulationPage = () => {
                 <Calculator className="w-6 h-6" />
               </span>
               <div>
-                <h1 className="text-2xl font-black text-slate-900 tracking-tight">Simulatore Costi Tratta & Preventivi (1-4 Clienti)</h1>
+                <div className="flex items-center space-x-2 flex-wrap">
+                  <h1 className="text-2xl font-black text-slate-900 tracking-tight">Simulatore Costi Tratta &amp; Preventivi (1-4 Clienti)</h1>
+                  {activeSimulationCode && (
+                    <span className="px-2.5 py-0.5 rounded-full text-xs font-black bg-blue-100 text-[#164e87] border border-blue-300">
+                      Preventivo attivo: {activeSimulationCode}
+                    </span>
+                  )}
+                </div>
                 <p className="text-xs text-slate-500">
-                  Calcolo costi a fattor comune, ribaltamento automatico o manuale, tariffe attive separate e marginalità per singolo cliente
+                  Calcolo automatico Km, pedaggi e consumi orografici da indirizzi tappe • Costi a fattor comune (1-4 clienti) • Registro preventivi convertibili
                 </p>
               </div>
             </div>
           </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            {activeSimulationId && (
+              <button
+                type="button"
+                onClick={handleNewBlankSimulation}
+                className="inline-flex items-center space-x-1.5 px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl font-bold text-xs transition border border-slate-300"
+              >
+                <Plus className="w-4 h-4 text-emerald-700" />
+                <span>Nuova Simulazione</span>
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setShowSavedRegistry(!showSavedRegistry)}
+              className="inline-flex items-center space-x-2 px-4 py-2 bg-[#164e87] hover:bg-[#0e3a6c] text-white rounded-xl font-bold text-xs shadow-sm transition"
+            >
+              <FolderOpen className="w-4 h-4 text-cyan-300" />
+              <span>Registro Simulazioni ({savedSimulations.length})</span>
+              {showSavedRegistry ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+            </button>
+          </div>
         </div>
+
+        {/* Banner conferma registrazione automatica preventivo */}
+        {regSaveBanner && (
+          <div className="bg-emerald-50 border border-emerald-300 text-emerald-900 px-4 py-2.5 rounded-xl text-xs font-bold flex items-center justify-between shadow-2xs">
+            <div className="flex items-center space-x-2">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 flex-shrink-0" />
+              <span>{regSaveBanner}</span>
+            </div>
+            <span className="text-[10px] text-emerald-700">Tutte le simulazioni restano salvate e pronte per essere convertite in commessa</span>
+          </div>
+        )}
+
+        {/* REGISTRO SIMULAZIONI & PREVENTIVI SALVATI (CONVERTIBILI IN COMMESSA SE ACCETTATI DAL CLIENTE) */}
+        {showSavedRegistry && (
+          <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+            <div className="p-4 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center space-x-2.5">
+                <span className="p-2 bg-blue-100 text-[#164e87] rounded-xl">
+                  <FolderOpen className="w-4 h-4" />
+                </span>
+                <div>
+                  <h2 className="text-sm font-black text-slate-900">
+                    Registro Simulazioni &amp; Preventivi Registrati ({savedSimulations.length})
+                  </h2>
+                  <p className="text-[11px] text-slate-500">
+                    Ogni simulazione calcolata viene registrata automaticamente qui: puoi ricaricarla per modifiche o <strong>convertirla in Commessa Attiva</strong> appena accettata dal cliente.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {savedSimulations.length === 0 ? (
+              <div className="p-6 text-center text-xs text-slate-500">
+                Nessuna simulazione registrata in archivio. Compila i parametri sotto e clicca <strong>&quot;Calcola &amp; Registra Preventivo&quot;</strong> per salvarla automaticamente.
+              </div>
+            ) : (
+              <div className="overflow-x-auto max-h-80 overflow-y-auto">
+                <table className="w-full text-xs text-left divide-y divide-slate-200">
+                  <thead className="bg-[#f0f4f9] text-[#164e87] font-extrabold uppercase text-[10px] sticky top-0 z-10">
+                    <tr>
+                      <th className="py-2.5 px-3">Cod. &amp; Stato</th>
+                      <th className="py-2.5 px-3">Cliente/i &amp; Tratta (Tappe / Orografia)</th>
+                      <th className="py-2.5 px-3">Mezzo &amp; Km</th>
+                      <th className="py-2.5 px-3 text-right">Costo / Tariffa gg</th>
+                      <th className="py-2.5 px-3 text-right">Ricavo &amp; M.O.L. / Mese</th>
+                      <th className="py-2.5 px-3 text-center">Azioni &amp; Conversione in Commessa</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {savedSimulations.map(sim => {
+                      const snap = sim.resultSnapshot || {};
+                      const isAccepted = sim.status === 'accepted';
+                      const isNegotiation = sim.status === 'in_negotiation';
+                      const isCurrent = activeSimulationId === sim.id;
+
+                      return (
+                        <tr
+                          key={sim.id}
+                          className={`transition ${
+                            isCurrent
+                              ? 'bg-blue-50/70'
+                              : isAccepted
+                                ? 'bg-emerald-50/30 hover:bg-emerald-50/60'
+                                : 'hover:bg-slate-50'
+                          }`}
+                        >
+                          <td className="py-2.5 px-3 whitespace-nowrap">
+                            <div className="flex items-center space-x-1.5">
+                              <span className="font-mono font-black text-xs px-2 py-0.5 rounded bg-slate-100 text-slate-800 border border-slate-300">
+                                {sim.code || 'PREV'}
+                              </span>
+                              {sim.isMultiClient && (
+                                <span className="px-1.5 py-0.5 rounded-full text-[9px] font-black bg-indigo-100 text-indigo-800 border border-indigo-200">
+                                  {sim.clientCount} Clienti
+                                </span>
+                              )}
+                            </div>
+                            <div className="mt-1">
+                              {isAccepted ? (
+                                <span className="inline-flex items-center gap-1 text-[10px] font-black px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300">
+                                  <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                                  Accettata ({sim.convertedProjectCode || 'Attiva'})
+                                </span>
+                              ) : isNegotiation ? (
+                                <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300">
+                                  <Sparkles className="w-3 h-3 text-amber-600" />
+                                  In Trattativa ({sim.convertedProjectCode || 'What-If'})
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200">
+                                  <Clock className="w-2.5 h-2.5" />
+                                  Registrata • In Valutazione
+                                </span>
+                              )}
+                            </div>
+                          </td>
+
+                          <td className="py-2.5 px-3">
+                            <div className="font-black text-slate-900">{sim.clientName || 'Trattativa Commerciale'}</div>
+                            <div className="text-[11px] text-slate-600">{sim.routeName || `${sim.kmTotal} km/gg`}</div>
+                            {sim.orographyProfile && (
+                              <div className="text-[10px] text-emerald-800 font-semibold mt-0.5 flex items-center gap-1.5 flex-wrap">
+                                <span className="bg-emerald-50 border border-emerald-200 px-1.5 py-0.2 rounded">
+                                  ⛰️ {sim.orographyProfile.terrainLabel} (D+ {sim.orographyProfile.elevationGainM}m)
+                                </span>
+                                {sim.orographicMultiplier && sim.orographicMultiplier !== 1 && (
+                                  <span className="text-amber-800 bg-amber-50 border border-amber-200 px-1.5 py-0.2 rounded">
+                                    Consumi {sim.orographicMultiplier > 1 ? `+${Math.round((sim.orographicMultiplier - 1) * 100)}%` : 'std'}
+                                  </span>
+                                )}
+                              </div>
+                            )}
+                          </td>
+
+                          <td className="py-2.5 px-3">
+                            <div className="font-bold text-slate-800">{sim.vehicleName || 'Mezzo'}</div>
+                            <div className="text-[10px] text-slate-500">
+                              {sim.kmTotal} km/gg ({sim.kmHighwayPercent}% Autostr.) • {sim.workingDaysMonth || 22} gg/m
+                            </div>
+                          </td>
+
+                          <td className="py-2.5 px-3 text-right whitespace-nowrap">
+                            <div className="text-[11px] text-slate-500">Costo: <strong className="text-slate-800">{formatEUR(snap.totalCostDaily || 0)}/gg</strong></div>
+                            <div className="text-xs font-black text-[#164e87]">Tariffa: {formatEUR(snap.revenueDailyTarget || 0)}/gg</div>
+                          </td>
+
+                          <td className="py-2.5 px-3 text-right whitespace-nowrap">
+                            <div className="font-black text-slate-900">{formatEUR(snap.monthlyRevenue || 0)}/m</div>
+                            <div className="flex items-center justify-end gap-1 mt-0.5">
+                              <span className="text-emerald-700 font-bold text-[11px]">M.O.L. {formatEUR(snap.monthlyMol || 0)}</span>
+                              <span className="px-1.5 py-0.2 rounded bg-emerald-100 text-emerald-800 font-black text-[10px]">
+                                {formatPercent(snap.molPercent || sim.targetMarginPercent || 21)}
+                              </span>
+                            </div>
+                          </td>
+
+                          <td className="py-2.5 px-3 text-center whitespace-nowrap">
+                            <div className="flex items-center justify-center gap-1.5 flex-wrap">
+                              <button
+                                type="button"
+                                onClick={() => handleLoadSavedSimulation(sim)}
+                                className="px-2.5 py-1 bg-slate-100 hover:bg-blue-50 text-[#164e87] border border-slate-300 rounded-lg font-bold text-[11px] transition"
+                                title="Ricarica tutti i parametri di questa simulazione nel configuratore sotto"
+                              >
+                                🔄 Ricarica
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleConvertSavedSimToProject(sim, 'active')}
+                                className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-black text-[11px] shadow-2xs transition flex items-center gap-1"
+                                title="Il cliente ha accettato il preventivo: convertilo immediatamente in Commessa Attiva a budget"
+                              >
+                                <Check className="w-3 h-3" />
+                                <span>Converti in Attiva</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleConvertSavedSimToProject(sim, 'potential')}
+                                className="px-2 py-1 bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-300 rounded-lg font-bold text-[10px] transition"
+                                title="Invia a Commesse & Budget come Trattativa / What-If"
+                              >
+                                ⚡ In Trattativa
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteSavedSimulation(sim.id)}
+                                className="p-1 text-slate-400 hover:text-rose-600 rounded transition"
+                                title="Elimina simulazione dall'archivio"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Layout a 2 colonne: Input a Sinistra, Risultati a Destra */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
@@ -1085,27 +1705,211 @@ const SimulationPage = () => {
                 </select>
               </div>
 
-              {/* Distanza & Tipologia percorso */}
-              <div className="grid grid-cols-2 gap-3">
+              {/* CALCOLATORE AUTOMATICO KM, AUTOSTRADA, PEDAGGI & OROGRAFIA CONSUMI DA INDIRIZZI TAPPE (API PUBBLICHE) */}
+              <div className="p-3.5 bg-gradient-to-br from-emerald-50/90 via-teal-50/50 to-cyan-50/40 rounded-xl border border-emerald-300 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-1.5">
+                    <Navigation className="w-4 h-4 text-emerald-700" />
+                    <span className="font-extrabold text-emerald-950 text-xs uppercase tracking-wider">
+                      Calcolo Automatico Km, Autostrada &amp; Orografia da Tappe
+                    </span>
+                  </div>
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-white text-emerald-800 border border-emerald-200">
+                    API OSM • OSRM • Open-Meteo DEM
+                  </span>
+                </div>
+
+                {/* Lista Indirizzi / Tappe (Partenza, Tappe Intermedie, Arrivo) */}
+                <div className="space-y-2">
+                  <datalist id="four-known-hubs-list">
+                    {KNOWN_LOGISTICS_HUBS.map(h => (
+                      <option key={h.name} value={h.name} />
+                    ))}
+                  </datalist>
+
+                  {routeStops.map((stop, idx) => (
+                    <div key={stop.id || idx} className="flex items-center space-x-1.5">
+                      <span className={`w-6 h-6 rounded-full flex items-center justify-center font-black text-[10px] flex-shrink-0 ${
+                        idx === 0
+                          ? 'bg-emerald-600 text-white'
+                          : idx === routeStops.length - 1
+                            ? 'bg-[#164e87] text-white'
+                            : 'bg-amber-500 text-slate-950'
+                      }`}>
+                        {idx + 1}
+                      </span>
+                      <input
+                        type="text"
+                        list="four-known-hubs-list"
+                        placeholder={idx === 0 ? 'Indirizzo o Polo di Partenza (es. Bologna Interporto, Via...)' : `Indirizzo Tappa / Scarico #${idx} (es. Firenze, Via...)`}
+                        value={stop.address}
+                        onChange={(e) => handleUpdateRouteStop(idx, e.target.value)}
+                        className="w-full px-2.5 py-1.5 border border-emerald-300 rounded-lg bg-white font-semibold text-xs text-slate-800"
+                      />
+                      {routeStops.length > 2 && (
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveRouteStop(idx)}
+                          className="p-1 text-slate-400 hover:text-rose-600 rounded"
+                          title="Rimuovi tappa"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+
+                  <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={handleAddRouteStop}
+                      disabled={routeStops.length >= 8}
+                      className="inline-flex items-center space-x-1 text-[11px] font-bold text-[#164e87] hover:underline disabled:opacity-40"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>+ Aggiungi Tappa Intermedia / Cliente (fino a 8)</span>
+                    </button>
+
+                    <label className="inline-flex items-center space-x-1.5 cursor-pointer font-bold text-emerald-950 text-[11px]">
+                      <input
+                        type="checkbox"
+                        checked={isRoundTrip}
+                        onChange={(e) => setIsRoundTrip(e.target.checked)}
+                        className="rounded text-emerald-600"
+                      />
+                      <span>Andata e Ritorno (A/R • Chiudi anello su Tappa 1)</span>
+                    </label>
+                  </div>
+                </div>
+
+                {/* Pulsante Calcola Percorso, Autostrada e Profilo Orografico */}
+                <button
+                  type="button"
+                  onClick={handleCalculateRouteFromApi}
+                  disabled={routeCalculating}
+                  className="w-full py-2 px-3 bg-emerald-700 hover:bg-emerald-800 disabled:bg-emerald-400 text-white rounded-xl font-black text-xs shadow-sm transition flex items-center justify-center space-x-2"
+                >
+                  {routeCalculating ? (
+                    <>
+                      <RotateCw className="w-4 h-4 animate-spin" />
+                      <span>Interrogazione API Stradali &amp; Altimetriche in corso...</span>
+                    </>
+                  ) : (
+                    <>
+                      <MapPin className="w-4 h-4 text-emerald-200" />
+                      <span>Calcola Km Reali, % Autostrada, Pedaggi &amp; Orografia Consumi</span>
+                    </>
+                  )}
+                </button>
+
+                {routeError && (
+                  <div className="p-2 bg-rose-50 border border-rose-200 rounded-lg text-[11px] text-rose-700 font-semibold">
+                    ⚠️ {routeError}
+                  </div>
+                )}
+
+                {/* Box Risultato Analisi Stradale & Orografica */}
+                {routeAnalysis && (
+                  <div className="p-2.5 bg-white/95 rounded-xl border border-emerald-200 space-y-2 text-[11px]">
+                    <div className="flex flex-wrap items-center justify-between gap-1 border-b border-slate-100 pb-1.5">
+                      <span className="font-black text-slate-900 flex items-center gap-1">
+                        <Mountain className="w-3.5 h-3.5 text-emerald-700" />
+                        <span>Orografia: {routeAnalysis.orography.terrainLabel}</span>
+                      </span>
+                      <span className="font-mono font-bold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                        {routeAnalysis.totalDailyKm} km/gg ({routeAnalysis.highwayPercent}% Autostrada)
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-[10px]">
+                      <div className="bg-slate-50 p-1.5 rounded border border-slate-200">
+                        <span className="text-slate-500 block">Dislivello &amp; Quote:</span>
+                        <strong className="text-slate-800">
+                          D+ {routeAnalysis.orography.elevationGainM}m ({routeAnalysis.orography.minElevationM}–{routeAnalysis.orography.maxElevationM}m s.l.m.)
+                        </strong>
+                      </div>
+                      <div className="bg-slate-50 p-1.5 rounded border border-slate-200">
+                        <span className="text-slate-500 block">Fattore Orografico Consumi:</span>
+                        <strong className={routeAnalysis.orography.consumptionDeltaPercent > 0 ? 'text-amber-700' : 'text-emerald-700'}>
+                          {routeAnalysis.orography.consumptionMultiplier}x ({routeAnalysis.orography.consumptionDeltaPercent >= 0 ? `+${routeAnalysis.orography.consumptionDeltaPercent}%` : `${routeAnalysis.orography.consumptionDeltaPercent}%`})
+                        </strong>
+                        {routeAnalysis.orography.regenerativeRecoveryPercent > 0 && (
+                          <span className="block text-[9px] text-emerald-600 font-bold">
+                            ⚡ Rec. rigenerativo BEV -{routeAnalysis.orography.regenerativeRecoveryPercent}%
+                          </span>
+                        )}
+                      </div>
+                      <div className="bg-slate-50 p-1.5 rounded border border-slate-200 col-span-2 sm:col-span-1">
+                        <span className="text-slate-500 block">Stima Pedaggio ({routeAnalysis.tollEstimation?.vehicleTollClass?.split(' ')[0] || 'Pesante'}):</span>
+                        <strong className="text-[#164e87]">
+                          {formatEUR(routeAnalysis.estimatedTollsDaily)}/gg ({routeAnalysis.tollEstimation?.suggestedRate} €/km)
+                        </strong>
+                      </div>
+                    </div>
+
+                    {routeAnalysis.legSummaries?.length > 1 && (
+                      <div className="pt-1 border-t border-slate-100 space-y-0.5 text-[10px] text-slate-600">
+                        <span className="font-bold text-slate-700 block">Dettaglio Tappe calcolate:</span>
+                        {routeAnalysis.legSummaries.map(leg => (
+                          <div key={leg.legIndex} className="flex justify-between">
+                            <span>Tappa {leg.legIndex}: {leg.from.split(',')[0]} → {leg.to.split(',')[0]}</span>
+                            <strong className="text-slate-800">{leg.km} km (~{leg.durationMin} min)</strong>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Distanza, % Autostrada, Tariffa Pedaggio e Fattore Orografico Consumi */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
                 <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Km Totali Giornalieri *</label>
+                  <label className="block font-semibold text-slate-700 mb-1">Km Totali / Giorno *</label>
                   <input
                     type="number"
                     required
                     value={kmTotal}
                     onChange={(e) => setKmTotal(parseFloat(e.target.value) || 0)}
-                    className="w-full px-3 py-1.5 border border-slate-300 rounded-xl font-bold"
+                    className="w-full px-2.5 py-1.5 border border-slate-300 rounded-xl font-bold"
                   />
                 </div>
                 <div>
-                  <label className="block font-semibold text-slate-700 mb-1">% Percorso Autostrada</label>
+                  <label className="block font-semibold text-slate-700 mb-1">% Autostrada</label>
                   <input
                     type="number"
                     min="0"
                     max="100"
                     value={kmHighwayPercent}
                     onChange={(e) => setKmHighwayPercent(parseFloat(e.target.value) || 0)}
-                    className="w-full px-3 py-1.5 border border-slate-300 rounded-xl"
+                    className="w-full px-2.5 py-1.5 border border-slate-300 rounded-xl font-bold"
+                  />
+                </div>
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1" title="Tariffa pedaggio autostradale €/km (calibrata su assi e orografia)">
+                    Pedaggio (€/km)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={tollRate}
+                    onChange={(e) => setTollRate(parseFloat(e.target.value) || 0)}
+                    className="w-full px-2.5 py-1.5 border border-blue-300 bg-blue-50/40 rounded-xl font-bold text-[#164e87]"
+                  />
+                </div>
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1" title="Moltiplicatore orografico consumi (1.00 = Pianura, >1.00 = Collina/Appennino)">
+                    Fattore Orografia
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0.7"
+                    max="2.5"
+                    value={orographicMultiplier}
+                    onChange={(e) => setOrographicMultiplier(parseFloat(e.target.value) || 1.0)}
+                    className="w-full px-2.5 py-1.5 border border-emerald-300 bg-emerald-50/40 rounded-xl font-bold text-emerald-900"
                   />
                 </div>
               </div>

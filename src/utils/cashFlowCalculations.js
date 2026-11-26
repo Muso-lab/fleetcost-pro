@@ -1506,7 +1506,8 @@ export const recalculateProjectCost = (project, fleet = [], trailers = [], setti
       trailerLeaseDaily = Number(project.trailerLeaseDaily) || 0;
     }
 
-    // 3. Carburante / Energia (NOTA 1.2: se a carico del Cliente -> sempre 0 €)
+    // 3. Carburante / Energia (NOTA 1.2: se a carico del Cliente -> sempre 0 €) + Fattore Orografico se presente
+    const oroFactor = Number(project.orographicMultiplier) > 0 ? Number(project.orographicMultiplier) : 1.0;
     if (project.energyPayer === 'client') {
       fuelCostDaily = 0;
     } else if (vehicle && km > 0) {
@@ -1515,26 +1516,26 @@ export const recalculateProjectCost = (project, fleet = [], trailers = [], setti
 
       if (vehicle.fuelTypeId === 'elettrico') {
         const consumptionKwhKm = vehicle.avgConsumption || 1.18;
-        fuelCostDaily = +(km * consumptionKwhKm * fuelPrice).toFixed(2);
+        fuelCostDaily = +(km * consumptionKwhKm * fuelPrice * oroFactor).toFixed(2);
       } else if (vehicle.fuelTypeId === 'biolng') {
         if (vehicle.yieldKmPerUnit && vehicle.yieldKmPerUnit > 0) {
-          fuelCostDaily = +((km / vehicle.yieldKmPerUnit) * fuelPrice).toFixed(2);
+          fuelCostDaily = +((km / vehicle.yieldKmPerUnit) * fuelPrice * oroFactor).toFixed(2);
         } else {
           const consumptionKg100 = vehicle.avgConsumption || 29.5;
-          fuelCostDaily = +(((consumptionKg100) / 100) * km * fuelPrice).toFixed(2);
+          fuelCostDaily = +(((consumptionKg100) / 100) * km * fuelPrice * oroFactor).toFixed(2);
         }
       } else {
         const consumptionL100 = vehicle.avgConsumption || 30.0;
-        fuelCostDaily = +(((consumptionL100) / 100) * km * fuelPrice).toFixed(2);
+        fuelCostDaily = +(((consumptionL100) / 100) * km * fuelPrice * oroFactor).toFixed(2);
       }
     } else {
       fuelCostDaily = Number(project.fuelCostDaily) || 0;
     }
 
-    // 4. Pedaggi Autostrada al variare dei Km
+    // 4. Pedaggi Autostrada al variare dei Km (usa tariffa specifica da orografia/classe mezzo se presente)
     if (km > 0) {
       const hPercent = project.highwayPercent !== undefined ? project.highwayPercent : 70;
-      const tollRate = standardCosts.tollRateHighwayKm || 0.12;
+      const tollRate = Number(project.tollRate) > 0 ? Number(project.tollRate) : (standardCosts.tollRateHighwayKm || 0.12);
       tollsDaily = +((km * (hPercent / 100)) * tollRate).toFixed(2);
     } else {
       tollsDaily = Number(project.tollsDaily) || 0;
