@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import storageService from '../services/storageService';
 import { formatEUR } from '../utils/cashFlowCalculations';
@@ -38,13 +38,30 @@ const SETTINGS_TABS = [
   { id: 'security', label: 'Sicurezza & Password', icon: Lock }
 ];
 
+const getFuelPriceUnit = (fuelId) => {
+  if (fuelId === 'elettrico') return '€/kWh';
+  if (fuelId === 'biolng') return '€/kg';
+  if (fuelId === 'azoto') return '€/gg';
+  return '€/L';
+};
+
+const safeNonNeg = (val, fallback = 0) => {
+  if (val === '' || val === null || val === undefined) return fallback;
+  const parsed = parseFloat(val);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+};
+
 const SettingsPage = () => {
   const { authConfig, updatePassword } = useAuth();
   const [settings, setSettings] = useState(null);
   const [activeTab, setActiveTab] = useState('fuels');
   const [saveMessage, setSaveMessage] = useState('');
+  const [isDirty, setIsDirty] = useState(false);
   const [cloudStatus, setCloudStatus] = useState(() => storageService.getCloudStatus());
+  const [cloudSyncing, setCloudSyncing] = useState(false);
   const [showBenchmarks, setShowBenchmarks] = useState(false);
+  const [calcHighlight, setCalcHighlight] = useState(false);
+  const calculatorRef = useRef(null);
 
   // Stato Backup & Ripristino Cloud
   const [backupPreview, setBackupPreview] = useState(null);
@@ -58,26 +75,39 @@ const SettingsPage = () => {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [pwdError, setPwdError] = useState('');
   const [pwdSuccess, setPwdSuccess] = useState('');
+  const [pwdSaving, setPwdSaving] = useState(false);
 
   const handleChangePassword = async (e) => {
     e.preventDefault();
+    if (pwdSaving) return;
     setPwdError('');
     setPwdSuccess('');
 
+    if (!newPassword || newPassword.length < 6) {
+      setPwdError('La nuova password deve contenere almeno 6 caratteri.');
+      return;
+    }
+    if (newPassword === oldPassword) {
+      setPwdError('La nuova password deve essere diversa da quella attuale.');
+      return;
+    }
     if (newPassword !== confirmPassword) {
       setPwdError('La nuova password e la conferma non coincidono.');
       return;
     }
 
+    setPwdSaving(true);
     try {
       await updatePassword(oldPassword, newPassword);
-      setPwdSuccess('Password aggiornata con successo! La nuova password è ora attiva.');
+      setPwdSuccess('Password aggiornata con successo! La nuova password è ora attiva e sincronizzata sul Cloud.');
       setOldPassword('');
       setNewPassword('');
       setConfirmPassword('');
       setTimeout(() => setPwdSuccess(''), 5000);
     } catch (err) {
       setPwdError(err.message || 'Errore durante l\'aggiornamento della password.');
+    } finally {
+      setPwdSaving(false);
     }
   };
 
@@ -101,19 +131,26 @@ const SettingsPage = () => {
   const [lifeKmLight, setLifeKmLight] = useState(65000);
   const [fuelSyncing, setFuelSyncing] = useState(false);
 
+  const isDirtyRef = useRef(false);
+  useEffect(() => {
+    isDirtyRef.current = isDirty;
+  }, [isDirty]);
+
   useEffect(() => {
     loadSettings();
     const unsubscribe = storageService.subscribe((event) => {
       if (event.type === 'data' && event.scopes?.includes('settings')) {
-        loadSettings();
+        if (!isDirtyRef.current) {
+          loadSettings();
+        }
       } else if (event.type === 'status') {
         setCloudStatus(event.cloudStatus);
       }
     });
     // Aggiornamento automatico settimanale all'avvio se sono passati >= 7 giorni dall'ultimo sync
     storageService.refreshWeeklyFuelPricesFromOfficialSources({ force: false }).then(res => {
-      if (res && res.updated) {
-        setSettings(res.settings);
+      if (res && res.updated && !isDirtyRef.current) {
+        loadSettings();
       }
     });
     return () => unsubscribe();
@@ -122,19 +159,20 @@ const SettingsPage = () => {
   const loadSettings = () => {
     const s = storageService.getSettings();
     setSettings(s);
+    setIsDirty(false);
     if (s.tireParameters) {
-      setTireCostUnit(s.tireParameters.costPerTire || 450);
-      setCostPerTireTractorElectric(s.tireParameters.costPerTireTractorElectric || 520);
-      setCostPerTireTractorBiolng(s.tireParameters.costPerTireTractorBiolng || 460);
-      setCostPerTireTrailer(s.tireParameters.costPerTireTrailer || 380);
-      setCostPerTireRigid(s.tireParameters.costPerTireRigid || 420);
-      setCostPerTireLight(s.tireParameters.costPerTireLight || 240);
-      setTireLifeKm(s.tireParameters.tireLifeKm || 80000);
-      setLifeKmTrailer(s.tireParameters.lifeKmTrailer || 80000);
-      setLifeKmTractorElectric(s.tireParameters.lifeKmTractorElectric || 50000);
-      setLifeKmRigidElectric(s.tireParameters.lifeKmRigidElectric || 80000);
-      setLifeKmTractorBiolng(s.tireParameters.lifeKmTractorBiolng || 85000);
-      setLifeKmLight(s.tireParameters.lifeKmLight || 65000);
+      setTireCostUnit(s.tireParameters.costPerTire ?? 450);
+      setCostPerTireTractorElectric(s.tireParameters.costPerTireTractorElectric ?? 520);
+      setCostPerTireTractorBiolng(s.tireParameters.costPerTireTractorBiolng ?? 460);
+      setCostPerTireTrailer(s.tireParameters.costPerTireTrailer ?? 380);
+      setCostPerTireRigid(s.tireParameters.costPerTireRigid ?? 420);
+      setCostPerTireLight(s.tireParameters.costPerTireLight ?? 240);
+      setTireLifeKm(s.tireParameters.tireLifeKm ?? 80000);
+      setLifeKmTrailer(s.tireParameters.lifeKmTrailer ?? 80000);
+      setLifeKmTractorElectric(s.tireParameters.lifeKmTractorElectric ?? 50000);
+      setLifeKmRigidElectric(s.tireParameters.lifeKmRigidElectric ?? 80000);
+      setLifeKmTractorBiolng(s.tireParameters.lifeKmTractorBiolng ?? 85000);
+      setLifeKmLight(s.tireParameters.lifeKmLight ?? 65000);
     }
   };
 
@@ -143,8 +181,16 @@ const SettingsPage = () => {
     try {
       const res = await storageService.refreshWeeklyFuelPricesFromOfficialSources({ force: true });
       if (res && res.settings) {
-        setSettings(res.settings);
-        setSaveMessage(`Prezzi medi settimanali "Alla Pompa" aggiornati (${res.syncMeta?.weekLabel}) e ricalcolati sulle commesse!`);
+        setSettings(prev => ({
+          ...(prev || res.settings),
+          fuelTypes: res.settings.fuelTypes,
+          lastFuelSyncMeta: res.settings.lastFuelSyncMeta,
+          standardCosts: {
+            ...(prev?.standardCosts || {}),
+            adbluePricePerLiter: res.settings.standardCosts?.adbluePricePerLiter ?? prev?.standardCosts?.adbluePricePerLiter
+          }
+        }));
+        setSaveMessage(`Prezzi medi settimanali "Alla Pompa" aggiornati nelle Impostazioni (${res.syncMeta?.weekLabel}).`);
         setTimeout(() => setSaveMessage(''), 4500);
       }
     } finally {
@@ -153,57 +199,68 @@ const SettingsPage = () => {
   };
 
   const handleFuelPriceChange = (id, newPrice) => {
+    const val = newPrice === '' ? '' : safeNonNeg(newPrice, 0);
     const updatedFuel = settings.fuelTypes.map(f => {
       if (f.id === id) {
-        return { ...f, price: parseFloat(newPrice) || 0 };
+        return { ...f, price: val };
       }
       return f;
     });
     setSettings({ ...settings, fuelTypes: updatedFuel });
+    setIsDirty(true);
   };
 
   const handleLicenseCostChange = (id, newDailyCost) => {
+    const val = newDailyCost === '' ? '' : safeNonNeg(newDailyCost, 0);
     const updatedLicenses = settings.licenseTypes.map(l => {
       if (l.id === id) {
-        return { ...l, dailyCost: parseFloat(newDailyCost) || 0 };
+        const num = val === '' ? 0 : val;
+        return { ...l, dailyCost: val, monthlyCost: +(num * 22).toFixed(2) };
       }
       return l;
     });
     setSettings({ ...settings, licenseTypes: updatedLicenses });
+    setIsDirty(true);
   };
 
   const handleStandardCostChange = (key, value) => {
+    const val = value === '' ? '' : safeNonNeg(value, 0);
     setSettings({
       ...settings,
       standardCosts: {
         ...settings.standardCosts,
-        [key]: parseFloat(value) || 0
+        [key]: val
       }
     });
+    setIsDirty(true);
   };
 
   const handleOwnershipDefaultChange = (key, value) => {
+    const val = value === '' ? '' : safeNonNeg(value, 0);
     setSettings({
       ...settings,
       ownershipDefaults: {
         ...settings.ownershipDefaults,
-        [key]: parseFloat(value) || 0
+        [key]: val
       }
     });
+    setIsDirty(true);
   };
 
   const handleFinancialDefaultChange = (key, value) => {
+    const val = value === '' ? '' : safeNonNeg(value, 0);
     setSettings({
       ...settings,
       financialDefaults: {
         ...(settings.financialDefaults || {}),
-        [key]: parseFloat(value) || 0
+        [key]: val
       }
     });
+    setIsDirty(true);
   };
 
   const handleRefParamChange = (tech, field, value) => {
-    const num = parseFloat(value) || 0;
+    const num = value === '' ? '' : safeNonNeg(value, 0);
     const defaultsByTech = {
       azoto: { unitCost: 0.13, hourlyConsumption: 30 },
       gasolio: { unitCost: 1.80, hourlyConsumption: 3.0 },
@@ -211,7 +268,7 @@ const SettingsPage = () => {
     };
     const prevTech = settings.refrigerationParams?.[tech] || defaultsByTech[tech] || defaultsByTech.gasolio;
     const nextTech = { ...prevTech, [field]: num };
-    nextTech.hourlyCost = +(Number(nextTech.unitCost) * Number(nextTech.hourlyConsumption)).toFixed(2);
+    nextTech.hourlyCost = +((Number(nextTech.unitCost) || 0) * (Number(nextTech.hourlyConsumption) || 0)).toFixed(2);
     setSettings({
       ...settings,
       refrigerationParams: {
@@ -219,27 +276,30 @@ const SettingsPage = () => {
         [tech]: nextTech
       }
     });
+    setIsDirty(true);
   };
 
   const handleTelParamChange = (field, value) => {
-    const num = parseFloat(value) || 0;
+    const num = value === '' ? '' : safeNonNeg(value, 0);
     setSettings({
       ...settings,
       accessoryParams: {
         ...(settings.accessoryParams || {}),
         telematics: {
           ...(settings.accessoryParams?.telematics || { tractorMonthly: 14, trailerMonthly: 13, rigidMonthly: 12, vanMonthly: 12 }),
-          [field]: num
+          [field]: num,
+          ...(field === 'rigidMonthly' ? { vanMonthly: num } : {})
         }
       }
     });
+    setIsDirty(true);
   };
 
   const handleWashParamChange = (field, value) => {
-    const num = parseFloat(value) || 0;
+    const num = value === '' ? '' : safeNonNeg(value, 0);
     const prevWash = settings.accessoryParams?.washing || { costPerWash: 80, washesPerMonth: 2 };
     const nextWash = { ...prevWash, [field]: num };
-    nextWash.monthlyTotal = +(Number(nextWash.costPerWash) * Number(nextWash.washesPerMonth)).toFixed(2);
+    nextWash.monthlyTotal = +((Number(nextWash.costPerWash) || 0) * (Number(nextWash.washesPerMonth) || 0)).toFixed(2);
     setSettings({
       ...settings,
       accessoryParams: {
@@ -247,41 +307,74 @@ const SettingsPage = () => {
         washing: nextWash
       }
     });
+    setIsDirty(true);
   };
 
   const handleSaveAll = () => {
-    const costTractorBEV = (6 * costPerTireTractorElectric) / (lifeKmTractorElectric || 50000);
-    const costTrailer = (6 * costPerTireTrailer) / (lifeKmTrailer || 80000);
+    const cleanLifeBEV = Number(lifeKmTractorElectric) > 0 ? Number(lifeKmTractorElectric) : 50000;
+    const cleanLifeTrl = Number(lifeKmTrailer) > 0 ? Number(lifeKmTrailer) : 80000;
+    const cleanLifeBio = Number(lifeKmTractorBiolng) > 0 ? Number(lifeKmTractorBiolng) : 85000;
+    const cleanLifeRigid = Number(lifeKmRigidElectric) > 0 ? Number(lifeKmRigidElectric) : 80000;
+    const cleanLifeLight = Number(lifeKmLight) > 0 ? Number(lifeKmLight) : 65000;
+    const cleanTireLife = Number(tireLifeKm) > 0 ? Number(tireLifeKm) : 80000;
+
+    const cleanCostBEV = Number(costPerTireTractorElectric) || 0;
+    const cleanCostTrl = Number(costPerTireTrailer) || 0;
+    const costTractorBEV = (6 * cleanCostBEV) / cleanLifeBEV;
+    const costTrailer = (6 * cleanCostTrl) / cleanLifeTrl;
     const combinedElectricArticulatedKm = +(costTractorBEV + costTrailer).toFixed(4);
+
+    const sanitizedFuels = (settings.fuelTypes || []).map(f => ({ ...f, price: Number(f.price) || 0 }));
+    const sanitizedLicenses = (settings.licenseTypes || []).map(l => {
+      const dc = Number(l.dailyCost) || 0;
+      return { ...l, dailyCost: dc, monthlyCost: +(dc * 22).toFixed(2) };
+    });
 
     const updatedSettings = {
       ...settings,
+      fuelTypes: sanitizedFuels,
+      licenseTypes: sanitizedLicenses,
+      ownershipDefaults: {
+        ...(settings.ownershipDefaults || {}),
+        annualInsuranceRCA: Number(settings.ownershipDefaults?.annualInsuranceRCA ?? 3200) || 0,
+        annualInsuranceKasko: Number(settings.ownershipDefaults?.annualInsuranceKasko ?? 2400) || 0,
+        annualRoadTax: Number(settings.ownershipDefaults?.annualRoadTax ?? 1100) || 0,
+        monthlyMaintenance: Number(settings.ownershipDefaults?.monthlyMaintenance ?? 350) || 0,
+        amortizationYears: Number(settings.ownershipDefaults?.amortizationYears) > 0 ? Number(settings.ownershipDefaults.amortizationYears) : 5
+      },
+      financialDefaults: {
+        ...(settings.financialDefaults || {}),
+        initialCashBalance: Number(settings.financialDefaults?.initialCashBalance ?? 50000) || 0
+      },
       tireParameters: {
-        costPerTire: tireCostUnit,
-        costPerTireTractorElectric,
-        costPerTireTractorBiolng,
-        costPerTireTrailer,
-        costPerTireRigid,
-        costPerTireLight,
+        costPerTire: Number(tireCostUnit) || 0,
+        costPerTireTractorElectric: cleanCostBEV,
+        costPerTireTractorBiolng: Number(costPerTireTractorBiolng) || 0,
+        costPerTireTrailer: cleanCostTrl,
+        costPerTireRigid: Number(costPerTireRigid) || 0,
+        costPerTireLight: Number(costPerTireLight) || 0,
         tiresTractor: 6,
         tiresTrailer: 6,
         tiresRigidTruck: 6,
-        lifeKmTrailer,
-        lifeKmTractorElectric,
-        lifeKmRigidElectric,
-        lifeKmTractorBiolng,
-        lifeKmLight,
-        tireLifeKm,
+        lifeKmTrailer: cleanLifeTrl,
+        lifeKmTractorElectric: cleanLifeBEV,
+        lifeKmRigidElectric: cleanLifeRigid,
+        lifeKmTractorBiolng: cleanLifeBio,
+        lifeKmLight: cleanLifeLight,
+        tireLifeKm: cleanTireLife,
         estimatedTireCostKm: combinedElectricArticulatedKm
       },
       standardCosts: {
         ...settings.standardCosts,
+        adbluePricePerLiter: Number(settings.standardCosts?.adbluePricePerLiter ?? 0.85) || 0,
+        telepassMonthly: Number(settings.standardCosts?.telepassMonthly ?? 15) || 0,
         tireCostKm: combinedElectricArticulatedKm
       }
     };
 
     storageService.saveSettings(updatedSettings);
     setSettings(updatedSettings);
+    setIsDirty(false);
     setSaveMessage('Impostazioni salvate e sincronizzate sul Cloud!');
     setTimeout(() => setSaveMessage(''), 3500);
   };
@@ -333,8 +426,11 @@ const SettingsPage = () => {
       const res = await storageService.importBackupJson(backupPreview.rawJson);
       if (res.success) {
         loadSettings();
+        const cloudInfo = res.cloudSynced
+          ? 'e sincronizzato su Cloud'
+          : `salvato in locale${res.cloudError ? ` (sync Cloud in attesa: ${res.cloudError})` : ''}`;
         setBackupSuccess(
-          `Ripristino completato e sincronizzato su Cloud (${res.counts.fleet} mezzi, ${res.counts.trailers} rimorchi, ${res.counts.projects} commesse, ${res.counts.simulations} simulazioni).`
+          `Ripristino completato ${cloudInfo} (${res.counts.fleet} mezzi, ${res.counts.trailers} rimorchi, ${res.counts.projects} commesse, ${res.counts.simulations} simulazioni).`
         );
         setBackupPreview(null);
       } else {
@@ -411,13 +507,25 @@ const SettingsPage = () => {
                 {saveMessage}
               </span>
             )}
-            <button
-              onClick={handleSaveAll}
-              className="inline-flex items-center space-x-1.5 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2.5 rounded-xl font-bold text-xs shadow-sm transition whitespace-nowrap"
-            >
-              <Save className="w-4 h-4" />
-              <span>Salva Tutte le Modifiche</span>
-            </button>
+            {['fuels', 'tires_accessories', 'treasury'].includes(activeTab) && (
+              <button
+                type="button"
+                onClick={handleSaveAll}
+                className={`inline-flex items-center space-x-1.5 px-4 py-2.5 rounded-xl font-bold text-xs shadow-sm transition whitespace-nowrap ${
+                  isDirty
+                    ? 'bg-emerald-600 hover:bg-emerald-700 text-white ring-2 ring-emerald-300'
+                    : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                }`}
+              >
+                <Save className="w-4 h-4" />
+                <span>Salva Tutte le Modifiche</span>
+                {isDirty && (
+                  <span className="ml-1 px-1.5 py-0.5 rounded-full text-[9px] font-black bg-amber-300 text-slate-900">
+                    Modificato
+                  </span>
+                )}
+              </button>
+            )}
           </div>
         </div>
 
@@ -468,7 +576,7 @@ const SettingsPage = () => {
                     type="button"
                     disabled={fuelSyncing}
                     onClick={handleManualFuelWeeklySync}
-                    className="inline-flex items-center space-x-1.5 px-3 py-1.5 bg-[#164e87] hover:bg-[#0b2440] text-white rounded-xl text-xs font-bold transition shadow-xs disabled:opacity-50"
+                    className="inline-flex items-center space-x-1.5 px-3 py-1.5 bg-[#164e87] hover:bg-[#0b2440] text-white rounded-xl text-xs font-bold transition shadow-sm disabled:opacity-50"
                   >
                     <RefreshCw className={`w-3.5 h-3.5 ${fuelSyncing ? 'animate-spin' : ''}`} />
                     <span>{fuelSyncing ? 'Aggiornamento...' : 'Aggiorna da Fonti'}</span>
@@ -504,17 +612,20 @@ const SettingsPage = () => {
                       <div>
                         <div className="flex items-center gap-2">
                           <span className="font-bold text-slate-900">{fuel.name}</span>
-                          <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-amber-100 text-amber-900 border border-amber-200">
+                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-200">
                             Alla Pompa
                           </span>
                         </div>
-                        <span className="text-[11px] text-slate-500 block">{fuel.notes || fuel.unit}</span>
+                        <span className="text-[11px] text-slate-500 block">
+                          {fuel.id === 'azoto'
+                            ? 'Riferimento giornaliero generico (i parametri orari €/kg e kg/h si configurano in "Gomme, Frigo & Accessori")'
+                            : (fuel.notes || fuel.unit)}
+                        </span>
                         {fuel.marketRange && (
                           <span className="text-[10px] text-emerald-700 font-semibold">Range rilevato: {fuel.marketRange}</span>
                         )}
                       </div>
                       <div className="flex items-center space-x-2 shrink-0">
-                        <span className="text-slate-500 font-medium">{fuel.unit}:</span>
                         <input
                           type="number"
                           step="0.01"
@@ -522,7 +633,7 @@ const SettingsPage = () => {
                           onChange={(e) => handleFuelPriceChange(fuel.id, e.target.value)}
                           className="w-24 px-2.5 py-1.5 border border-slate-300 rounded-lg text-right font-bold text-slate-900 bg-white"
                         />
-                        <span className="font-bold text-slate-700">€</span>
+                        <span className="font-bold text-slate-700 min-w-[42px]">{getFuelPriceUnit(fuel.id)}</span>
                       </div>
                     </div>
                   ))}
@@ -565,7 +676,12 @@ const SettingsPage = () => {
             </div>
 
             {/* Calcolatore "Al Contrario" */}
-            <div className="bg-gradient-to-r from-emerald-950 via-slate-900 to-emerald-950 text-white rounded-2xl p-6 shadow-xl border border-emerald-500/30 space-y-4">
+            <div
+              ref={calculatorRef}
+              className={`bg-gradient-to-r from-emerald-950 via-slate-900 to-emerald-950 text-white rounded-2xl p-6 shadow-xl border transition-all duration-500 space-y-4 ${
+                calcHighlight ? 'border-cyan-400 ring-4 ring-cyan-400/40' : 'border-emerald-500/30'
+              }`}
+            >
               <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 pb-3 border-b border-emerald-800/60">
                 <div className="flex items-center space-x-2">
                   <div className="p-1.5 bg-emerald-500/20 rounded-lg">
@@ -738,6 +854,9 @@ const SettingsPage = () => {
                             setCalcFuelType(bench.fuelTypeId);
                             setCalcYieldValue(bench.yieldKmPerUnit);
                             setCalcConsumptionValue(bench.avgConsumption);
+                            calculatorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                            setCalcHighlight(true);
+                            setTimeout(() => setCalcHighlight(false), 1800);
                           }}
                           className="w-full py-1.5 bg-white hover:bg-emerald-50 text-emerald-800 border border-emerald-300 rounded-lg text-[11px] font-bold transition flex items-center justify-center space-x-1"
                         >
@@ -758,7 +877,7 @@ const SettingsPage = () => {
           <div className="space-y-6">
             {/* Pneumatici per 5 Categorie */}
             <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-4">
-              <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-100">
                 <div className="flex items-center space-x-2">
                   <CircleDot className="w-5 h-5 text-amber-600" />
                   <div>
@@ -780,15 +899,15 @@ const SettingsPage = () => {
                   <div className="grid grid-cols-2 gap-2">
                     <div>
                       <label className="block text-[10px] font-bold text-rose-900 mb-0.5">Costo / Gomma (€)</label>
-                      <input type="number" step="10" value={costPerTireTractorElectric} onChange={(e) => setCostPerTireTractorElectric(parseFloat(e.target.value) || 0)} className="w-full px-2 py-1 border border-rose-300 rounded font-black text-rose-950 bg-white" />
+                      <input type="number" step="10" value={costPerTireTractorElectric} onChange={(e) => { setCostPerTireTractorElectric(e.target.value === '' ? '' : safeNonNeg(e.target.value, 0)); setIsDirty(true); }} onBlur={() => setCostPerTireTractorElectric(prev => Number(prev) || 0)} className="w-full px-2 py-1 border border-rose-300 rounded font-black text-rose-950 bg-white" />
                     </div>
                     <div>
                       <label className="block text-[10px] font-bold text-rose-900 mb-0.5">Durata (Km)</label>
-                      <input type="number" step="5000" value={lifeKmTractorElectric} onChange={(e) => setLifeKmTractorElectric(parseFloat(e.target.value) || 50000)} className="w-full px-2 py-1 border border-rose-300 rounded font-black text-rose-900 bg-white" />
+                      <input type="number" step="5000" value={lifeKmTractorElectric} onChange={(e) => { setLifeKmTractorElectric(e.target.value === '' ? '' : safeNonNeg(e.target.value, 0)); setIsDirty(true); }} onBlur={() => setLifeKmTractorElectric(prev => Number(prev) > 0 ? Number(prev) : 50000)} className="w-full px-2 py-1 border border-rose-300 rounded font-black text-rose-900 bg-white" />
                     </div>
                   </div>
                   <div className="pt-1 border-t border-rose-200 font-bold text-rose-950 flex justify-between text-[11px]">
-                    <span>Treno: {formatEUR(6 * costPerTireTractorElectric)}</span>
+                    <span>Treno: {formatEUR(6 * (Number(costPerTireTractorElectric) || 0))}</span>
                     <strong>{tireCostTractorBEV.toFixed(4)} €/km</strong>
                   </div>
                 </div>
@@ -801,15 +920,15 @@ const SettingsPage = () => {
                   <div className="grid grid-cols-2 gap-2">
                     <div>
                       <label className="block text-[10px] font-bold text-indigo-900 mb-0.5">Costo / Gomma (€)</label>
-                      <input type="number" step="10" value={costPerTireTractorBiolng} onChange={(e) => setCostPerTireTractorBiolng(parseFloat(e.target.value) || 0)} className="w-full px-2 py-1 border border-indigo-300 rounded font-black text-indigo-950 bg-white" />
+                      <input type="number" step="10" value={costPerTireTractorBiolng} onChange={(e) => { setCostPerTireTractorBiolng(e.target.value === '' ? '' : safeNonNeg(e.target.value, 0)); setIsDirty(true); }} onBlur={() => setCostPerTireTractorBiolng(prev => Number(prev) || 0)} className="w-full px-2 py-1 border border-indigo-300 rounded font-black text-indigo-950 bg-white" />
                     </div>
                     <div>
                       <label className="block text-[10px] font-bold text-indigo-900 mb-0.5">Durata (Km)</label>
-                      <input type="number" step="5000" value={lifeKmTractorBiolng} onChange={(e) => setLifeKmTractorBiolng(parseFloat(e.target.value) || 85000)} className="w-full px-2 py-1 border border-indigo-300 rounded font-black text-indigo-900 bg-white" />
+                      <input type="number" step="5000" value={lifeKmTractorBiolng} onChange={(e) => { setLifeKmTractorBiolng(e.target.value === '' ? '' : safeNonNeg(e.target.value, 0)); setIsDirty(true); }} onBlur={() => setLifeKmTractorBiolng(prev => Number(prev) > 0 ? Number(prev) : 85000)} className="w-full px-2 py-1 border border-indigo-300 rounded font-black text-indigo-900 bg-white" />
                     </div>
                   </div>
                   <div className="pt-1 border-t border-indigo-200 font-bold text-indigo-950 flex justify-between text-[11px]">
-                    <span>Treno: {formatEUR(6 * costPerTireTractorBiolng)}</span>
+                    <span>Treno: {formatEUR(6 * (Number(costPerTireTractorBiolng) || 0))}</span>
                     <strong>{tireCostTractorBio.toFixed(4)} €/km</strong>
                   </div>
                 </div>
@@ -822,15 +941,15 @@ const SettingsPage = () => {
                   <div className="grid grid-cols-2 gap-2">
                     <div>
                       <label className="block text-[10px] font-bold text-blue-900 mb-0.5">Costo / Gomma (€)</label>
-                      <input type="number" step="10" value={costPerTireTrailer} onChange={(e) => setCostPerTireTrailer(parseFloat(e.target.value) || 0)} className="w-full px-2 py-1 border border-blue-300 rounded font-black text-blue-950 bg-white" />
+                      <input type="number" step="10" value={costPerTireTrailer} onChange={(e) => { setCostPerTireTrailer(e.target.value === '' ? '' : safeNonNeg(e.target.value, 0)); setIsDirty(true); }} onBlur={() => setCostPerTireTrailer(prev => Number(prev) || 0)} className="w-full px-2 py-1 border border-blue-300 rounded font-black text-blue-950 bg-white" />
                     </div>
                     <div>
                       <label className="block text-[10px] font-bold text-blue-900 mb-0.5">Durata (Km)</label>
-                      <input type="number" step="5000" value={lifeKmTrailer} onChange={(e) => setLifeKmTrailer(parseFloat(e.target.value) || 80000)} className="w-full px-2 py-1 border border-blue-300 rounded font-black text-blue-900 bg-white" />
+                      <input type="number" step="5000" value={lifeKmTrailer} onChange={(e) => { setLifeKmTrailer(e.target.value === '' ? '' : safeNonNeg(e.target.value, 0)); setIsDirty(true); }} onBlur={() => setLifeKmTrailer(prev => Number(prev) > 0 ? Number(prev) : 80000)} className="w-full px-2 py-1 border border-blue-300 rounded font-black text-blue-900 bg-white" />
                     </div>
                   </div>
                   <div className="pt-1 border-t border-blue-200 font-bold text-blue-950 flex justify-between text-[11px]">
-                    <span>Treno: {formatEUR(6 * costPerTireTrailer)}</span>
+                    <span>Treno: {formatEUR(6 * (Number(costPerTireTrailer) || 0))}</span>
                     <strong>{tireCostTrailer.toFixed(4)} €/km</strong>
                   </div>
                 </div>
@@ -843,15 +962,15 @@ const SettingsPage = () => {
                   <div className="grid grid-cols-2 gap-2">
                     <div>
                       <label className="block text-[10px] font-bold text-emerald-900 mb-0.5">Costo / Gomma (€)</label>
-                      <input type="number" step="10" value={costPerTireRigid} onChange={(e) => setCostPerTireRigid(parseFloat(e.target.value) || 0)} className="w-full px-2 py-1 border border-emerald-300 rounded font-black text-emerald-950 bg-white" />
+                      <input type="number" step="10" value={costPerTireRigid} onChange={(e) => { setCostPerTireRigid(e.target.value === '' ? '' : safeNonNeg(e.target.value, 0)); setIsDirty(true); }} onBlur={() => setCostPerTireRigid(prev => Number(prev) || 0)} className="w-full px-2 py-1 border border-emerald-300 rounded font-black text-emerald-950 bg-white" />
                     </div>
                     <div>
                       <label className="block text-[10px] font-bold text-emerald-900 mb-0.5">Durata (Km)</label>
-                      <input type="number" step="5000" value={lifeKmRigidElectric} onChange={(e) => setLifeKmRigidElectric(parseFloat(e.target.value) || 80000)} className="w-full px-2 py-1 border border-emerald-300 rounded font-black text-emerald-900 bg-white" />
+                      <input type="number" step="5000" value={lifeKmRigidElectric} onChange={(e) => { setLifeKmRigidElectric(e.target.value === '' ? '' : safeNonNeg(e.target.value, 0)); setIsDirty(true); }} onBlur={() => setLifeKmRigidElectric(prev => Number(prev) > 0 ? Number(prev) : 80000)} className="w-full px-2 py-1 border border-emerald-300 rounded font-black text-emerald-900 bg-white" />
                     </div>
                   </div>
                   <div className="pt-1 border-t border-emerald-200 font-bold text-emerald-950 flex justify-between text-[11px]">
-                    <span>Treno: {formatEUR(6 * costPerTireRigid)}</span>
+                    <span>Treno: {formatEUR(6 * (Number(costPerTireRigid) || 0))}</span>
                     <strong>{tireCostRigidBEV.toFixed(4)} €/km</strong>
                   </div>
                 </div>
@@ -859,26 +978,26 @@ const SettingsPage = () => {
                 <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-2">
                   <div className="flex items-center justify-between">
                     <span className="font-extrabold text-slate-900 uppercase text-[10px]">5. Daily 72 / Furgoni Leggeri</span>
-                    <span className="px-1.5 py-0.5 bg-slate-200 text-slate-800 rounded font-black text-[10px]">6 Gomme R16C</span>
+                    <span className="px-1.5 py-0.5 bg-slate-200 text-slate-800 rounded font-black text-[10px]">6g Daily 72 / 4g 3.5t</span>
                   </div>
                   <div className="grid grid-cols-2 gap-2">
                     <div>
                       <label className="block text-[10px] font-bold text-slate-700 mb-0.5">Costo / Gomma (€)</label>
-                      <input type="number" step="10" value={costPerTireLight} onChange={(e) => setCostPerTireLight(parseFloat(e.target.value) || 0)} className="w-full px-2 py-1 border border-slate-300 rounded font-black text-slate-900 bg-white" />
+                      <input type="number" step="10" value={costPerTireLight} onChange={(e) => { setCostPerTireLight(e.target.value === '' ? '' : safeNonNeg(e.target.value, 0)); setIsDirty(true); }} onBlur={() => setCostPerTireLight(prev => Number(prev) || 0)} className="w-full px-2 py-1 border border-slate-300 rounded font-black text-slate-900 bg-white" />
                     </div>
                     <div>
                       <label className="block text-[10px] font-bold text-slate-700 mb-0.5">Durata (Km)</label>
-                      <input type="number" step="5000" value={lifeKmLight} onChange={(e) => setLifeKmLight(parseFloat(e.target.value) || 65000)} className="w-full px-2 py-1 border border-slate-300 rounded font-black text-slate-800 bg-white" />
+                      <input type="number" step="5000" value={lifeKmLight} onChange={(e) => { setLifeKmLight(e.target.value === '' ? '' : safeNonNeg(e.target.value, 0)); setIsDirty(true); }} onBlur={() => setLifeKmLight(prev => Number(prev) > 0 ? Number(prev) : 65000)} className="w-full px-2 py-1 border border-slate-300 rounded font-black text-slate-800 bg-white" />
                     </div>
                   </div>
                   <div className="pt-1 border-t border-slate-200 font-bold text-slate-800 flex justify-between text-[11px]">
-                    <span>Treno: {formatEUR(6 * costPerTireLight)}</span>
+                    <span>Treno 6g/4g: {formatEUR(6 * (Number(costPerTireLight) || 0))} / {formatEUR(4 * (Number(costPerTireLight) || 0))}</span>
                     <strong>{tireCostLightDaily.toFixed(4)} €/km</strong>
                   </div>
                 </div>
 
                 <div className="p-3 bg-amber-50 rounded-xl border border-amber-200 text-amber-950 flex flex-col justify-between">
-                  <div className="text-[11px] font-extrabold uppercase text-amber-900">Riepilogo Bilici Combinati</div>
+                  <div className="text-[11px] font-extrabold uppercase text-amber-900">Riepilogo Bilici Combinati (su 250 km/gg)</div>
                   <div className="space-y-1 text-xs font-bold">
                     <div className="flex justify-between">
                       <span>Bilico BEV:</span>
@@ -1021,11 +1140,11 @@ const SettingsPage = () => {
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
                     <label className="text-slate-600">AdBlue (€/Litro HVO/Diesel)</label>
-                    <input type="number" step="0.05" value={settings.standardCosts?.adbluePricePerLiter || 0.85} onChange={(e) => handleStandardCostChange('adbluePricePerLiter', e.target.value)} className="w-20 px-2 py-1 border border-slate-300 rounded text-right font-bold" />
+                    <input type="number" step="0.05" value={settings.standardCosts?.adbluePricePerLiter ?? 0.85} onChange={(e) => handleStandardCostChange('adbluePricePerLiter', e.target.value)} className="w-20 px-2 py-1 border border-slate-300 rounded text-right font-bold" />
                   </div>
                   <div className="flex items-center justify-between">
                     <label className="text-slate-600">Canone Apparato Telepass (€/m)</label>
-                    <input type="number" step="1" value={settings.standardCosts?.telepassMonthly || 15.00} onChange={(e) => handleStandardCostChange('telepassMonthly', e.target.value)} className="w-20 px-2 py-1 border border-slate-300 rounded text-right font-bold" />
+                    <input type="number" step="1" value={settings.standardCosts?.telepassMonthly ?? 15.00} onChange={(e) => handleStandardCostChange('telepassMonthly', e.target.value)} className="w-20 px-2 py-1 border border-slate-300 rounded text-right font-bold" />
                   </div>
                 </div>
               </div>
@@ -1038,7 +1157,7 @@ const SettingsPage = () => {
           <div className="space-y-6">
             {/* Cassa Iniziale & Regole Tesoreria */}
             <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-4">
-              <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-100">
                 <div className="flex items-center space-x-2">
                   <Wallet className="w-5 h-5 text-emerald-600" />
                   <div>
@@ -1080,10 +1199,13 @@ const SettingsPage = () => {
                   </p>
                   <select
                     value={settings.treasuryRules?.defaultLeaseTiming || 'M1_D10'}
-                    onChange={(e) => setSettings({
-                      ...settings,
-                      treasuryRules: { ...settings.treasuryRules, defaultLeaseTiming: e.target.value }
-                    })}
+                    onChange={(e) => {
+                      setSettings({
+                        ...settings,
+                        treasuryRules: { ...settings.treasuryRules, defaultLeaseTiming: e.target.value }
+                      });
+                      setIsDirty(true);
+                    }}
                     className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs font-bold bg-white"
                   >
                     <option value="M1_D10">Giorno 10 M1 (Anticipato)</option>
@@ -1120,7 +1242,7 @@ const SettingsPage = () => {
 
             {/* Mezzi di Proprietà FOUR */}
             <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-4">
-              <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-100">
                 <div className="flex items-center space-x-2">
                   <Shield className="w-5 h-5 text-blue-600" />
                   <div>
@@ -1137,25 +1259,25 @@ const SettingsPage = () => {
                 <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex items-center justify-between gap-2">
                   <div>
                     <span className="font-bold text-slate-900 block">Assicurazione RCA (€/a):</span>
-                    <span className="text-[10px] text-slate-500">~{formatEUR((settings.ownershipDefaults?.annualInsuranceRCA || 3200) / 12)}/m</span>
+                    <span className="text-[10px] text-slate-500">~{formatEUR((Number(settings.ownershipDefaults?.annualInsuranceRCA ?? 3200) || 0) / 12)}/m</span>
                   </div>
-                  <input type="number" step="50" value={settings.ownershipDefaults?.annualInsuranceRCA || 3200} onChange={(e) => handleOwnershipDefaultChange('annualInsuranceRCA', e.target.value)} className="w-24 px-2.5 py-1.5 border border-slate-300 rounded-lg text-right font-bold bg-white" />
+                  <input type="number" step="50" value={settings.ownershipDefaults?.annualInsuranceRCA ?? 3200} onChange={(e) => handleOwnershipDefaultChange('annualInsuranceRCA', e.target.value)} className="w-24 px-2.5 py-1.5 border border-slate-300 rounded-lg text-right font-bold bg-white" />
                 </div>
 
                 <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex items-center justify-between gap-2">
                   <div>
                     <span className="font-bold text-slate-900 block">Kasko / Furto (€/a):</span>
-                    <span className="text-[10px] text-slate-500">~{formatEUR((settings.ownershipDefaults?.annualInsuranceKasko || 2400) / 12)}/m</span>
+                    <span className="text-[10px] text-slate-500">~{formatEUR((Number(settings.ownershipDefaults?.annualInsuranceKasko ?? 2400) || 0) / 12)}/m</span>
                   </div>
-                  <input type="number" step="50" value={settings.ownershipDefaults?.annualInsuranceKasko || 2400} onChange={(e) => handleOwnershipDefaultChange('annualInsuranceKasko', e.target.value)} className="w-24 px-2.5 py-1.5 border border-slate-300 rounded-lg text-right font-bold bg-white" />
+                  <input type="number" step="50" value={settings.ownershipDefaults?.annualInsuranceKasko ?? 2400} onChange={(e) => handleOwnershipDefaultChange('annualInsuranceKasko', e.target.value)} className="w-24 px-2.5 py-1.5 border border-slate-300 rounded-lg text-right font-bold bg-white" />
                 </div>
 
                 <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex items-center justify-between gap-2">
                   <div>
                     <span className="font-bold text-slate-900 block">Bollo / Tassa Possesso (€/a):</span>
-                    <span className="text-[10px] text-emerald-700 font-semibold">BEV spesso esente</span>
+                    <span className="text-[10px] text-emerald-700 font-semibold">BEV spesso esente (0 €)</span>
                   </div>
-                  <input type="number" step="50" value={settings.ownershipDefaults?.annualRoadTax || 1100} onChange={(e) => handleOwnershipDefaultChange('annualRoadTax', e.target.value)} className="w-24 px-2.5 py-1.5 border border-slate-300 rounded-lg text-right font-bold bg-white" />
+                  <input type="number" step="50" min="0" value={settings.ownershipDefaults?.annualRoadTax ?? 1100} onChange={(e) => handleOwnershipDefaultChange('annualRoadTax', e.target.value)} className="w-24 px-2.5 py-1.5 border border-slate-300 rounded-lg text-right font-bold bg-white" />
                 </div>
 
                 <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex items-center justify-between gap-2">
@@ -1163,7 +1285,7 @@ const SettingsPage = () => {
                     <span className="font-bold text-slate-900 block">Manutenzione Ordinaria (€/m):</span>
                     <span className="text-[10px] text-slate-500">Tagliandi e revisioni</span>
                   </div>
-                  <input type="number" step="25" value={settings.ownershipDefaults?.monthlyMaintenance || 350} onChange={(e) => handleOwnershipDefaultChange('monthlyMaintenance', e.target.value)} className="w-24 px-2.5 py-1.5 border border-slate-300 rounded-lg text-right font-bold bg-white" />
+                  <input type="number" step="25" min="0" value={settings.ownershipDefaults?.monthlyMaintenance ?? 350} onChange={(e) => handleOwnershipDefaultChange('monthlyMaintenance', e.target.value)} className="w-24 px-2.5 py-1.5 border border-slate-300 rounded-lg text-right font-bold bg-white" />
                 </div>
 
                 <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex items-center justify-between gap-2">
@@ -1171,17 +1293,17 @@ const SettingsPage = () => {
                     <span className="font-bold text-slate-900 block">Anni Ammortamento:</span>
                     <span className="text-[10px] text-slate-500">Ripartizione acquisto</span>
                   </div>
-                  <input type="number" step="1" min="3" max="10" value={settings.ownershipDefaults?.amortizationYears || 5} onChange={(e) => handleOwnershipDefaultChange('amortizationYears', e.target.value)} className="w-24 px-2.5 py-1.5 border border-slate-300 rounded-lg text-right font-bold bg-white" />
+                  <input type="number" step="1" min="2" max="10" value={settings.ownershipDefaults?.amortizationYears ?? 5} onChange={(e) => handleOwnershipDefaultChange('amortizationYears', e.target.value)} className="w-24 px-2.5 py-1.5 border border-slate-300 rounded-lg text-right font-bold bg-white" />
                 </div>
 
                 <div className="p-3 bg-blue-50/80 rounded-xl border border-blue-200 text-blue-900 flex flex-col justify-center">
                   <span className="text-[10px] font-bold uppercase text-blue-800">Costo Fisso Base / Mese</span>
                   <span className="text-base font-black text-blue-950">
                     {formatEUR(
-                      ((settings.ownershipDefaults?.annualInsuranceRCA || 3200) +
-                       (settings.ownershipDefaults?.annualInsuranceKasko || 2400) +
-                       (settings.ownershipDefaults?.annualRoadTax || 1100)) / 12 +
-                      (settings.ownershipDefaults?.monthlyMaintenance || 350)
+                      ((Number(settings.ownershipDefaults?.annualInsuranceRCA ?? 3200) || 0) +
+                       (Number(settings.ownershipDefaults?.annualInsuranceKasko ?? 2400) || 0) +
+                       (Number(settings.ownershipDefaults?.annualRoadTax ?? 1100) || 0)) / 12 +
+                      (Number(settings.ownershipDefaults?.monthlyMaintenance ?? 350) || 0)
                     )} / m
                   </span>
                 </div>
@@ -1204,30 +1326,56 @@ const SettingsPage = () => {
                 </div>
               </div>
 
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <span className={`px-3 py-1 rounded-full text-xs font-bold border flex items-center gap-1.5 ${
                   cloudStatus.state === 'synced'
                     ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
-                    : cloudStatus.state === 'syncing'
+                    : cloudStatus.state === 'syncing' || cloudStatus.state === 'connecting'
                       ? 'bg-cyan-50 text-cyan-800 border-cyan-200'
-                      : 'bg-amber-50 text-amber-800 border-amber-200'
+                      : cloudStatus.state === 'error'
+                        ? 'bg-rose-50 text-rose-800 border-rose-200'
+                        : 'bg-amber-50 text-amber-800 border-amber-200'
                 }`}>
-                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  {cloudStatus.state === 'synced' ? (
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                  ) : cloudStatus.state === 'syncing' || cloudStatus.state === 'connecting' ? (
+                    <RefreshCw className="w-3.5 h-3.5 text-cyan-600 animate-spin" />
+                  ) : (
+                    <AlertCircle className={`w-3.5 h-3.5 ${cloudStatus.state === 'error' ? 'text-rose-600' : 'text-amber-600'}`} />
+                  )}
                   <span>
                     {cloudStatus.state === 'synced'
                       ? `Cloud Live Sincronizzato${cloudStatus.lastSyncedAt ? ` (${new Date(cloudStatus.lastSyncedAt).toLocaleTimeString('it-IT')})` : ''}`
-                      : cloudStatus.state === 'syncing'
+                      : cloudStatus.state === 'syncing' || cloudStatus.state === 'connecting'
                         ? 'Sincronizzazione in corso...'
-                        : 'Modalità Locale'}
+                        : cloudStatus.state === 'error'
+                          ? `Errore Cloud${cloudStatus.errorMessage ? `: ${cloudStatus.errorMessage}` : ''}`
+                          : 'Modalità Locale (Offline)'}
                   </span>
                 </span>
                 <button
                   type="button"
-                  onClick={() => storageService.forceSyncFromCloud()}
-                  className="inline-flex items-center space-x-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-xs font-bold border border-slate-300 transition"
+                  disabled={cloudSyncing}
+                  onClick={async () => {
+                    setCloudSyncing(true);
+                    setBackupError('');
+                    setBackupSuccess('');
+                    try {
+                      const ok = await storageService.forceSyncFromCloud();
+                      if (ok) {
+                        loadSettings();
+                        setBackupSuccess('Dati riallineati da Cloud Firestore con successo.');
+                      } else {
+                        setBackupError('Impossibile allineare dal Cloud al momento.');
+                      }
+                    } finally {
+                      setCloudSyncing(false);
+                    }
+                  }}
+                  className="inline-flex items-center space-x-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-xs font-bold border border-slate-300 transition disabled:opacity-50"
                 >
-                  <RefreshCw className="w-3.5 h-3.5" />
-                  <span>Allinea da Cloud</span>
+                  <RefreshCw className={`w-3.5 h-3.5 ${cloudSyncing ? 'animate-spin' : ''}`} />
+                  <span>{cloudSyncing ? 'Allineamento...' : 'Allinea da Cloud'}</span>
                 </button>
               </div>
             </div>
@@ -1345,7 +1493,7 @@ const SettingsPage = () => {
         {/* TAB 5: SICUREZZA & PASSWORD */}
         {activeTab === 'security' && (
           <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-4">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+            <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-100">
               <div className="flex items-center space-x-2">
                 <ShieldCheck className="w-5 h-5 text-[#164e87]" />
                 <h2 className="text-sm font-bold text-slate-900">Sicurezza &amp; Credenziali di Accesso</h2>
@@ -1373,12 +1521,14 @@ const SettingsPage = () => {
               </div>
             )}
 
-            <form onSubmit={handleChangePassword} className="grid grid-cols-1 md:grid-cols-4 gap-3 text-xs items-end">
+            <form onSubmit={handleChangePassword} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs items-end">
               <div>
-                <label className="block font-semibold text-slate-700 mb-1">Password Attuale *</label>
+                <label htmlFor="pwd-old" className="block font-semibold text-slate-700 mb-1">Password Attuale *</label>
                 <input
+                  id="pwd-old"
                   type="password"
                   required
+                  autoComplete="current-password"
                   value={oldPassword}
                   onChange={(e) => setOldPassword(e.target.value)}
                   className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-[#164e87] outline-none"
@@ -1387,10 +1537,13 @@ const SettingsPage = () => {
               </div>
 
               <div>
-                <label className="block font-semibold text-slate-700 mb-1">Nuova Password *</label>
+                <label htmlFor="pwd-new" className="block font-semibold text-slate-700 mb-1">Nuova Password *</label>
                 <input
+                  id="pwd-new"
                   type="password"
                   required
+                  minLength={6}
+                  autoComplete="new-password"
                   value={newPassword}
                   onChange={(e) => setNewPassword(e.target.value)}
                   className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-[#164e87] outline-none"
@@ -1399,10 +1552,13 @@ const SettingsPage = () => {
               </div>
 
               <div>
-                <label className="block font-semibold text-slate-700 mb-1">Conferma Nuova Password *</label>
+                <label htmlFor="pwd-confirm" className="block font-semibold text-slate-700 mb-1">Conferma Nuova Password *</label>
                 <input
+                  id="pwd-confirm"
                   type="password"
                   required
+                  minLength={6}
+                  autoComplete="new-password"
                   value={confirmPassword}
                   onChange={(e) => setConfirmPassword(e.target.value)}
                   className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-[#164e87] outline-none"
@@ -1413,10 +1569,11 @@ const SettingsPage = () => {
               <div>
                 <button
                   type="submit"
-                  className="w-full py-2 bg-[#164e87] hover:bg-[#0f3b75] text-white font-bold rounded-xl transition shadow-sm flex items-center justify-center space-x-1.5"
+                  disabled={pwdSaving}
+                  className="w-full py-2 bg-[#164e87] hover:bg-[#0f3b75] text-white font-bold rounded-xl transition shadow-sm flex items-center justify-center space-x-1.5 disabled:opacity-50"
                 >
                   <Lock className="w-3.5 h-3.5 text-cyan-300" />
-                  <span>Aggiorna Password</span>
+                  <span>{pwdSaving ? 'Aggiornamento...' : 'Aggiorna Password'}</span>
                 </button>
               </div>
             </form>

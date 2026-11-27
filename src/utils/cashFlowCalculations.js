@@ -75,13 +75,32 @@ export const normalizeTrailerLeaseTiming = (project, trailer = null) => {
 };
 
 /**
+ * Restituisce l'anno di avvio di una commessa dal campo `startDate`
+ */
+export const getProjectStartYear = (p) => {
+  if (!p?.startDate) return 2026;
+  const parsed = parseInt(String(p.startDate).split('-')[0], 10);
+  return Number.isFinite(parsed) && parsed > 1900 ? parsed : 2026;
+};
+
+/**
+ * Identifica univocamente se una commessa è una trattativa / potenziale (What-If) o consolidata
+ */
+export const isPotentialProject = (p) => {
+  if (!p) return false;
+  if (p.contractStatus === 'potential') return true;
+  if (p.contractStatus === 'active') return false;
+  return Boolean(p.isPipelineFuture);
+};
+
+/**
  * Calcola se un progetto è attivo in un determinato mese dell'anno
  */
 export const isProjectActiveInMonth = (project, monthIndex, targetYear = 2026, options = {}) => {
-  if (!project.startDate) return false;
-  const start = new Date(project.startDate);
-  const startYear = start.getFullYear();
-  const startMonth = start.getMonth(); // 0..11
+  if (!project?.startDate) return false;
+  const parts = String(project.startDate).split('-');
+  const startYear = parseInt(parts[0], 10) || 2026;
+  const startMonth = (parseInt(parts[1], 10) || 1) - 1; // 0..11
 
   const currentMonthDate = new Date(targetYear, monthIndex, 1);
   const projectStartDate = new Date(startYear, startMonth, 1);
@@ -131,6 +150,7 @@ export const getContractValidity = (project, referenceDate = new Date()) => {
   const MONTH_SHORT = ['Gen', 'Feb', 'Mar', 'Apr', 'Mag', 'Giu', 'Lug', 'Ago', 'Set', 'Ott', 'Nov', 'Dic'];
   const formattedStart = `${startDate.getDate().toString().padStart(2, '0')} ${MONTH_SHORT[startDate.getMonth()]} ${startDate.getFullYear()}`;
   const formattedEnd = `${endDate.getDate().toString().padStart(2, '0')} ${MONTH_SHORT[endDate.getMonth()]} ${endDate.getFullYear()}`;
+  const endStr = `${endDate.getFullYear()}-${String(endDate.getMonth() + 1).padStart(2, '0')}-${String(endDate.getDate()).padStart(2, '0')}`;
 
   const isExpired = endDate < referenceDate;
   const diffDays = Math.ceil((endDate - referenceDate) / (1000 * 60 * 60 * 24));
@@ -141,7 +161,7 @@ export const getContractValidity = (project, referenceDate = new Date()) => {
     startDate,
     endDate,
     startStr,
-    endStr: endDate.toISOString().split('T')[0],
+    endStr,
     formattedStart,
     formattedEnd,
     months,
@@ -169,6 +189,7 @@ export const calculateAnnualBudgetAndCashFlow = (projects, options = {}) => {
     acciseRatePerLiter = 0.21418, // Rimborso accise gasolio commerciale art. 24-ter TUA (€/L)
     taxRatePercent = 25, // Stima IRES/IRAP per calcolo DSCR
     fleet = [],
+    trailers = [],
     rolloverPreviousYearBudget = options.rolloverPreviousYearBudget !== undefined ? options.rolloverPreviousYearBudget : (year > 2026)
   } = options;
 
@@ -249,6 +270,7 @@ export const calculateAnnualBudgetAndCashFlow = (projects, options = {}) => {
   // Elaborazione progetti
   projects.forEach(project => {
     const assignedVeh = Array.isArray(fleet) ? fleet.find(v => v.id === project.vehicleId) : null;
+    const assignedTrailer = Array.isArray(trailers) ? trailers.find(t => t.id === project.trailerId) : null;
     let co2FactorPerKm = 0;
     if (!(project.managementType === 'T' && !assignedVeh)) {
       const fuelId = assignedVeh?.fuelTypeId || project.fuelTypeId || '';
@@ -276,11 +298,11 @@ export const calculateAnnualBudgetAndCashFlow = (projects, options = {}) => {
 
     const leaseTimingKey = normalizeLeaseTiming(project);
     const leaseTiming = LEASE_PAYMENT_TIMINGS[leaseTimingKey];
-    const trailerLeaseTimingKey = normalizeTrailerLeaseTiming(project);
+    const trailerLeaseTimingKey = normalizeTrailerLeaseTiming(project, assignedTrailer);
     const trailerLeaseTiming = LEASE_PAYMENT_TIMINGS[trailerLeaseTimingKey];
 
-    // DSO mesi clienti (es. 60 gg -> m + 2)
-    const clientDelayMonths = Math.max(1, Math.round(pTermsClient / 30));
+    // DSO mesi clienti (es. 0 gg -> 0, 60 gg -> m + 2)
+    const clientDelayMonths = pTermsClient <= 0 ? 0 : Math.max(1, Math.round(pTermsClient / 30));
     // DPO ritardi in mesi per singola componente
     const driverDelayMonths = pTermsDriver <= 0 ? 0 : Math.max(1, Math.round(pTermsDriver / 30));
     const fuelDelayMonths = Math.max(0, Math.round(pTermsFuel / 30));
@@ -291,19 +313,20 @@ export const calculateAnnualBudgetAndCashFlow = (projects, options = {}) => {
     const washingDelayMonths = Math.max(0, Math.round(pTermsWashing / 30));
     const extraDelayMonths = Math.max(0, Math.round(pTermsExtra / 30));
 
-    // Caparra iniziale start-up
-    if (project.depositAmount && project.depositAmount > 0 && project.startDate) {
-      const start = new Date(project.startDate);
-      if (start.getFullYear() === year) {
-        const startM = start.getMonth();
-        if (startM >= 0 && startM < 12) {
-          cashOutflows[startM] += project.depositAmount;
-          cashOutflowBreakdown[startM].deposits += project.depositAmount;
+    const startParts = project.startDate ? String(project.startDate).split('-') : [];
+    const projStartYear = startParts.length >= 2 ? (parseInt(startParts[0], 10) || 2026) : null;
+    const projStartMonth = startParts.length >= 2 ? ((parseInt(startParts[1], 10) || 1) - 1) : null;
 
-          const startBiweekly = startM * 2; // 1ª quindicina
-          biweeklyCashOutflows[startBiweekly] += project.depositAmount;
-          biweeklyOutflowBreakdown[startBiweekly].deposits += project.depositAmount;
-        }
+    // Caparra iniziale start-up
+    if (project.depositAmount && project.depositAmount > 0 && projStartYear === year) {
+      const startM = projStartMonth;
+      if (startM >= 0 && startM < 12) {
+        cashOutflows[startM] += project.depositAmount;
+        cashOutflowBreakdown[startM].deposits += project.depositAmount;
+
+        const startBiweekly = startM * 2; // 1ª quindicina
+        biweeklyCashOutflows[startBiweekly] += project.depositAmount;
+        biweeklyOutflowBreakdown[startBiweekly].deposits += project.depositAmount;
       }
     }
 
@@ -311,18 +334,15 @@ export const calculateAnnualBudgetAndCashFlow = (projects, options = {}) => {
     const extraOneTimeAmount = (project.extraCostFrequency === 'one_time' && Number(project.extraCostAmount) > 0)
       ? Number(project.extraCostAmount)
       : 0;
-    if (extraOneTimeAmount > 0 && project.startDate) {
-      const start = new Date(project.startDate);
-      if (start.getFullYear() === year) {
-        const payM = start.getMonth() + extraDelayMonths;
-        if (payM >= 0 && payM < totalMonthsHorizon) {
-          cashOutflows[payM] += extraOneTimeAmount;
-          cashOutflowBreakdown[payM].suppliersOther += extraOneTimeAmount;
-          const bw = payM * 2 + 1;
-          if (bw < totalBiweeklyHorizon) {
-            biweeklyCashOutflows[bw] += extraOneTimeAmount;
-            biweeklyOutflowBreakdown[bw].otherSuppliers += extraOneTimeAmount;
-          }
+    if (extraOneTimeAmount > 0 && projStartYear === year) {
+      const payM = projStartMonth + extraDelayMonths;
+      if (payM >= 0 && payM < totalMonthsHorizon) {
+        cashOutflows[payM] += extraOneTimeAmount;
+        cashOutflowBreakdown[payM].suppliersOther += extraOneTimeAmount;
+        const bw = payM * 2 + 1;
+        if (bw < totalBiweeklyHorizon) {
+          biweeklyCashOutflows[bw] += extraOneTimeAmount;
+          biweeklyOutflowBreakdown[bw].otherSuppliers += extraOneTimeAmount;
         }
       }
     }
@@ -406,11 +426,18 @@ export const calculateAnnualBudgetAndCashFlow = (projects, options = {}) => {
         quarterlyAcciseAccrued[qIndex] += acciseCreditMonthly;
 
         // 2. CASH FLOW ENTRATE (Incassi Clienti - supporta Multi-Commessa con scadenze DSO per singola entità di fatturazione)
-        const billingSlices = (project.isMultiClient && Array.isArray(project.billingEntities) && project.billingEntities.length > 1)
-          ? project.billingEntities.map(be => ({
-              revMonth: (Number(be.revenueDaily) || 0) * workingDays,
-              delayMonths: Math.max(1, Math.round(((be.paymentTermsClient !== undefined ? Number(be.paymentTermsClient) : (project.paymentTermsClient ?? 60)) + stressTestClientDays) / 30))
-            }))
+        const billingSlices = (project.isMultiClient && mRates.multiAllocation?.entities?.length > 1)
+          ? mRates.multiAllocation.entities.map((ent, idx) => {
+              const origBe = project.billingEntities?.[idx];
+              const beTermsRaw = origBe?.paymentTermsClient !== undefined
+                ? Number(origBe.paymentTermsClient)
+                : (ent.paymentTermsClient !== undefined ? Number(ent.paymentTermsClient) : (project.paymentTermsClient ?? 60));
+              const totalDaysTerms = beTermsRaw + stressTestClientDays;
+              return {
+                revMonth: (Number(ent.revenueDaily) || 0) * workingDays,
+                delayMonths: totalDaysTerms <= 0 ? 0 : Math.max(1, Math.round(totalDaysTerms / 30))
+              };
+            })
           : [{ revMonth: rev, delayMonths: clientDelayMonths }];
 
         billingSlices.forEach(({ revMonth, delayMonths }) => {
@@ -418,11 +445,12 @@ export const calculateAnnualBudgetAndCashFlow = (projects, options = {}) => {
           if (factoringEnabled) {
             const advanceAmount = revMonth * (factoringAdvanceRate / 100);
             const fee = revMonth * (factoringFeePercent / 100);
-            const remainingAmount = revMonth - advanceAmount - fee;
+            const netAdvance = Math.max(0, advanceAmount - fee);
+            const remainingAmount = Math.max(0, revMonth - advanceAmount);
 
             // Mensile
-            cashInflows[m] += (advanceAmount - fee);
-            cashInflowBreakdown[m].factoringAdvance += (advanceAmount - fee);
+            cashInflows[m] += netAdvance;
+            cashInflowBreakdown[m].factoringAdvance += netAdvance;
             const collMonth = m + delayMonths;
             if (collMonth < totalMonthsHorizon) {
               cashInflows[collMonth] += remainingAmount;
@@ -431,8 +459,8 @@ export const calculateAnnualBudgetAndCashFlow = (projects, options = {}) => {
 
             // Quindicinale
             const biweeklyCurrent = m * 2 + 1; // Fine mese m
-            biweeklyCashInflows[biweeklyCurrent] += (advanceAmount - fee);
-            biweeklyInflowBreakdown[biweeklyCurrent].factoring += (advanceAmount - fee);
+            biweeklyCashInflows[biweeklyCurrent] += netAdvance;
+            biweeklyInflowBreakdown[biweeklyCurrent].factoring += netAdvance;
             const biweeklyColl = (m + delayMonths) * 2 + 1; // Fine mese di saldo
             if (biweeklyColl < totalBiweeklyHorizon) {
               biweeklyCashInflows[biweeklyColl] += remainingAmount;
@@ -449,26 +477,6 @@ export const calculateAnnualBudgetAndCashFlow = (projects, options = {}) => {
             if (biweeklyColl < totalBiweeklyHorizon) {
               biweeklyCashInflows[biweeklyColl] += revMonth;
               biweeklyInflowBreakdown[biweeklyColl].clients += revMonth;
-            }
-          }
-
-          // Continuità dei flussi di cassa per anno a regime (es. 2027 da dati 2026)
-          if (rolloverPreviousYearBudget && m === 0) {
-            if (delayMonths >= 2) {
-              cashInflows[0] += revMonth;
-              cashInflowBreakdown[0].clientsRegular += revMonth;
-              if (biweeklyCashInflows.length > 1) {
-                biweeklyCashInflows[1] += revMonth;
-                biweeklyInflowBreakdown[1].clients += revMonth;
-              }
-            }
-            if (delayMonths >= 1) {
-              cashInflows[1] += revMonth;
-              cashInflowBreakdown[1].clientsRegular += revMonth;
-              if (biweeklyCashInflows.length > 3) {
-                biweeklyCashInflows[3] += revMonth;
-                biweeklyInflowBreakdown[3].clients += revMonth;
-              }
             }
           }
         });
@@ -490,7 +498,7 @@ export const calculateAnnualBudgetAndCashFlow = (projects, options = {}) => {
         // - Stipendio Netto (~65%) pagato il 10 del mese (1ª Quindicina 1-15)
         // - Contributi INPS / F24 (~35%) pagati il 16 del mese (2ª Quindicina 16-31)
         const driverNetSalary = driverC * 0.65;
-        const driverInpsF24 = (driverC * 0.35) + porterageC;
+        const driverInpsF24 = driverC * 0.35;
         const biweeklyDriverNet = driverMonth * 2 + 0;
         const biweeklyDriverF24 = driverMonth * 2 + 1;
         if (biweeklyDriverNet < totalBiweeklyHorizon) {
@@ -500,6 +508,10 @@ export const calculateAnnualBudgetAndCashFlow = (projects, options = {}) => {
         if (biweeklyDriverF24 < totalBiweeklyHorizon) {
           biweeklyCashOutflows[biweeklyDriverF24] += driverInpsF24;
           biweeklyOutflowBreakdown[biweeklyDriverF24].driversInpsF24 += driverInpsF24;
+          if (porterageC > 0) {
+            biweeklyCashOutflows[biweeklyDriverF24] += porterageC;
+            biweeklyOutflowBreakdown[biweeklyDriverF24].otherSuppliers += porterageC;
+          }
         }
 
         // B. CARBURANTE / ENERGIA / LNG: Pagamento secondo termine energia (default 30 gg, quindicinale M+1)
@@ -585,6 +597,151 @@ export const calculateAnnualBudgetAndCashFlow = (projects, options = {}) => {
         }
         pushSupplierOutflow(m, supplierDelayMonths, partC + otherC);
         void personnelCashC;
+      }
+    }
+
+    // 3B. CODE DI CASSA DA ANNO PRECEDENTE (solo per commesse effettivamente attive in Ott-Dic dell'anno year - 1)
+    if (rolloverPreviousYearBudget && year > 2026) {
+      const prevYear = year - 1;
+      for (let prevM = 9; prevM <= 11; prevM++) {
+        if (!isProjectActiveInMonth(project, prevM, prevYear, { rolloverPreviousYearBudget: false })) {
+          continue;
+        }
+        const workingDays = project.workingDaysMonth || 22;
+        const prevRates = getProjectEffectiveRatesForMonth(project, prevYear, prevM);
+        const prevRev = prevRates.monthlyRevenue;
+
+        const prevBillingSlices = (project.isMultiClient && prevRates.multiAllocation?.entities?.length > 1)
+          ? prevRates.multiAllocation.entities.map((ent, idx) => {
+              const origBe = project.billingEntities?.[idx];
+              const beTermsRaw = origBe?.paymentTermsClient !== undefined
+                ? Number(origBe.paymentTermsClient)
+                : (ent.paymentTermsClient !== undefined ? Number(ent.paymentTermsClient) : (project.paymentTermsClient ?? 60));
+              const totalDaysTerms = beTermsRaw + stressTestClientDays;
+              return {
+                revMonth: (Number(ent.revenueDaily) || 0) * workingDays,
+                delayMonths: totalDaysTerms <= 0 ? 0 : Math.max(1, Math.round(totalDaysTerms / 30))
+              };
+            })
+          : [{ revMonth: prevRev, delayMonths: clientDelayMonths }];
+
+        prevBillingSlices.forEach(({ revMonth, delayMonths }) => {
+          if (revMonth <= 0) return;
+          const targetM = prevM + delayMonths - 12;
+          if (targetM >= 0 && targetM < 12) {
+            const tailInflow = factoringEnabled
+              ? Math.max(0, revMonth - revMonth * (factoringAdvanceRate / 100))
+              : revMonth;
+            if (tailInflow > 0) {
+              cashInflows[targetM] += tailInflow;
+              cashInflowBreakdown[targetM].clientsRegular += tailInflow;
+              const bw = targetM * 2 + 1;
+              biweeklyCashInflows[bw] += tailInflow;
+              biweeklyInflowBreakdown[bw].clients += tailInflow;
+            }
+          }
+        });
+
+        // Uscite differite generate in Ott-Dic prevYear che scadono nell'anno corrente
+        const pDriverC = prevRates.driverCostDaily * workingDays;
+        const pFuelGrossC = project.energyPayer === 'client' ? 0 : prevRates.fuelCostDaily * workingDays;
+        const pTollsC = prevRates.tollsDaily * workingDays;
+        const pTiresC = prevRates.tiresDaily * workingDays;
+        const pVLeaseC = prevRates.vehicleLeaseDaily * workingDays;
+        const pTLeaseC = prevRates.trailerLeaseDaily * workingDays;
+        const pFridgeC = (Number(project.refrigerationCostDaily) || 0) * workingDays;
+        const pTelematicsC = (Number(project.telematicsCostDaily) || 0) * workingDays;
+        const pWashingC = (Number(project.washingCostDaily) || 0) * workingDays;
+        const pExtraC = (Number(project.extraCostDaily) || 0) * workingDays;
+        const pPartC = prevRates.partnerMarginDaily * workingDays;
+        const pPorterageC = (Number(project.porterageDaily) || 0) * workingDays;
+        const pOtherC = prevRates.otherCostsDaily * workingDays;
+
+        const targetDrvM = prevM + driverDelayMonths - 12;
+        if (targetDrvM >= 0 && targetDrvM < 12) {
+          cashOutflows[targetDrvM] += pDriverC;
+          cashOutflowBreakdown[targetDrvM].drivers += pDriverC;
+          const netSal = pDriverC * 0.65;
+          const inpsF24 = pDriverC * 0.35;
+          biweeklyCashOutflows[targetDrvM * 2] += netSal;
+          biweeklyOutflowBreakdown[targetDrvM * 2].driversNet += netSal;
+          biweeklyCashOutflows[targetDrvM * 2 + 1] += inpsF24;
+          biweeklyOutflowBreakdown[targetDrvM * 2 + 1].driversInpsF24 += inpsF24;
+          if (pPorterageC > 0) {
+            cashOutflows[targetDrvM] += pPorterageC;
+            cashOutflowBreakdown[targetDrvM].suppliersOther += pPorterageC;
+            biweeklyCashOutflows[targetDrvM * 2 + 1] += pPorterageC;
+            biweeklyOutflowBreakdown[targetDrvM * 2 + 1].otherSuppliers += pPorterageC;
+          }
+        }
+
+        const targetFuelM = prevM + fuelDelayMonths - 12;
+        if (targetFuelM >= 0 && targetFuelM < 12 && pFuelGrossC > 0) {
+          cashOutflows[targetFuelM] += pFuelGrossC;
+          cashOutflowBreakdown[targetFuelM].lngFuel += pFuelGrossC;
+          const halfF = pFuelGrossC / 2;
+          biweeklyCashOutflows[targetFuelM * 2] += halfF;
+          biweeklyOutflowBreakdown[targetFuelM * 2].lngFuel += halfF;
+          biweeklyCashOutflows[targetFuelM * 2 + 1] += halfF;
+          biweeklyOutflowBreakdown[targetFuelM * 2 + 1].lngFuel += halfF;
+        }
+
+        if (pTollsC > 0) {
+          if (pTermsTolls <= 15) {
+            const targetTollsM = prevM + 1 - 12;
+            if (targetTollsM >= 0 && targetTollsM < 12) {
+              const halfT = pTollsC / 2;
+              cashOutflows[targetTollsM] += halfT;
+              cashOutflowBreakdown[targetTollsM].tollsTelepass += halfT;
+              biweeklyCashOutflows[targetTollsM * 2] += halfT;
+              biweeklyOutflowBreakdown[targetTollsM * 2].tollsTelepass += halfT;
+            }
+          } else {
+            const targetTollsM = prevM + Math.max(0, Math.round(pTermsTolls / 30)) - 12;
+            if (targetTollsM >= 0 && targetTollsM < 12) {
+              cashOutflows[targetTollsM] += pTollsC;
+              cashOutflowBreakdown[targetTollsM].tollsTelepass += pTollsC;
+              biweeklyCashOutflows[targetTollsM * 2 + 1] += pTollsC;
+              biweeklyOutflowBreakdown[targetTollsM * 2 + 1].tollsTelepass += pTollsC;
+            }
+          }
+        }
+
+        const pushLeaseTail = (amount, timingObj, timingId) => {
+          if (!amount || amount <= 0) return;
+          const tM = prevM + timingObj.monthOffset - 12;
+          if (tM >= 0 && tM < 12) {
+            cashOutflows[tM] += amount;
+            cashOutflowBreakdown[tM].leasesTotal += amount;
+            if (timingId === 'M1_D10') cashOutflowBreakdown[tM].leasesM1D10 += amount;
+            else if (timingId === 'M1_D30') cashOutflowBreakdown[tM].leasesM1D30 += amount;
+            else cashOutflowBreakdown[tM].leasesM2D20 += amount;
+            const tBw = tM * 2 + (timingObj.quindicina - 1);
+            biweeklyCashOutflows[tBw] += amount;
+            biweeklyOutflowBreakdown[tBw].leases += amount;
+          }
+        };
+        pushLeaseTail(pVLeaseC, leaseTiming, leaseTimingKey);
+        pushLeaseTail(pTLeaseC, trailerLeaseTiming, trailerLeaseTimingKey);
+
+        const pushSupplierTail = (delayM, amount) => {
+          if (!amount || amount <= 0) return;
+          const tM = prevM + delayM - 12;
+          if (tM >= 0 && tM < 12) {
+            cashOutflows[tM] += amount;
+            cashOutflowBreakdown[tM].suppliersOther += amount;
+            biweeklyCashOutflows[tM * 2 + 1] += amount;
+            biweeklyOutflowBreakdown[tM * 2 + 1].otherSuppliers += amount;
+          }
+        };
+        pushSupplierTail(tiresDelayMonths, pTiresC);
+        pushSupplierTail(fridgeDelayMonths, pFridgeC);
+        pushSupplierTail(telematicsDelayMonths, pTelematicsC);
+        pushSupplierTail(washingDelayMonths, pWashingC);
+        if (project.extraCostFrequency !== 'one_time') {
+          pushSupplierTail(extraDelayMonths, pExtraC);
+        }
+        pushSupplierTail(supplierDelayMonths, pPartC + pOtherC);
       }
     }
   });
@@ -717,13 +874,25 @@ export const calculateAnnualBudgetAndCashFlow = (projects, options = {}) => {
 
   // Stima imposte (IRES/IRAP ~25% su MOL)
   const estimatedTaxes = annualMol > 0 ? annualMol * (taxRatePercent / 100) : 0;
-  const operatingCashFlowPreDebt = Math.max(0, annualMol - estimatedTaxes);
+  // annualMol è già al netto dei canoni di noleggio: per ottenere il CFADS ante-servizio canoni li sommiamo di nuovo
+  const operatingCashFlowPreDebt = Math.max(0, annualMol + totalAnnualLeases - estimatedTaxes);
 
-  // DSCR (Debt Service Coverage Ratio): Cash Flow Operativo / Servizio Debito (Canoni NLT)
-  const dscr = totalAnnualLeases > 0 ? (operatingCashFlowPreDebt / totalAnnualLeases) : 9.99;
+  // DSCR (Debt Service Coverage Ratio): CFADS Ante-Canoni / Canoni NLT
+  const dscr = totalAnnualLeases > 0 ? (operatingCashFlowPreDebt / totalAnnualLeases) : null;
   let dscrRating = 'Ottimo (Bancabile)';
   let dscrColor = 'emerald';
-  if (dscr < 1.05) {
+  if (dscr === null) {
+    if (annualRevenue <= 0) {
+      dscrRating = 'N/D';
+      dscrColor = 'slate';
+    } else if (annualMol > 0) {
+      dscrRating = 'Nessun Canone';
+      dscrColor = 'emerald';
+    } else {
+      dscrRating = 'Negativo';
+      dscrColor = 'rose';
+    }
+  } else if (dscr < 1.05) {
     dscrRating = 'Critico (Tensione Debito)';
     dscrColor = 'rose';
   } else if (dscr < 1.25) {
@@ -732,15 +901,20 @@ export const calculateAnnualBudgetAndCashFlow = (projects, options = {}) => {
   }
 
   // Fabbisogno finanziario di picco (Max tra mensile e quindicinale per cogliere i picchi infrasettimanali!)
-  const peakFinancingRequired = Math.max(
-    minCashBalance < 0 ? Math.abs(minCashBalance) : 0,
-    biweeklyMinCashBalance < 0 ? Math.abs(biweeklyMinCashBalance) : 0
-  );
+  const monthlyPeakDeficit = minCashBalance < 0 ? Math.abs(minCashBalance) : 0;
+  const biweeklyPeakDeficit = biweeklyMinCashBalance < 0 ? Math.abs(biweeklyMinCashBalance) : 0;
+  const peakFinancingRequired = Math.max(monthlyPeakDeficit, biweeklyPeakDeficit);
+  const peakDeficitIsBiweekly = biweeklyPeakDeficit > monthlyPeakDeficit;
+  const peakDeficitPeriod = peakFinancingRequired > 0
+    ? (peakDeficitIsBiweekly
+        ? (biweeklyCashFlow[peakDeficitBiweeklyIndex]?.label || '')
+        : MONTH_NAMES[peakDeficitMonthIndex])
+    : null;
 
-  // Fido Bancario / Castelletto SBF Minimo Consigliato (con buffer prudenziale 15% arrotondato a € 5.000)
+  // Fido Bancario / Castelletto SBF Minimo Consigliato (con buffer prudenziale 15% arrotondato a € 5.000; 0 se nessun deficit)
   const suggestedCreditLine = peakFinancingRequired > 0
     ? Math.ceil((peakFinancingRequired * 1.15) / 5000) * 5000
-    : 15000;
+    : 0;
 
   // CO2 Risparmiata nell'esercizio selezionato in base a km attivi nell'anno e alimentazione reale del mezzo
   const roundedCo2SavedKg = Math.round(co2SavedKg);
@@ -799,6 +973,10 @@ export const calculateAnnualBudgetAndCashFlow = (projects, options = {}) => {
     suggestedCreditLine,
     peakDeficitMonth: MONTH_NAMES[peakDeficitMonthIndex],
     peakDeficitBiweekly: biweeklyCashFlow[peakDeficitBiweeklyIndex]?.label || '',
+    peakDeficitPeriod,
+    peakDeficitIsBiweekly,
+    monthlyPeakDeficit,
+    biweeklyPeakDeficit,
     minCashBalance,
     biweeklyMinCashBalance,
     dscr,
@@ -820,7 +998,7 @@ export const isRefrigeratedTrailer = (trailer) => {
   const cat = (trailer.category || '').toLowerCase();
   const label = (trailer.categoryLabel || '').toLowerCase();
   const name = (trailer.name || '').toLowerCase();
-  return cat === 'refrigerato' || cat === 'refrigerato_azoto' || cat.includes('frigo') || label.includes('frigo') || name.includes('frigo');
+  return cat === 'refrigerato' || cat.startsWith('refrigerato') || cat.includes('frigo') || label.includes('frigo') || name.includes('frigo');
 };
 
 /**
@@ -841,18 +1019,26 @@ export const calculateDriverDailyCost = (vehicle, driverShiftType = '1_diurno', 
   // Il Daily 72 (7.2 tonnellate) è un autocarro che richiede obbligatoriamente Patente C (o C1)
   const isDaily72 = name.includes('72') || model.includes('72') || name.includes('daily 72');
 
+  const hasExplicitCE = explicitLicense.startsWith('ce');
+  const hasExplicitC = !hasExplicitCE && (explicitLicense.startsWith('c_') || explicitLicense === 'c');
+  const hasExplicitB = explicitLicense.startsWith('b_') || explicitLicense === 'b';
+
   const category = isDaily72 ? 'motrice' : ((vehicle?.category || '').toLowerCase() || (
-    explicitLicense.startsWith('c') ? 'motrice' :
-    explicitLicense.startsWith('b') ? 'furgone' : 'trattore'
+    hasExplicitCE ? 'trattore' :
+    hasExplicitC ? 'motrice' :
+    hasExplicitB ? 'furgone' : 'trattore'
   ));
 
   let dayCost = getLicCost('ce_diurno', 220);
   let nightCost = getLicCost('ce_notturno', 260);
 
-  if (isDaily72 || explicitLicense.startsWith('c_') || explicitLicense === 'c' || category === 'motrice') {
+  if (hasExplicitCE) {
+    dayCost = getLicCost('ce_diurno', 220);
+    nightCost = getLicCost('ce_notturno', 260);
+  } else if (isDaily72 || hasExplicitC || category === 'motrice') {
     dayCost = getLicCost('c_diurno', 180);
     nightCost = getLicCost('c_notturno', 220);
-  } else if (category === 'furgone' && !isDaily72) {
+  } else if (hasExplicitB || (category === 'furgone' && !isDaily72)) {
     dayCost = getLicCost('b', 140);
     nightCost = getLicCost('b_notturno', 170);
   }
@@ -897,27 +1083,38 @@ export const calculateRefrigerationDailyCost = (project = {}, trailer = null, se
 
   const tech = project.refrigerationTech || defaultTech;
   const techDefaults = tech === 'azoto' ? azotoDef : tech === 'elettrico' ? elettricoDef : gasolioDef;
+  const trailerConsumptionMatchesTech = tech === defaultTech && Number.isFinite(Number(trailer?.fridgeHourlyConsumption)) && Number(trailer?.fridgeHourlyConsumption) > 0;
+  const defaultHourlyCons = trailerConsumptionMatchesTech
+    ? Number(trailer.fridgeHourlyConsumption)
+    : (Number.isFinite(Number(techDefaults.hourlyConsumption)) ? Number(techDefaults.hourlyConsumption) : 3.0);
+  const defaultUnitCost = Number.isFinite(Number(techDefaults.unitCost)) ? Number(techDefaults.unitCost) : 1.80;
 
   if (!enabled) {
+    const rawOffHours = Number(project.refrigerationHoursDaily);
     return {
       enabled: false,
       tech,
-      unitCost: Number(techDefaults.unitCost),
-      hourlyConsumption: Number(trailer?.fridgeHourlyConsumption > 0 ? trailer.fridgeHourlyConsumption : techDefaults.hourlyConsumption),
-      hourlyCost: +(Number(techDefaults.unitCost) * Number(trailer?.fridgeHourlyConsumption > 0 ? trailer.fridgeHourlyConsumption : techDefaults.hourlyConsumption)).toFixed(2),
-      hoursPerDay: Number(project.refrigerationHoursDaily) || 0,
+      unitCost: defaultUnitCost,
+      hourlyConsumption: defaultHourlyCons,
+      hourlyCost: +(defaultUnitCost * defaultHourlyCons).toFixed(2),
+      hoursPerDay: Number.isFinite(rawOffHours) && rawOffHours >= 0 ? rawOffHours : 0,
       dailyCost: 0
     };
   }
 
-  const unitCost = project.refrigerationUnitCost !== undefined && project.refrigerationUnitCost !== ''
-    ? Number(project.refrigerationUnitCost)
-    : Number(techDefaults.unitCost);
-  const hourlyConsumption = project.refrigerationHourlyConsumption !== undefined && project.refrigerationHourlyConsumption !== ''
-    ? Number(project.refrigerationHourlyConsumption)
-    : (trailer?.fridgeHourlyConsumption > 0 ? Number(trailer.fridgeHourlyConsumption) : Number(techDefaults.hourlyConsumption));
-  const hoursPerDay = project.refrigerationHoursDaily !== undefined && project.refrigerationHoursDaily !== ''
-    ? Number(project.refrigerationHoursDaily)
+  const parsedUnit = Number(project.refrigerationUnitCost);
+  const unitCost = project.refrigerationUnitCost !== undefined && project.refrigerationUnitCost !== '' && Number.isFinite(parsedUnit) && parsedUnit >= 0
+    ? parsedUnit
+    : defaultUnitCost;
+
+  const parsedCons = Number(project.refrigerationHourlyConsumption);
+  const hourlyConsumption = project.refrigerationHourlyConsumption !== undefined && project.refrigerationHourlyConsumption !== '' && Number.isFinite(parsedCons) && parsedCons >= 0
+    ? parsedCons
+    : defaultHourlyCons;
+
+  const parsedHours = Number(project.refrigerationHoursDaily);
+  const hoursPerDay = project.refrigerationHoursDaily !== undefined && project.refrigerationHoursDaily !== '' && Number.isFinite(parsedHours) && parsedHours >= 0
+    ? parsedHours
     : 8;
 
   const hourlyCost = +(unitCost * hourlyConsumption).toFixed(2);
@@ -1056,6 +1253,7 @@ export const COST_ALLOCATION_MODES = {
 export const rebalanceManualCostShares = (entities = [], activeCount, changedIdx, rawPercent) => {
   if (!Array.isArray(entities) || entities.length === 0) return [];
   const count = Math.min(Math.max(1, Number(activeCount) || entities.length), entities.length);
+  const safeChangedIdx = changedIdx >= 0 && changedIdx < count ? changedIdx : 0;
   const clamped = +Math.min(100, Math.max(0, Number(rawPercent) || 0)).toFixed(2);
   const remaining = +(100 - clamped).toFixed(2);
 
@@ -1068,7 +1266,7 @@ export const rebalanceManualCostShares = (entities = [], activeCount, changedIdx
       if (i >= count) return item;
       return {
         ...item,
-        costSharePercent: i === changedIdx ? clamped : remaining
+        costSharePercent: i === safeChangedIdx ? clamped : remaining
       };
     });
   }
@@ -1076,24 +1274,26 @@ export const rebalanceManualCostShares = (entities = [], activeCount, changedIdx
   const otherIndices = [];
   let othersPrevSum = 0;
   for (let i = 0; i < count; i++) {
-    if (i !== changedIdx) {
+    if (i !== safeChangedIdx) {
       otherIndices.push(i);
       othersPrevSum += Math.max(0, Number(entities[i]?.costSharePercent) || 0);
     }
   }
 
   const newShares = new Map();
-  newShares.set(changedIdx, clamped);
+  newShares.set(safeChangedIdx, clamped);
   let runningOthers = 0;
 
   otherIndices.forEach((origIdx, pos) => {
     if (pos === otherIndices.length - 1) {
       newShares.set(origIdx, +Math.max(0, remaining - runningOthers).toFixed(2));
     } else {
-      const share = othersPrevSum > 0
+      const rawShare = othersPrevSum > 0
         ? +(((Math.max(0, Number(entities[origIdx]?.costSharePercent) || 0)) / othersPrevSum) * remaining).toFixed(2)
         : +(remaining / otherIndices.length).toFixed(2);
-      runningOthers += share;
+      const maxAllowable = +Math.max(0, remaining - runningOthers).toFixed(2);
+      const share = Math.min(rawShare, maxAllowable);
+      runningOthers = +(runningOthers + share).toFixed(2);
       newShares.set(origIdx, share);
     }
   });
@@ -1381,8 +1581,10 @@ export const getAllProjectPriceVariations = (project) => {
   const workingDays = Number(project.workingDaysMonth) || 22;
   const list = [];
 
-  // 1. Variazioni canone dal Mezzo Motore
-  if (Array.isArray(project.vehicleLeaseVariations)) {
+  // 1. Variazioni canone dal Mezzo Motore (ignorate in Gestione Terzi 'T')
+  if (project.managementType !== 'T' && Array.isArray(project.vehicleLeaseVariations)) {
+    const vInsMonthly = Number(project.vehicleInsuranceMonthly) || 0;
+    const basePureVLease = Math.max(0, +(((Number(project.vehicleLeaseDaily) || 0) * workingDays) - vInsMonthly).toFixed(2));
     project.vehicleLeaseVariations.forEach(v => {
       if (!v || !v.effectiveDate) return;
       list.push({
@@ -1392,7 +1594,7 @@ export const getAllProjectPriceVariations = (project) => {
         targetField: 'vehicleLeaseMonthly',
         effectiveDate: v.effectiveDate,
         formattedDate: formatVariationDate(v.effectiveDate),
-        previousValue: v.previousMonthlyLease !== undefined ? Number(v.previousMonthlyLease) : +((Number(project.vehicleLeaseDaily) || 0) * workingDays).toFixed(2),
+        previousValue: v.previousMonthlyLease !== undefined ? Number(v.previousMonthlyLease) : basePureVLease,
         newValue: Number(v.monthlyLease ?? v.newValue) || 0,
         note: v.note || 'Variazione canone noleggio mezzo'
       });
@@ -1401,6 +1603,8 @@ export const getAllProjectPriceVariations = (project) => {
 
   // 2. Variazioni canone dal Semirimorchio
   if (Array.isArray(project.trailerLeaseVariations)) {
+    const tInsMonthly = Number(project.trailerInsuranceMonthly) || 0;
+    const basePureTLease = Math.max(0, +(((Number(project.trailerLeaseDaily) || 0) * workingDays) - tInsMonthly).toFixed(2));
     project.trailerLeaseVariations.forEach(v => {
       if (!v || !v.effectiveDate) return;
       list.push({
@@ -1410,7 +1614,7 @@ export const getAllProjectPriceVariations = (project) => {
         targetField: 'trailerLeaseMonthly',
         effectiveDate: v.effectiveDate,
         formattedDate: formatVariationDate(v.effectiveDate),
-        previousValue: v.previousMonthlyLease !== undefined ? Number(v.previousMonthlyLease) : +((Number(project.trailerLeaseDaily) || 0) * workingDays).toFixed(2),
+        previousValue: v.previousMonthlyLease !== undefined ? Number(v.previousMonthlyLease) : basePureTLease,
         newValue: Number(v.monthlyLease ?? v.newValue) || 0,
         note: v.note || 'Variazione canone semirimorchio'
       });
@@ -1448,6 +1652,8 @@ export const getProjectEffectiveRatesForMonth = (project, targetYear = 2026, mon
 
   const baseVLeaseDaily = Number(project.vehicleLeaseDaily) || 0;
   const baseTLeaseDaily = Number(project.trailerLeaseDaily) || 0;
+  const vInsMonthly = Number(project.vehicleInsuranceMonthly) || 0;
+  const tInsMonthly = Number(project.trailerInsuranceMonthly) || 0;
   const baseDriverDaily = Number(project.driverCostDaily) || 0;
   const baseFuelDaily = project.energyPayer === 'client' ? 0 : (Number(project.fuelCostDaily) || 0);
   const baseTollsDaily = Number(project.tollsDaily) || 0;
@@ -1463,13 +1669,15 @@ export const getProjectEffectiveRatesForMonth = (project, targetYear = 2026, mon
   const byField = (field) => allVars.filter(v => v.targetField === field);
 
   const vLeaseVars = byField('vehicleLeaseMonthly');
+  const basePureVLeaseMonthly = Math.max(0, (baseVLeaseDaily * workingDays) - vInsMonthly);
   const vehicleLeaseDaily = vLeaseVars.length > 0 && workingDays > 0
-    ? +(resolveDatedValueForMonth(baseVLeaseDaily * workingDays, vLeaseVars, targetYear, monthIndex) / workingDays).toFixed(2)
+    ? +((resolveDatedValueForMonth(basePureVLeaseMonthly, vLeaseVars, targetYear, monthIndex) + vInsMonthly) / workingDays).toFixed(2)
     : baseVLeaseDaily;
 
   const tLeaseVars = byField('trailerLeaseMonthly');
+  const basePureTLeaseMonthly = Math.max(0, (baseTLeaseDaily * workingDays) - tInsMonthly);
   const trailerLeaseDaily = tLeaseVars.length > 0 && workingDays > 0
-    ? +(resolveDatedValueForMonth(baseTLeaseDaily * workingDays, tLeaseVars, targetYear, monthIndex) / workingDays).toFixed(2)
+    ? +((resolveDatedValueForMonth(basePureTLeaseMonthly, tLeaseVars, targetYear, monthIndex) + tInsMonthly) / workingDays).toFixed(2)
     : baseTLeaseDaily;
 
   const driverVars = byField('driverCostDaily');
@@ -1557,7 +1765,7 @@ export const getProjectEffectiveRatesForMonth = (project, targetYear = 2026, mon
  * Ricalcola dinamicamente anche eventuali variazioni prezzi/noli valide a partire da una data di decorrenza.
  */
 export const calculateSingleProjectMetrics = (project, options = {}) => {
-  const targetYear = options.year || 2026;
+  const targetYear = options.year || Math.max(2026, getProjectStartYear(project));
   const workingDays = Number(project.workingDaysMonth) || 22;
   const operatingMonths = Number(project.operatingMonths) || 12;
 
@@ -1602,10 +1810,23 @@ export const calculateSingleProjectMetrics = (project, options = {}) => {
     trailerLease = +(monthlyRatesList.reduce((s, r) => s + r.trailerLeaseDaily, 0) / nM).toFixed(2);
     weightedRevenueOverride = +(monthlyRatesList.reduce((s, r) => s + r.revenueDaily, 0) / nM).toFixed(2);
 
-    // Calcola fotografia Prima della variazione (Inizio Anno) vs Dopo la variazione (Fine Anno / Regime post-data)
-    const beforeRates = getProjectEffectiveRatesForMonth(project, targetYear - 1, 0);
-    const afterRates = getProjectEffectiveRatesForMonth(project, targetYear + 1, 11);
+    // Calcola fotografia Prima della prima variazione vs Dopo l'ultima variazione (funziona anche per date 2028+)
+    const firstVar = allVariations[0];
     const latestVar = allVariations[allVariations.length - 1];
+    const firstParts = String(firstVar.effectiveDate).split('-');
+    const firstY = parseInt(firstParts[0], 10) || targetYear;
+    const firstM = (parseInt(firstParts[1], 10) || 1) - 1;
+    const prevMonthIdx = firstM === 0 ? 11 : firstM - 1;
+    const prevYearIdx = firstM === 0 ? firstY - 1 : firstY;
+
+    const latestParts = String(latestVar.effectiveDate).split('-');
+    const latestY = parseInt(latestParts[0], 10) || targetYear;
+    const latestM = (parseInt(latestParts[1], 10) || 1) - 1;
+    const afterMonthIdx = latestM === 11 ? 0 : latestM + 1;
+    const afterYearIdx = latestM === 11 ? latestY + 1 : latestY;
+
+    const beforeRates = getProjectEffectiveRatesForMonth(project, prevYearIdx, prevMonthIdx);
+    const afterRates = getProjectEffectiveRatesForMonth(project, afterYearIdx, afterMonthIdx);
 
     variationSummary = {
       hasVariations: true,
@@ -1687,12 +1908,11 @@ export const calculateSingleProjectMetrics = (project, options = {}) => {
   const vLeaseGapDays = Math.max(0, clientDso - getLeaseOffset(leaseTimingKey));
   const tLeaseGapDays = Math.max(0, clientDso - getLeaseOffset(trailerLeaseTimingKey));
 
-  // Personale (Autisti + Facchinaggio): Pagato al giorno 16 del mese T1 (o termine impostato)
-  // In tesoreria reale, prima dell'incasso del cliente l'azienda deve sborsare l'intera retribuzione mensile.
-  // Con incasso standard (DSO >= 30 gg) l'anticipo di cassa deve coprire almeno 1 mensilità intera
-  // (tariffa giornaliera * giornate lavorative del mese). Con DSO 60 gg copre 2 mensilità, con DSO 90 gg 3 mensilità.
-  const personnelAdvanceMonths = clientDso <= 0 ? 0 : Math.max(1, clientDso / 30);
-  const driverGapDays = Math.round(personnelAdvanceMonths * 30);
+  // Personale (Autisti + Facchinaggio): Pagato al giorno `driverTerms` del mese T1 (default 16)
+  // Il gap di tesoreria riflette lo sfasamento reale tra incasso cliente (DSO) ed esborso retribuzioni.
+  const effectiveDriverGapDays = clientDso <= 0 ? 0 : Math.max(0, clientDso - Math.max(0, driverTerms));
+  const personnelAdvanceMonths = effectiveDriverGapDays / 30;
+  const driverGapDays = Math.round(effectiveDriverGapDays);
   const fuelGapDays = Math.max(0, clientDso - fuelTerms);
   const tollsGapDays = Math.max(0, clientDso - tollsTerms);
   const tiresGapDays = Math.max(0, clientDso - tiresTerms);
@@ -1782,7 +2002,8 @@ export const calculateSingleProjectMetrics = (project, options = {}) => {
 };
 
 export const formatEUR = (value) => {
-  const num = typeof value === 'string' ? parseFloat(value) : (value || 0);
+  const parsed = typeof value === 'string' ? parseFloat(value) : Number(value ?? 0);
+  const num = Number.isFinite(parsed) ? parsed : 0;
   return new Intl.NumberFormat('it-IT', {
     style: 'currency',
     currency: 'EUR',
@@ -1793,7 +2014,8 @@ export const formatEUR = (value) => {
 };
 
 export const formatPercent = (value) => {
-  const num = typeof value === 'string' ? parseFloat(value) : (value || 0);
+  const parsed = typeof value === 'string' ? parseFloat(value) : Number(value ?? 0);
+  const num = Number.isFinite(parsed) ? parsed : 0;
   return `${num.toFixed(1)}%`;
 };
 
@@ -1831,9 +2053,15 @@ export const calculateSpecificInsuranceCost = (vehicle, trailer, workingDays = 2
   let trailerInsuranceYearly = 0;
   let trailerInsuranceIncluded = true;
   if (trailer) {
-    if (trailer.insuranceIncluded === false && Number(trailer.insuranceYearly) > 0) {
+    if (trailer.ownershipType === 'proprieta' || trailer.ownershipType === 'terzi') {
+      // Nei semirimorchi di proprietà l'assicurazione è già inclusa nel costo mensile
+      trailerInsuranceIncluded = true;
+      trailerInsuranceYearly = 0;
+    } else if (trailer.insuranceIncluded === false) {
       trailerInsuranceIncluded = false;
-      trailerInsuranceYearly = Number(trailer.insuranceYearly) || defaultTrailerInsYearly;
+      trailerInsuranceYearly = Number(trailer.insuranceYearly) > 0
+        ? Number(trailer.insuranceYearly)
+        : defaultTrailerInsYearly;
     } else {
       trailerInsuranceIncluded = true;
       trailerInsuranceYearly = 0;
@@ -1880,6 +2108,9 @@ export const calculateTireCostPerKm = (vehicle, trailer, options = {}) => {
     costPerTireTrailer = 380,
     costPerTireRigid = 420,
     costPerTireLight = 240,
+    tiresTractor = 6,
+    tiresTrailer = 6,
+    tiresRigidTruck = 6,
     lifeTrailer = 80000,
     lifeKmTrailer,
     lifeTractorElectric = 50000,
@@ -1892,18 +2123,20 @@ export const calculateTireCostPerKm = (vehicle, trailer, options = {}) => {
     lifeKmLight
   } = options;
 
-  const effLifeTrailer = Number(lifeKmTrailer || lifeTrailer) || 80000;
-  const effLifeTractorBEV = Number(lifeKmTractorElectric || lifeTractorElectric) || 50000;
-  const effLifeRigid = Number(lifeKmRigidElectric || lifeRigidElectric) || 80000;
-  const effLifeTractorBio = Number(lifeKmTractorBiolng || lifeTractorBiolng) || 85000;
-  const effLifeLight = Number(lifeKmLight || lifeLight) || 65000;
+  const sanitizePositive = (val, def) => (Number.isFinite(Number(val)) && Number(val) > 0 ? Number(val) : def);
+
+  const effLifeTrailer = sanitizePositive(lifeKmTrailer ?? lifeTrailer, 80000);
+  const effLifeTractorBEV = sanitizePositive(lifeKmTractorElectric ?? lifeTractorElectric, 50000);
+  const effLifeRigid = sanitizePositive(lifeKmRigidElectric ?? lifeRigidElectric, 80000);
+  const effLifeTractorBio = sanitizePositive(lifeKmTractorBiolng ?? lifeTractorBiolng, 85000);
+  const effLifeLight = sanitizePositive(lifeKmLight ?? lifeLight, 65000);
 
   let vehicleRate = 0;
   let trailerRate = 0;
   let vehicleTireUnitCost = costPerTire;
-  let trailerTireUnitCost = Number(costPerTireTrailer || costPerTire) || 380;
-  let vehicleTiresCount = 6;
-  let trailerTiresCount = 6;
+  let trailerTireUnitCost = sanitizePositive(costPerTireTrailer ?? costPerTire, 380);
+  let vehicleTiresCount = sanitizePositive(tiresTractor, 6);
+  let trailerTiresCount = sanitizePositive(tiresTrailer, 6);
   let vehicleLifeKm = effLifeRigid;
 
   if (vehicle) {
@@ -1916,49 +2149,49 @@ export const calculateTireCostPerKm = (vehicle, trailer, options = {}) => {
       (vehicle.capacityPlt && vehicle.capacityPlt <= 9);
 
     if (isVanOrLight) {
-      vehicleTiresCount = Number(vehicle.tireCount) || ((vehicle.name || '').includes('72') ? 6 : 4);
+      vehicleTiresCount = sanitizePositive(vehicle.tireCount, (vehicle.name || '').includes('72') ? 6 : 4);
       vehicleTireUnitCost = Number(vehicle.costPerTire) > 0
         ? Number(vehicle.costPerTire)
-        : (Number(costPerTireLight || costPerTire) || 240);
-      vehicleLifeKm = Number(vehicle.tireLifeKm) > 0 ? Number(vehicle.tireLifeKm) : effLifeLight;
+        : sanitizePositive(costPerTireLight ?? costPerTire, 240);
+      vehicleLifeKm = sanitizePositive(vehicle.tireLifeKm, effLifeLight);
       vehicleRate = (vehicleTiresCount * vehicleTireUnitCost) / vehicleLifeKm;
     } else if (isTractor && isElectric) {
-      vehicleTiresCount = Number(vehicle.tireCount) || 6;
+      vehicleTiresCount = sanitizePositive(vehicle.tireCount, sanitizePositive(tiresTractor, 6));
       vehicleTireUnitCost = Number(vehicle.costPerTire) > 0
         ? Number(vehicle.costPerTire)
-        : (Number(costPerTireTractorElectric || costPerTire) || 520);
-      vehicleLifeKm = Number(vehicle.tireLifeKm) > 0 ? Number(vehicle.tireLifeKm) : effLifeTractorBEV;
+        : sanitizePositive(costPerTireTractorElectric ?? costPerTire, 520);
+      vehicleLifeKm = sanitizePositive(vehicle.tireLifeKm, effLifeTractorBEV);
       vehicleRate = (vehicleTiresCount * vehicleTireUnitCost) / vehicleLifeKm;
     } else if (isTractor) {
-      vehicleTiresCount = Number(vehicle.tireCount) || 6;
+      vehicleTiresCount = sanitizePositive(vehicle.tireCount, sanitizePositive(tiresTractor, 6));
       vehicleTireUnitCost = Number(vehicle.costPerTire) > 0
         ? Number(vehicle.costPerTire)
-        : (Number(costPerTireTractorBiolng || costPerTire) || 460);
-      vehicleLifeKm = Number(vehicle.tireLifeKm) > 0 ? Number(vehicle.tireLifeKm) : effLifeTractorBio;
+        : sanitizePositive(costPerTireTractorBiolng ?? costPerTire, 460);
+      vehicleLifeKm = sanitizePositive(vehicle.tireLifeKm, effLifeTractorBio);
       vehicleRate = (vehicleTiresCount * vehicleTireUnitCost) / vehicleLifeKm;
     } else if (isRigid) {
-      vehicleTiresCount = Number(vehicle.tireCount) || 6;
+      vehicleTiresCount = sanitizePositive(vehicle.tireCount, sanitizePositive(tiresRigidTruck, 6));
       vehicleTireUnitCost = Number(vehicle.costPerTire) > 0
         ? Number(vehicle.costPerTire)
-        : (Number(costPerTireRigid || costPerTire) || 420);
-      vehicleLifeKm = Number(vehicle.tireLifeKm) > 0 ? Number(vehicle.tireLifeKm) : effLifeRigid;
+        : sanitizePositive(costPerTireRigid ?? costPerTire, 420);
+      vehicleLifeKm = sanitizePositive(vehicle.tireLifeKm, effLifeRigid);
       vehicleRate = (vehicleTiresCount * vehicleTireUnitCost) / vehicleLifeKm;
     } else {
-      vehicleTiresCount = Number(vehicle.tireCount) || 6;
+      vehicleTiresCount = sanitizePositive(vehicle.tireCount, sanitizePositive(tiresRigidTruck, 6));
       vehicleTireUnitCost = Number(vehicle.costPerTire) > 0
         ? Number(vehicle.costPerTire)
-        : (Number(costPerTireRigid || costPerTire) || 420);
-      vehicleLifeKm = Number(vehicle.tireLifeKm) > 0 ? Number(vehicle.tireLifeKm) : effLifeRigid;
+        : sanitizePositive(costPerTireRigid ?? costPerTire, 420);
+      vehicleLifeKm = sanitizePositive(vehicle.tireLifeKm, effLifeRigid);
       vehicleRate = (vehicleTiresCount * vehicleTireUnitCost) / vehicleLifeKm;
     }
   }
 
   if (trailer) {
-    trailerTiresCount = Number(trailer.tireCount) || 6;
+    trailerTiresCount = sanitizePositive(trailer.tireCount, sanitizePositive(tiresTrailer, 6));
     trailerTireUnitCost = Number(trailer.costPerTire) > 0
       ? Number(trailer.costPerTire)
-      : (Number(costPerTireTrailer || costPerTire) || 380);
-    const trlLife = Number(trailer.tireLifeKm) > 0 ? Number(trailer.tireLifeKm) : effLifeTrailer;
+      : sanitizePositive(costPerTireTrailer ?? costPerTire, 380);
+    const trlLife = sanitizePositive(trailer.tireLifeKm, effLifeTrailer);
     trailerRate = (trailerTiresCount * trailerTireUnitCost) / trlLife;
   }
 
@@ -2022,11 +2255,11 @@ export const recalculateProjectCost = (project, fleet = [], trailers = [], setti
 
   if (managementType === 'T') {
     // MODALITÀ FORNITORE / TERZISTA ("T"):
-    driverCostDaily = Number(project.overrideDriverCostDaily || 0);
-    fuelCostDaily = Number(project.overrideFuelCostDaily || 0);
-    tollsDaily = Number(project.overrideTollsDaily || 0);
-    tiresDaily = Number(project.overrideTiresDaily || 0);
-    vehicleLeaseDaily = Number(project.overrideVehicleLeaseDaily || 0);
+    driverCostDaily = Number(project.overrideDriverCostDaily ?? project.driverCostDaily ?? 0);
+    fuelCostDaily = Number(project.overrideFuelCostDaily ?? project.fuelCostDaily ?? 0);
+    tollsDaily = Number(project.overrideTollsDaily ?? project.tollsDaily ?? 0);
+    tiresDaily = Number(project.overrideTiresDaily ?? project.tiresDaily ?? 0);
+    vehicleLeaseDaily = Number(project.overrideVehicleLeaseDaily ?? project.vehicleLeaseDaily ?? 0);
     washingCostDaily = project.washingEnabled === true ? accCalc.washingDaily : 0;
 
     if (trailer && workingDays > 0) {
@@ -2057,7 +2290,8 @@ export const recalculateProjectCost = (project, fleet = [], trailers = [], setti
       fuelCostDaily = 0;
     } else if (vehicle && km > 0) {
       const fuelType = fuelTypes.find(f => f.id === vehicle.fuelTypeId);
-      const fuelPrice = fuelType ? fuelType.price : (vehicle.fuelTypeId === 'biolng' ? 1.18 : 0.36);
+      const defaultFuelFallbacks = { gasolio: 1.75, hvo: 1.72, biolng: 1.32, elettrico: 0.36 };
+      const fuelPrice = fuelType ? Number(fuelType.price) : (defaultFuelFallbacks[vehicle.fuelTypeId] ?? 1.75);
 
       if (vehicle.fuelTypeId === 'elettrico') {
         const consumptionKwhKm = vehicle.avgConsumption || 1.18;
@@ -2117,9 +2351,11 @@ export const recalculateProjectCost = (project, fleet = [], trailers = [], setti
     tiresDaily,
     vehicleLeaseDaily,
     trailerLeaseDaily,
-    vehicleLeaseVariations: Array.isArray(vehicle?.leaseVariations)
-      ? vehicle.leaseVariations
-      : (Array.isArray(project.vehicleLeaseVariations) ? project.vehicleLeaseVariations : []),
+    vehicleLeaseVariations: managementType === 'T'
+      ? []
+      : (Array.isArray(vehicle?.leaseVariations)
+          ? vehicle.leaseVariations
+          : (Array.isArray(project.vehicleLeaseVariations) ? project.vehicleLeaseVariations : [])),
     trailerLeaseVariations: Array.isArray(trailer?.leaseVariations)
       ? trailer.leaseVariations
       : (Array.isArray(project.trailerLeaseVariations) ? project.trailerLeaseVariations : []),

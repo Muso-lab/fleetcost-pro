@@ -1,10 +1,12 @@
 import { useState, useEffect, useMemo } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import storageService from '../services/storageService';
 import {
   calculateAnnualBudgetAndCashFlow,
   calculateSingleProjectMetrics,
   isProjectActiveInMonth,
+  getProjectStartYear,
+  isPotentialProject,
   formatEUR,
   formatPercent,
   OPERATING_UNITS,
@@ -52,17 +54,25 @@ import {
   YAxis,
   CartesianGrid,
   Tooltip,
-  Legend
+  Legend,
+  ReferenceLine
 } from 'recharts';
 
 const DashboardPage = () => {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [fleet, setFleet] = useState([]);
   const [trailers, setTrailers] = useState([]);
   const [projects, setProjects] = useState([]);
   const [settings, setSettings] = useState(null);
-  const [selectedYear, setSelectedYear] = useState(2026);
-  const [portfolioScope, setPortfolioScope] = useState('consolidated'); // 'consolidated' | 'activeOnly' | 'potentialOnly'
+  const [selectedYear, setSelectedYear] = useState(() => {
+    const y = parseInt(searchParams.get('year'), 10);
+    return y === 2027 ? 2027 : 2026;
+  });
+  const [portfolioScope, setPortfolioScope] = useState(() => {
+    const s = searchParams.get('scope');
+    return ['consolidated', 'activeOnly', 'potentialOnly'].includes(s) ? s : 'consolidated';
+  }); // 'consolidated' | 'activeOnly' | 'potentialOnly'
   const [dashboardSortBy, setDashboardSortBy] = useState(() => localStorage.getItem('four_dashboard_sort_by') || 'custom');
   const [dashboardHubFilter, setDashboardHubFilter] = useState('all');
   const [draggedProjectId, setDraggedProjectId] = useState(null);
@@ -94,10 +104,15 @@ const DashboardPage = () => {
   }, []);
 
   const handleMoveDashboardProject = (projectId, direction) => {
+    const visibleIdx = displayDashboardProjects.findIndex(p => p.id === projectId);
+    if (visibleIdx === -1) return;
+    const neighborIdx = direction === 'up' ? visibleIdx - 1 : visibleIdx + 1;
+    if (neighborIdx < 0 || neighborIdx >= displayDashboardProjects.length) return;
+    const neighborId = displayDashboardProjects[neighborIdx].id;
+
     const currentIndex = projects.findIndex(p => p.id === projectId);
-    if (currentIndex === -1) return;
-    const targetIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
-    if (targetIndex < 0 || targetIndex >= projects.length) return;
+    const targetIndex = projects.findIndex(p => p.id === neighborId);
+    if (currentIndex === -1 || targetIndex === -1) return;
 
     const newProjects = [...projects];
     const [moved] = newProjects.splice(currentIndex, 1);
@@ -125,18 +140,6 @@ const DashboardPage = () => {
     setProjects(newProjects);
   };
 
-  // Riconosce le commesse in trattativa / simulazione / potenziale
-  const isPotentialProject = (p) => {
-    if (!p) return false;
-    if (p.contractStatus) {
-      return p.contractStatus === 'potential' || p.contractStatus === 'simulation' || p.contractStatus === 'negotiation';
-    }
-    if (p.isPipelineFuture !== undefined) return Boolean(p.isPipelineFuture);
-    if (p.code && (p.code.startsWith('SIM-') || p.code.startsWith('PRJ-FUT'))) return true;
-    if (p.notes && (p.notes.toLowerCase().includes('preventivo') || p.notes.toLowerCase().includes('trattativa') || p.notes.toLowerCase().includes('simulazione'))) return true;
-    return false;
-  };
-
   // Suddivisione Status Quo (operative) vs Trattative Pipeline
   const statusQuoProjects = useMemo(() => projects.filter(p => !isPotentialProject(p)), [projects]);
   const potentialProjects = useMemo(() => projects.filter(p => isPotentialProject(p)), [projects]);
@@ -154,11 +157,26 @@ const DashboardPage = () => {
 
   // Commesse effettivamente attive in almeno un mese dell'esercizio selezionato
   const activeProjectsInYear = useMemo(() => {
+    const rollover = selectedYear > 2026;
     return effectiveProjects.filter(p =>
-      Array.from({ length: 12 }, (_, m) => isProjectActiveInMonth(p, selectedYear, m)).some(Boolean)
+      Array.from({ length: 12 }, (_, m) =>
+        isProjectActiveInMonth(p, m, selectedYear, { rolloverPreviousYearBudget: rollover })
+      ).some(Boolean)
     );
   }, [effectiveProjects, selectedYear]);
-  const notActiveInYearCount = effectiveProjects.length - activeProjectsInYear.length;
+
+  const { futureStartCount, expiredInYearCount } = useMemo(() => {
+    const activeIds = new Set(activeProjectsInYear.map(p => p.id));
+    let future = 0;
+    let expired = 0;
+    effectiveProjects.forEach(p => {
+      if (!activeIds.has(p.id)) {
+        if (getProjectStartYear(p) > selectedYear) future++;
+        else expired++;
+      }
+    });
+    return { futureStartCount: future, expiredInYearCount: expired };
+  }, [effectiveProjects, activeProjectsInYear, selectedYear]);
 
   // Metriche unitarie per singola commessa ricalcolate sull'anno selezionato (recepisce effectiveDate)
   const metricsById = useMemo(() => {
@@ -177,13 +195,14 @@ const DashboardPage = () => {
     return calculateAnnualBudgetAndCashFlow(effectiveProjects, {
       year: selectedYear,
       initialCashBalance: initialCash,
-      fleet
+      fleet,
+      trailers
     });
-  }, [effectiveProjects, selectedYear, portfolioScope, settings, fleet]);
+  }, [effectiveProjects, selectedYear, portfolioScope, settings, fleet, trailers]);
 
   // Modelli pluriennali per confronto strategico (dinamici sul perimetro selezionato)
-  const model2026 = useMemo(() => calculateAnnualBudgetAndCashFlow(effectiveProjects, { year: 2026, rolloverPreviousYearBudget: false, fleet }), [effectiveProjects, fleet]);
-  const model2027 = useMemo(() => calculateAnnualBudgetAndCashFlow(effectiveProjects, { year: 2027, rolloverPreviousYearBudget: true, fleet }), [effectiveProjects, fleet]);
+  const model2026 = useMemo(() => calculateAnnualBudgetAndCashFlow(effectiveProjects, { year: 2026, rolloverPreviousYearBudget: false, fleet, trailers }), [effectiveProjects, fleet, trailers]);
+  const model2027 = useMemo(() => calculateAnnualBudgetAndCashFlow(effectiveProjects, { year: 2027, rolloverPreviousYearBudget: true, fleet, trailers }), [effectiveProjects, fleet, trailers]);
 
   const {
     annualRevenue,
@@ -191,6 +210,7 @@ const DashboardPage = () => {
     annualMol,
     annualMolPercent,
     peakFinancingRequired,
+    peakDeficitPeriod,
     peakDeficitMonth,
     co2SavedKg,
     activeKmInYear,
@@ -216,12 +236,22 @@ const DashboardPage = () => {
   }, [activeProjectsInYear, metricsById]);
 
   // Statistiche di confronto per la Visione Strategica di Portafoglio (allineate a selectedYear)
-  const statusQuoProjectsInYear = useMemo(() => statusQuoProjects.filter(p =>
-    Array.from({ length: 12 }, (_, m) => isProjectActiveInMonth(p, selectedYear, m)).some(Boolean)
-  ), [statusQuoProjects, selectedYear]);
-  const potentialProjectsInYear = useMemo(() => potentialProjects.filter(p =>
-    Array.from({ length: 12 }, (_, m) => isProjectActiveInMonth(p, selectedYear, m)).some(Boolean)
-  ), [potentialProjects, selectedYear]);
+  const statusQuoProjectsInYear = useMemo(() => {
+    const rollover = selectedYear > 2026;
+    return statusQuoProjects.filter(p =>
+      Array.from({ length: 12 }, (_, m) =>
+        isProjectActiveInMonth(p, m, selectedYear, { rolloverPreviousYearBudget: rollover })
+      ).some(Boolean)
+    );
+  }, [statusQuoProjects, selectedYear]);
+  const potentialProjectsInYear = useMemo(() => {
+    const rollover = selectedYear > 2026;
+    return potentialProjects.filter(p =>
+      Array.from({ length: 12 }, (_, m) =>
+        isProjectActiveInMonth(p, m, selectedYear, { rolloverPreviousYearBudget: rollover })
+      ).some(Boolean)
+    );
+  }, [potentialProjects, selectedYear]);
 
   const statusQuoRevenueMonth = useMemo(() => statusQuoProjectsInYear.reduce((sum, p) => sum + (Number(metricsById[p.id]?.monthlyRevenue ?? p.monthlyRevenue) || 0), 0), [statusQuoProjectsInYear, metricsById]);
   const statusQuoCostMonth = useMemo(() => statusQuoProjectsInYear.reduce((sum, p) => sum + (Number(metricsById[p.id]?.monthlyCost ?? p.monthlyCost) || 0), 0), [statusQuoProjectsInYear, metricsById]);
@@ -239,27 +269,30 @@ const DashboardPage = () => {
   const combinedMolPct = combinedRevenueMonth > 0 ? (combinedMolMonth / combinedRevenueMonth) * 100 : 0;
   const totalActiveProjectsAllScopesInYear = statusQuoProjectsInYear.length + potentialProjectsInYear.length;
 
-  // Statistiche Flotta, Rimorchi e Sovrapposizioni dinamiche sull'anno e perimetro selezionati
+  // Statistiche Flotta, Rimorchi e Sovrapposizioni dinamiche sull'anno e perimetro selezionati (filtrate su anagrafica esistente)
   const totalVehicles = fleet.length;
+  const validFleetIds = useMemo(() => new Set(fleet.map(v => v.id)), [fleet]);
   const assignedVehicleIdsInScope = useMemo(() => {
-    return new Set(activeProjectsInYear.map(p => p.vehicleId).filter(Boolean));
-  }, [activeProjectsInYear]);
+    return new Set(activeProjectsInYear.map(p => p.vehicleId).filter(id => id && validFleetIds.has(id)));
+  }, [activeProjectsInYear, validFleetIds]);
   const assignedVehiclesCount = assignedVehicleIdsInScope.size;
   const freeVehiclesCount = Math.max(0, totalVehicles - assignedVehiclesCount);
-  const utilizationRate = totalVehicles > 0 ? ((assignedVehiclesCount / totalVehicles) * 100).toFixed(0) : 0;
+  const utilizationRate = totalVehicles > 0 ? Math.min(100, Math.round((assignedVehiclesCount / totalVehicles) * 100)) : 0;
 
   const totalTrailers = trailers.length;
+  const validTrailerIds = useMemo(() => new Set(trailers.map(t => t.id)), [trailers]);
   const assignedTrailersCount = useMemo(() => {
-    return new Set(activeProjectsInYear.map(p => p.trailerId).filter(Boolean)).size;
-  }, [activeProjectsInYear]);
+    return new Set(activeProjectsInYear.map(p => p.trailerId).filter(id => id && validTrailerIds.has(id))).size;
+  }, [activeProjectsInYear, validTrailerIds]);
 
   const overlappingVehicles = useMemo(() => {
     const overlapIds = new Set();
+    const rollover = selectedYear > 2026;
     for (let m = 0; m < 12; m++) {
       const countsByVehicle = {};
       activeProjectsInYear.forEach(p => {
-        if (!p.vehicleId) return;
-        if (isProjectActiveInMonth(p, selectedYear, m)) {
+        if (!p.vehicleId || !validFleetIds.has(p.vehicleId)) return;
+        if (isProjectActiveInMonth(p, m, selectedYear, { rolloverPreviousYearBudget: rollover })) {
           countsByVehicle[p.vehicleId] = (countsByVehicle[p.vehicleId] || 0) + 1;
           if (countsByVehicle[p.vehicleId] >= 2) {
             overlapIds.add(p.vehicleId);
@@ -268,7 +301,7 @@ const DashboardPage = () => {
       });
     }
     return Array.from(overlapIds);
-  }, [activeProjectsInYear, selectedYear]);
+  }, [activeProjectsInYear, selectedYear, validFleetIds]);
 
   // Commesse con alert (margine < 15% o negativo) attive nell'anno e perimetro selezionato
   const alertProjects = useMemo(() => {
@@ -286,9 +319,10 @@ const DashboardPage = () => {
       .slice(0, 6)
       .map(p => {
         const m = metricsById[p.id];
+        const safeName = p.name || 'Senza nome';
         return {
-          name: p.name.length > 22 ? p.name.substring(0, 20) + '...' : p.name,
-          fullName: p.name,
+          name: safeName.length > 22 ? safeName.substring(0, 20) + '...' : safeName,
+          fullName: safeName,
           Ricavo: Math.round(m?.monthlyRevenue ?? p.monthlyRevenue ?? 0),
           Costo: Math.round(m?.monthlyCost ?? p.monthlyCost ?? 0),
           MOL: Math.round(m?.monthlyMol ?? p.monthlyMol ?? 0)
@@ -524,7 +558,7 @@ const DashboardPage = () => {
             <div className="flex flex-wrap items-center gap-2">
               <span className="font-semibold text-slate-700">Perimetro selezionato:</span>
               <span className={`px-2.5 py-0.5 rounded-md font-bold text-xs border ${scopeBadge.color}`}>
-                {scopeBadge.label} ({activeProjectsInYear.length} attive in {selectedYear}{notActiveInYearCount > 0 ? ` • +${notActiveInYearCount} avvio ${selectedYear + 1}+` : ''})
+                {scopeBadge.label} ({activeProjectsInYear.length} attive in {selectedYear}{futureStartCount > 0 ? ` • +${futureStartCount} avvio ${selectedYear + 1}+` : ''}{expiredInYearCount > 0 ? ` • ${expiredInYearCount} scadute` : ''})
               </span>
               <span className="text-slate-400">|</span>
               <span className="text-slate-600">
@@ -553,7 +587,7 @@ const DashboardPage = () => {
                 {formatEUR(annualRevenue)}
               </div>
               <p className="text-[11px] text-slate-500 mt-0.5">
-                Budget annuo su {activeProjectsInYear.length} commesse attive{notActiveInYearCount > 0 ? ` (+${notActiveInYearCount} avvio ${selectedYear + 1}+)` : ''}
+                Budget annuo su {activeProjectsInYear.length} commesse attive{futureStartCount > 0 ? ` (+${futureStartCount} avvio ${selectedYear + 1}+)` : ''}{expiredInYearCount > 0 ? ` • ${expiredInYearCount} scadute` : ''}
               </p>
             </div>
 
@@ -648,18 +682,38 @@ const DashboardPage = () => {
 
               <div className="flex items-baseline justify-between mt-2">
                 <span className={`text-2xl lg:text-3xl font-black ${
-                  annualMolPercent >= 20 ? 'text-emerald-600' : annualMolPercent >= 12 ? 'text-teal-600' : 'text-amber-600'
+                  annualRevenue === 0
+                    ? 'text-slate-400'
+                    : annualMolPercent >= 20
+                      ? 'text-emerald-600'
+                      : annualMolPercent >= 15
+                        ? 'text-teal-600'
+                        : annualMolPercent >= 0
+                          ? 'text-amber-600'
+                          : 'text-rose-600'
                 }`}>
-                  {formatPercent(annualMolPercent)}
+                  {annualRevenue === 0 ? 'N/D' : formatPercent(annualMolPercent)}
                 </span>
                 <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                  annualMolPercent >= 20
-                    ? 'bg-emerald-100 text-emerald-800'
-                    : annualMolPercent >= 12
-                    ? 'bg-teal-100 text-teal-800'
-                    : 'bg-amber-100 text-amber-800'
+                  annualRevenue === 0
+                    ? 'bg-slate-100 text-slate-600'
+                    : annualMolPercent >= 20
+                      ? 'bg-emerald-100 text-emerald-800'
+                      : annualMolPercent >= 15
+                        ? 'bg-teal-100 text-teal-800'
+                        : annualMolPercent >= 0
+                          ? 'bg-amber-100 text-amber-800'
+                          : 'bg-rose-100 text-rose-800'
                 }`}>
-                  {annualMolPercent >= 20 ? 'Target Ottimo' : annualMolPercent >= 12 ? 'In Target' : 'Sotto Target'}
+                  {annualRevenue === 0
+                    ? 'Nessun Ricavo'
+                    : annualMolPercent >= 20
+                      ? 'Target Ottimo'
+                      : annualMolPercent >= 15
+                        ? 'In Target'
+                        : annualMolPercent >= 0
+                          ? 'Sotto Target'
+                          : 'In Perdita'}
                 </span>
               </div>
               <p className="text-[11px] text-slate-500 mt-0.5">
@@ -689,7 +743,7 @@ const DashboardPage = () => {
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           {/* Card A: Fabbisogno Cassa Circolante -> link a /cashflow */}
           <Link
-            to="/cashflow"
+            to={`/cashflow?year=${selectedYear}&scope=${portfolioScope}`}
             className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 hover:border-amber-400 hover:shadow-md transition flex items-center justify-between group"
           >
             <div className="space-y-1">
@@ -701,7 +755,14 @@ const DashboardPage = () => {
                 {formatEUR(workingCapitalGap)}
               </div>
               <p className="text-[11px] text-slate-500">
-                Picco tesoreria {selectedYear}: <strong className="text-slate-800">{formatEUR(peakFinancingRequired)}</strong> ({peakDeficitMonth})
+                Picco tesoreria {selectedYear}:{' '}
+                {peakFinancingRequired > 0 ? (
+                  <>
+                    <strong className="text-rose-700">{formatEUR(peakFinancingRequired)}</strong> ({peakDeficitPeriod || peakDeficitMonth})
+                  </>
+                ) : (
+                  <strong className="text-emerald-700">Nessun deficit</strong>
+                )}
               </p>
             </div>
             <div className="p-3 bg-amber-50 rounded-xl border border-amber-200 text-amber-600">
@@ -754,7 +815,7 @@ const DashboardPage = () => {
                 {(co2SavedKg / 1000).toFixed(1)} t
               </div>
               <p className="text-[11px] text-slate-500">
-                Su {(activeKmInYear || 0).toLocaleString('it-IT')} km/anno effettivi vs diesel
+                Su {(activeKmInYear || 0).toLocaleString('it-IT')} km green/anno effettivi vs diesel
               </p>
             </div>
             <div className="p-3 bg-emerald-50 rounded-xl border border-emerald-200 text-emerald-600">
@@ -815,8 +876,10 @@ const DashboardPage = () => {
                   <span className="font-medium text-slate-700">{formatEUR(model2026.annualCost)}</span>
                 </div>
                 <div className="flex justify-between pt-1 border-t border-slate-100 font-black">
-                  <span className="text-emerald-700">M.O.L. Annuo:</span>
-                  <span className="text-emerald-700">{formatEUR(model2026.annualMol)} ({formatPercent(model2026.annualMolPercent)})</span>
+                  <span className={model2026.annualMol >= 0 ? 'text-emerald-700' : 'text-rose-600'}>M.O.L. Annuo:</span>
+                  <span className={model2026.annualMol >= 0 ? 'text-emerald-700' : 'text-rose-600'}>
+                    {formatEUR(model2026.annualMol)} ({formatPercent(model2026.annualMolPercent)})
+                  </span>
                 </div>
               </div>
             </div>
@@ -858,8 +921,10 @@ const DashboardPage = () => {
                   <span className="font-medium text-slate-700">{formatEUR(model2027.annualCost)}</span>
                 </div>
                 <div className="flex justify-between pt-1 border-t border-slate-100 font-black">
-                  <span className="text-teal-700">M.O.L. Annuo:</span>
-                  <span className="text-teal-700">{formatEUR(model2027.annualMol)} ({formatPercent(model2027.annualMolPercent)})</span>
+                  <span className={model2027.annualMol >= 0 ? 'text-teal-700' : 'text-rose-600'}>M.O.L. Annuo:</span>
+                  <span className={model2027.annualMol >= 0 ? 'text-teal-700' : 'text-rose-600'}>
+                    {formatEUR(model2027.annualMol)} ({formatPercent(model2027.annualMolPercent)})
+                  </span>
                 </div>
               </div>
             </div>
@@ -922,7 +987,7 @@ const DashboardPage = () => {
                   {formatEUR(statusQuoRevenueMonth)}/m
                 </div>
                 <p className="text-[11px] text-slate-500 mt-0.5">
-                  Fatturato mensile contratti attivi {selectedYear} ({formatEUR(statusQuoRevenueMonth * 12)}/anno)
+                  Fatturato mensile contratti attivi {selectedYear} ({formatEUR(statusQuoRevenueMonth * 12)}/anno a regime 12m)
                 </p>
               </div>
 
@@ -932,8 +997,8 @@ const DashboardPage = () => {
                   <span className="font-medium text-slate-700">{formatEUR(statusQuoCostMonth)}/m</span>
                 </div>
                 <div className="flex justify-between pt-1 border-t border-slate-200/80 font-black">
-                  <span className="text-emerald-700">M.O.L. Mensile:</span>
-                  <span className="text-emerald-700">{formatEUR(statusQuoMolMonth)} ({formatPercent(statusQuoMolPct)})</span>
+                  <span className={statusQuoMolMonth >= 0 ? 'text-emerald-700' : 'text-rose-600'}>M.O.L. Mensile:</span>
+                  <span className={statusQuoMolMonth >= 0 ? 'text-emerald-700' : 'text-rose-600'}>{formatEUR(statusQuoMolMonth)} ({formatPercent(statusQuoMolPct)})</span>
                 </div>
               </div>
             </div>
@@ -968,7 +1033,7 @@ const DashboardPage = () => {
                   +{formatEUR(potentialRevenueMonth)}/m
                 </div>
                 <p className="text-[11px] text-slate-500 mt-0.5">
-                  Potenziale incremento mensile {selectedYear} (+{formatEUR(potentialRevenueMonth * 12)}/anno)
+                  Potenziale incremento mensile {selectedYear} (+{formatEUR(potentialRevenueMonth * 12)}/anno a regime 12m)
                 </p>
               </div>
 
@@ -978,8 +1043,10 @@ const DashboardPage = () => {
                   <span className="font-medium text-slate-700">+{formatEUR(potentialCostMonth)}/m</span>
                 </div>
                 <div className="flex justify-between pt-1 border-t border-slate-200/80 font-black">
-                  <span className="text-amber-800">Delta M.O.L. Atteso:</span>
-                  <span className="text-amber-800">+{formatEUR(potentialMolMonth)} ({formatPercent(potentialMolPct)})</span>
+                  <span className={potentialMolMonth >= 0 ? 'text-amber-800' : 'text-rose-600'}>Delta M.O.L. Atteso:</span>
+                  <span className={potentialMolMonth >= 0 ? 'text-amber-800' : 'text-rose-600'}>
+                    {potentialMolMonth >= 0 ? '+' : ''}{formatEUR(potentialMolMonth)} ({formatPercent(potentialMolPct)})
+                  </span>
                 </div>
               </div>
             </div>
@@ -1014,7 +1081,7 @@ const DashboardPage = () => {
                   {formatEUR(combinedRevenueMonth)}/m
                 </div>
                 <p className="text-[11px] text-slate-500 mt-0.5">
-                  Regime consolidato {selectedYear} ({formatEUR(combinedRevenueMonth * 12)}/anno)
+                  Regime consolidato {selectedYear} ({formatEUR(combinedRevenueMonth * 12)}/anno a regime 12m)
                 </p>
               </div>
 
@@ -1025,7 +1092,7 @@ const DashboardPage = () => {
                 </div>
                 <div className="flex justify-between pt-1 border-t border-blue-200/80 font-black">
                   <span className="text-[#164e87]">M.O.L. Globale:</span>
-                  <span className="text-emerald-700">{formatEUR(combinedMolMonth)} ({formatPercent(combinedMolPct)})</span>
+                  <span className={combinedMolMonth >= 0 ? 'text-emerald-700' : 'text-rose-600'}>{formatEUR(combinedMolMonth)} ({formatPercent(combinedMolPct)})</span>
                 </div>
               </div>
             </div>
@@ -1124,22 +1191,33 @@ const DashboardPage = () => {
               <BarChart3 className="w-5 h-5 text-emerald-600" />
             </div>
 
-            <div className="h-64 w-full pt-2">
+            <div className="h-72 w-full pt-2">
               {topProjectsData.length === 0 ? (
                 <div className="h-full flex items-center justify-center text-xs text-slate-400">
-                  Nessuna commessa presente nello scenario
+                  Nessuna commessa attiva nell'anno/scenario selezionato
                 </div>
               ) : (
                 <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={topProjectsData} margin={{ top: 10, right: 10, left: 10, bottom: 25 }}>
+                  <BarChart data={topProjectsData} margin={{ top: 10, right: 10, left: 10, bottom: 20 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-                    <XAxis dataKey="name" tick={{ fontSize: 10 }} angle={-15} textAnchor="end" />
-                    <YAxis tickFormatter={(val) => `€${(val / 1000).toFixed(0)}k`} tick={{ fontSize: 10 }} />
+                    <XAxis dataKey="name" tick={{ fontSize: 10 }} interval={0} height={55} angle={-15} textAnchor="end" />
+                    <YAxis
+                      tickFormatter={(val) => Math.abs(val) >= 1000 ? `€${(val / 1000).toFixed(1)}k` : `€${val}`}
+                      tick={{ fontSize: 10 }}
+                    />
                     <Tooltip
                       formatter={(val) => formatEUR(val)}
-                      contentStyle={{ backgroundColor: '#0f172a', borderRadius: '12px', color: '#fff', fontSize: '11px' }}
+                      labelFormatter={(label, payload) => payload?.[0]?.payload?.fullName || label}
+                      contentStyle={{ backgroundColor: '#0f172a', borderRadius: '12px', border: '1px solid #334155', color: '#f8fafc', fontSize: '11px' }}
+                      itemStyle={{ color: '#f8fafc' }}
+                      labelStyle={{ color: '#94a3b8', fontWeight: 700 }}
                     />
-                    <Bar dataKey="MOL" name="M.O.L. Mensile" fill="#10b981" radius={[4, 4, 0, 0]} />
+                    <ReferenceLine y={0} stroke="#94a3b8" strokeDasharray="3 3" />
+                    <Bar dataKey="MOL" name="M.O.L. Mensile" radius={[4, 4, 0, 0]}>
+                      {topProjectsData.map((entry, idx) => (
+                        <Cell key={`bar-${idx}`} fill={entry.MOL < 0 ? '#f43f5e' : '#10b981'} />
+                      ))}
+                    </Bar>
                   </BarChart>
                 </ResponsiveContainer>
               )}
@@ -1156,7 +1234,7 @@ const DashboardPage = () => {
               <PieIcon className="w-5 h-5 text-blue-600" />
             </div>
 
-            <div className="h-64 w-full flex items-center justify-center">
+            <div className="h-72 w-full flex items-center justify-center">
               {pieData.length === 0 ? (
                 <div className="h-full flex items-center justify-center text-xs text-slate-400">
                   Nessun costo rilevato nello scenario
@@ -1167,9 +1245,9 @@ const DashboardPage = () => {
                     <Pie
                       data={pieData}
                       cx="50%"
-                      cy="50%"
-                      innerRadius={50}
-                      outerRadius={80}
+                      cy="45%"
+                      innerRadius={48}
+                      outerRadius={76}
                       paddingAngle={4}
                       dataKey="value"
                     >
@@ -1179,9 +1257,11 @@ const DashboardPage = () => {
                     </Pie>
                     <Tooltip
                       formatter={(val) => formatEUR(val)}
-                      contentStyle={{ backgroundColor: '#0f172a', borderRadius: '12px', color: '#fff', fontSize: '11px' }}
+                      contentStyle={{ backgroundColor: '#0f172a', borderRadius: '12px', border: '1px solid #334155', color: '#f8fafc', fontSize: '11px' }}
+                      itemStyle={{ color: '#f8fafc' }}
+                      labelStyle={{ color: '#94a3b8', fontWeight: 700 }}
                     />
-                    <Legend verticalAlign="bottom" iconSize={8} wrapperStyle={{ fontSize: '11px', paddingTop: '10px' }} />
+                    <Legend verticalAlign="bottom" iconSize={8} wrapperStyle={{ fontSize: '11px', paddingTop: '6px' }} />
                   </PieChart>
                 </ResponsiveContainer>
               )}
@@ -1198,6 +1278,11 @@ const DashboardPage = () => {
                 <h3 className="text-sm font-bold text-slate-900">
                   Elenco Commesse nello Scenario ({displayDashboardProjects.length})
                 </h3>
+                {!showProjectsTable && dashboardHubFilter !== 'all' && (
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-[#164e87] border border-blue-200">
+                    📍 Polo {dashboardHubFilter}
+                  </span>
+                )}
               </div>
               <p className="text-xs text-slate-500 mt-0.5">
                 Perimetro: <strong className="text-slate-800">{scopeBadge.label}</strong> • Clicca su una commessa per aprirla o espandi la lista completa
@@ -1298,7 +1383,7 @@ const DashboardPage = () => {
                     const mRev = m?.monthlyRevenue ?? p.monthlyRevenue ?? 0;
                     const mCost = m?.monthlyCost ?? p.monthlyCost ?? 0;
                     const mMol = m?.monthlyMol ?? p.monthlyMol ?? 0;
-                    const startYear = p.startYear ? Number(p.startYear) : 2026;
+                    const startYear = getProjectStartYear(p);
 
                     return (
                       <tr
@@ -1346,16 +1431,16 @@ const DashboardPage = () => {
                           <div className="flex flex-wrap items-center gap-1.5">
                             <span className="font-bold text-slate-900 group-hover:text-[#164e87] transition">{p.name}</span>
                             {isPot ? (
-                              <span className="px-1.5 py-0.2 rounded text-[9px] font-black bg-amber-100 text-amber-800 border border-amber-200">
+                              <span className="px-1.5 py-0.5 rounded text-[9px] font-black bg-amber-100 text-amber-800 border border-amber-200">
                                 Trattativa
                               </span>
                             ) : (
-                              <span className="px-1.5 py-0.2 rounded text-[9px] font-black bg-emerald-100 text-emerald-800 border border-emerald-200">
+                              <span className="px-1.5 py-0.5 rounded text-[9px] font-black bg-emerald-100 text-emerald-800 border border-emerald-200">
                                 Attiva
                               </span>
                             )}
                             {startYear > selectedYear && (
-                              <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-slate-100 text-slate-600 border border-slate-200">
+                              <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-slate-100 text-slate-600 border border-slate-200">
                                 Avvio {startYear}
                               </span>
                             )}
@@ -1383,7 +1468,7 @@ const DashboardPage = () => {
                           </span>
                         </td>
                         <td className="py-2.5 px-3 text-center text-slate-700 font-semibold">
-                          {p.paymentTermsClient || 60} gg
+                          {m?.clientDso ?? p.paymentTermsClient ?? 60} gg
                         </td>
                       </tr>
                     );

@@ -1,13 +1,16 @@
 // Service centralizzato con Sincronizzazione Cloud in Tempo Reale (Firebase Firestore) + Cache Locale Istantanea (LocalStorage)
 // Garantisce allineamento immediato multi-PC / multi-sessione e continuità anche in caso di micro-disconnessioni
 
-import { collection, doc, getDocs, onSnapshot, setDoc } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs, onSnapshot, setDoc } from 'firebase/firestore';
 import { db, ensureFirebaseSession } from '../config/firebase';
 import { DEFAULT_FLEET, DEFAULT_TRAILERS, DEFAULT_PROJECTS, DEFAULT_SETTINGS } from '../data/initialData';
 import {
   calculateSingleProjectMetrics,
   calculateDriverDailyCost,
-  calculateSpecificInsuranceCost
+  calculateSpecificInsuranceCost,
+  calculateTireCostPerKm,
+  calculateRefrigerationDailyCost,
+  isRefrigeratedTrailer
 } from '../utils/cashFlowCalculations';
 import {
   fetchLiveWeeklyFuelPrices,
@@ -38,6 +41,8 @@ class StorageService {
     this.listeners = new Set();
     this.cloudUnsubscribe = null;
     this.cloudStarting = false;
+    this.lastLocalPushAt = {};
+    this.pushQueues = {};
     this.cloudStatus = {
       state: 'connecting', // 'connecting' | 'synced' | 'syncing' | 'offline' | 'error'
       lastSyncedAt: null,
@@ -142,12 +147,12 @@ class StorageService {
         existingDocs[d.id] = d.data();
       });
 
-      const hasCleanCloudSeed =
-        existingDocs.projects &&
-        existingDocs.projects.seedVersion === CLEAN_SEED_VERSION &&
-        Array.isArray(existingDocs.projects.items);
+      const isCloudEmpty =
+        initialSnap.empty ||
+        !existingDocs.projects ||
+        !Array.isArray(existingDocs.projects.items);
 
-      if (!hasCleanCloudSeed) {
+      if (isCloudEmpty) {
         await this.pushFullStateToCloud({
           fleet: DEFAULT_FLEET,
           trailers: DEFAULT_TRAILERS,
@@ -163,10 +168,20 @@ class StorageService {
       this.cloudUnsubscribe = onSnapshot(
         colRef,
         (snapshot) => {
+          if (snapshot.metadata?.hasPendingWrites) {
+            return;
+          }
           const changedDocs = {};
           snapshot.docChanges().forEach((change) => {
             if (change.type === 'added' || change.type === 'modified') {
-              changedDocs[change.doc.id] = change.doc.data();
+              const docId = change.doc.id;
+              const docData = change.doc.data();
+              if (!docData) return;
+              if (docData.clientId && docData.clientId === this.clientId) return;
+              if (docData.updatedAt && this.lastLocalPushAt[docId] && docData.updatedAt < this.lastLocalPushAt[docId]) {
+                return;
+              }
+              changedDocs[docId] = docData;
             }
           });
 
@@ -245,47 +260,80 @@ class StorageService {
     }
   }
 
-  async pushSliceToCloud(docId, value, isMap = false) {
-    if (!db) return;
+  async fetchSecurityConfigFromCloud() {
+    if (!db) return null;
     try {
-      this.setCloudStatus({ state: 'syncing', errorMessage: null });
       const fbUser = await ensureFirebaseSession();
-      if (!fbUser) {
-        this.setCloudStatus({ state: 'offline', errorMessage: 'Sessione Cloud non attiva' });
-        return;
+      if (!fbUser) return null;
+      const snap = await getDoc(doc(db, CLOUD_COLLECTION, 'security'));
+      if (snap.exists()) {
+        const docData = snap.data();
+        if (docData?.data) {
+          localStorage.setItem(STORAGE_KEYS.SECURITY, JSON.stringify(docData.data));
+          return docData.data;
+        }
       }
-
-      const payload = {
-        [isMap ? 'data' : 'items']: sanitizeForCloud(value),
-        updatedAt: new Date().toISOString(),
-        clientId: this.clientId,
-        seedVersion: CLEAN_SEED_VERSION,
-        version: '1.0'
-      };
-
-      await setDoc(doc(db, CLOUD_COLLECTION, docId), payload);
-      this.setCloudStatus({
-        state: 'synced',
-        lastSyncedAt: payload.updatedAt,
-        errorMessage: null
-      });
-    } catch (err) {
-      console.error(`Errore salvataggio Cloud (${docId}):`, err);
-      this.setCloudStatus({
-        state: 'error',
-        errorMessage: err?.message || `Errore salvataggio ${docId}`
-      });
+      return null;
+    } catch {
+      return null;
     }
   }
 
+  async pushSliceToCloud(docId, value, isMap = false) {
+    if (!db) return { ok: false, error: 'Database Cloud non configurato' };
+    const prevQueue = this.pushQueues[docId] || Promise.resolve();
+    const task = prevQueue.then(async () => {
+      try {
+        this.setCloudStatus({ state: 'syncing', errorMessage: null });
+        const fbUser = await ensureFirebaseSession();
+        if (!fbUser) {
+          this.setCloudStatus({ state: 'offline', errorMessage: 'Sessione Cloud non attiva' });
+          return { ok: false, error: 'Sessione Cloud non attiva' };
+        }
+
+        const nowIso = new Date().toISOString();
+        this.lastLocalPushAt[docId] = nowIso;
+        const payload = {
+          [isMap ? 'data' : 'items']: sanitizeForCloud(value),
+          updatedAt: nowIso,
+          clientId: this.clientId,
+          seedVersion: CLEAN_SEED_VERSION,
+          version: '1.0'
+        };
+
+        await setDoc(doc(db, CLOUD_COLLECTION, docId), payload);
+        this.setCloudStatus({
+          state: 'synced',
+          lastSyncedAt: payload.updatedAt,
+          errorMessage: null
+        });
+        return { ok: true };
+      } catch (err) {
+        console.error(`Errore salvataggio Cloud (${docId}):`, err);
+        const msg = err?.message || `Errore salvataggio ${docId}`;
+        this.setCloudStatus({
+          state: 'error',
+          errorMessage: msg
+        });
+        return { ok: false, error: msg };
+      }
+    });
+    this.pushQueues[docId] = task.catch(() => ({ ok: false }));
+    return task;
+  }
+
   async pushFullStateToCloud({ fleet, trailers, projects, settings, simulations }) {
-    await Promise.all([
+    const results = await Promise.all([
       this.pushSliceToCloud('fleet', fleet, false),
       this.pushSliceToCloud('trailers', trailers, false),
       this.pushSliceToCloud('projects', projects, false),
       this.pushSliceToCloud('settings', settings, true),
       this.pushSliceToCloud('simulations', simulations || [], false)
     ]);
+    return {
+      ok: results.every(r => r?.ok),
+      error: results.find(r => !r?.ok)?.error || null
+    };
   }
 
   async forceSyncFromCloud() {
@@ -321,11 +369,14 @@ class StorageService {
     this.pushSliceToCloud('security', securityConfig, true);
   }
 
-  mergeDefaultSettings() {
+  mergeDefaultSettings(optionalParsed = null) {
     try {
-      const raw = localStorage.getItem(STORAGE_KEYS.SETTINGS);
-      if (!raw) return DEFAULT_SETTINGS;
-      const parsed = JSON.parse(raw);
+      let parsed = optionalParsed;
+      if (!parsed) {
+        const raw = localStorage.getItem(STORAGE_KEYS.SETTINGS);
+        if (!raw) return DEFAULT_SETTINGS;
+        parsed = JSON.parse(raw);
+      }
 
       const existingLicenses = Array.isArray(parsed.licenseTypes) ? parsed.licenseTypes : [];
       const existingIds = new Set(existingLicenses.map(l => l.id));
@@ -377,6 +428,10 @@ class StorageService {
           gasolio: {
             ...(DEFAULT_SETTINGS.refrigerationParams?.gasolio || {}),
             ...(parsed.refrigerationParams?.gasolio || {})
+          },
+          elettrico: {
+            ...(DEFAULT_SETTINGS.refrigerationParams?.elettrico || {}),
+            ...(parsed.refrigerationParams?.elettrico || {})
           }
         },
         accessoryParams: {
@@ -464,12 +519,21 @@ class StorageService {
       fleet[index] = { ...prevVeh, ...vehicleData, updatedAt: new Date().toISOString() };
       this.saveFleet(fleet);
 
-      // Sincronizza le commesse associate solo se variano parametri economici/contrattuali del mezzo
+      // Sincronizza le commesse associate quando variano parametri economici, operativi o di scadenza del mezzo
       const economicChanged =
         prevVeh.monthlyLease !== fleet[index].monthlyLease ||
         prevVeh.insuranceIncluded !== fleet[index].insuranceIncluded ||
         prevVeh.insuranceYearly !== fleet[index].insuranceYearly ||
         prevVeh.licenseTypeId !== fleet[index].licenseTypeId ||
+        prevVeh.avgConsumption !== fleet[index].avgConsumption ||
+        prevVeh.yieldKmPerUnit !== fleet[index].yieldKmPerUnit ||
+        prevVeh.fuelTypeId !== fleet[index].fuelTypeId ||
+        prevVeh.costPerTire !== fleet[index].costPerTire ||
+        prevVeh.tireCount !== fleet[index].tireCount ||
+        prevVeh.tireLifeKm !== fleet[index].tireLifeKm ||
+        prevVeh.category !== fleet[index].category ||
+        prevVeh.ownershipType !== fleet[index].ownershipType ||
+        prevVeh.leasePaymentTiming !== fleet[index].leasePaymentTiming ||
         JSON.stringify(prevVeh.leaseVariations || []) !== JSON.stringify(fleet[index].leaseVariations || []);
 
       if (options.syncProjects !== false && economicChanged) {
@@ -481,8 +545,8 @@ class StorageService {
   }
 
   /**
-   * Aggiorna in modo non distruttivo i canoni nolo / variazioni datate sulle commesse associate al mezzo
-   * preservando eventuali costi manuali (pedaggi, gomme, ricavi) inseriti dall'utente sulla commessa.
+   * Aggiorna in modo non distruttivo i parametri ereditati dal mezzo (canone, assicurazione, consumi, gomme, autista)
+   * sulle commesse associate, preservando override manuali espliciti.
    */
   syncProjectsForVehicle(vehicle) {
     try {
@@ -491,6 +555,9 @@ class StorageService {
       const projects = JSON.parse(data);
       const trailers = this.getTrailers();
       const settings = this.getSettings();
+      const fuelTypes = settings.fuelTypes || [];
+      const tireParameters = settings.tireParameters || {};
+      const defaultFuelFallbacks = { gasolio: 1.75, hvo: 1.72, biolng: 1.32, elettrico: 0.36 };
 
       let hasChanges = false;
       const updated = projects.map(p => {
@@ -498,19 +565,65 @@ class StorageService {
           hasChanges = true;
           const trl = trailers.find(t => t.id === p.trailerId);
           const workingDays = Number(p.workingDaysMonth) || 22;
+          const km = Number(p.kmDaily) || 0;
           const insCalc = calculateSpecificInsuranceCost(vehicle, trl, workingDays, settings);
+
           const nextVLeaseDaily = p.managementType === 'T'
             ? (Number(p.vehicleLeaseDaily) || 0)
             : (workingDays > 0 ? +((Number(vehicle.monthlyLease || 0) + insCalc.vehicleInsuranceMonthly) / workingDays).toFixed(2) : p.vehicleLeaseDaily);
+
+          const inferredShift = p.driverShiftType || (
+            vehicle.licenseTypeId === 'ce_doppio' || vehicle.licenseTypeId === 'c_doppio' ? '2_turni' :
+            (vehicle.licenseTypeId || '').includes('notturno') ? '1_notturno' : '1_diurno'
+          );
           const nextDriverDaily = (!p.driverManualOverride && p.managementType !== 'T')
-            ? calculateDriverDailyCost(vehicle, p.driverShiftType || '1_diurno', settings)
+            ? calculateDriverDailyCost(vehicle, inferredShift, settings)
             : p.driverCostDaily;
+
+          let nextFuelDaily = p.fuelCostDaily;
+          if (p.managementType !== 'T') {
+            if (p.energyPayer === 'client') {
+              nextFuelDaily = 0;
+            } else if (km > 0) {
+              const fuelObj = fuelTypes.find(f => f.id === vehicle.fuelTypeId);
+              const fPrice = fuelObj ? Number(fuelObj.price) : (defaultFuelFallbacks[vehicle.fuelTypeId] ?? 1.75);
+              const oroFactor = Number(p.orographicMultiplier) > 0 ? Number(p.orographicMultiplier) : 1.0;
+              if (vehicle.fuelTypeId === 'elettrico') {
+                const cons = Number(vehicle.avgConsumption) || 1.18;
+                nextFuelDaily = +(km * cons * fPrice * oroFactor).toFixed(2);
+              } else if (vehicle.fuelTypeId === 'biolng') {
+                if (Number(vehicle.yieldKmPerUnit) > 0) {
+                  nextFuelDaily = +((km / Number(vehicle.yieldKmPerUnit)) * fPrice * oroFactor).toFixed(2);
+                } else {
+                  const cons = Number(vehicle.avgConsumption) || 29.5;
+                  nextFuelDaily = +((cons / 100) * km * fPrice * oroFactor).toFixed(2);
+                }
+              } else {
+                const cons = Number(vehicle.avgConsumption) || 30.0;
+                nextFuelDaily = +((cons / 100) * km * fPrice * oroFactor).toFixed(2);
+              }
+            }
+          }
+
+          let nextTiresDaily = p.tiresDaily;
+          if (p.managementType !== 'T' && km > 0) {
+            const tireCalc = calculateTireCostPerKm(vehicle, trl, tireParameters);
+            nextTiresDaily = +(km * tireCalc.totalRate).toFixed(2);
+          }
 
           const patched = {
             ...p,
+            driverShiftType: inferredShift,
             vehicleLeaseDaily: nextVLeaseDaily,
             driverCostDaily: nextDriverDaily,
-            vehicleLeaseVariations: Array.isArray(vehicle.leaseVariations) ? vehicle.leaseVariations : []
+            fuelCostDaily: nextFuelDaily,
+            tiresDaily: nextTiresDaily,
+            leasePaymentTiming: vehicle.leasePaymentTiming || p.leasePaymentTiming,
+            vehicleInsuranceMonthly: insCalc.vehicleInsuranceMonthly,
+            vehicleInsuranceDaily: insCalc.vehicleInsuranceDaily,
+            vehicleLeaseVariations: p.managementType === 'T'
+              ? []
+              : (Array.isArray(vehicle.leaseVariations) ? vehicle.leaseVariations : [])
           };
           const m = calculateSingleProjectMetrics(patched);
           return {
@@ -586,6 +699,14 @@ class StorageService {
         prevTrl.monthlyLease !== trailers[index].monthlyLease ||
         prevTrl.insuranceIncluded !== trailers[index].insuranceIncluded ||
         prevTrl.insuranceYearly !== trailers[index].insuranceYearly ||
+        prevTrl.fridgeTech !== trailers[index].fridgeTech ||
+        prevTrl.fridgeHourlyConsumption !== trailers[index].fridgeHourlyConsumption ||
+        prevTrl.costPerTire !== trailers[index].costPerTire ||
+        prevTrl.tireCount !== trailers[index].tireCount ||
+        prevTrl.tireLifeKm !== trailers[index].tireLifeKm ||
+        prevTrl.category !== trailers[index].category ||
+        prevTrl.ownershipType !== trailers[index].ownershipType ||
+        prevTrl.leasePaymentTiming !== trailers[index].leasePaymentTiming ||
         JSON.stringify(prevTrl.leaseVariations || []) !== JSON.stringify(trailers[index].leaseVariations || []);
 
       if (options.syncProjects !== false && economicChanged) {
@@ -603,6 +724,7 @@ class StorageService {
       const projects = JSON.parse(data);
       const fleet = this.getFleet();
       const settings = this.getSettings();
+      const tireParameters = settings.tireParameters || {};
 
       let hasChanges = false;
       const updated = projects.map(p => {
@@ -610,15 +732,43 @@ class StorageService {
           hasChanges = true;
           const veh = fleet.find(v => v.id === p.vehicleId);
           const workingDays = Number(p.workingDaysMonth) || 22;
+          const km = Number(p.kmDaily) || 0;
           const insCalc = calculateSpecificInsuranceCost(veh, trailer, workingDays, settings);
           const nextTLeaseDaily = workingDays > 0
             ? +((Number(trailer.monthlyLease || 0) + insCalc.trailerInsuranceMonthly) / workingDays).toFixed(2)
             : p.trailerLeaseDaily;
 
+          let nextTiresDaily = p.tiresDaily;
+          if (p.managementType !== 'T' && km > 0) {
+            const tireCalc = calculateTireCostPerKm(veh, trailer, tireParameters);
+            nextTiresDaily = +(km * tireCalc.totalRate).toFixed(2);
+          }
+
+          const trailerHasFridge = trailer.fridgeTech !== 'nessuno' && isRefrigeratedTrailer(trailer);
+          const refCalc = calculateRefrigerationDailyCost({
+            ...p,
+            refrigerationEnabled: p.refrigerationEnabled !== undefined ? p.refrigerationEnabled : trailerHasFridge,
+            refrigerationTech: trailerHasFridge ? (trailer.fridgeTech || p.refrigerationTech) : p.refrigerationTech,
+            refrigerationHourlyConsumption: trailerHasFridge && Number(trailer.fridgeHourlyConsumption) > 0
+              ? Number(trailer.fridgeHourlyConsumption)
+              : p.refrigerationHourlyConsumption
+          }, trailer, settings);
+
           const patched = {
             ...p,
+            tiresDaily: nextTiresDaily,
             trailerLeaseDaily: nextTLeaseDaily,
-            trailerLeaseVariations: Array.isArray(trailer.leaseVariations) ? trailer.leaseVariations : []
+            trailerLeasePaymentTiming: trailer.leasePaymentTiming || p.trailerLeasePaymentTiming,
+            trailerInsuranceMonthly: insCalc.trailerInsuranceMonthly,
+            trailerInsuranceDaily: insCalc.trailerInsuranceDaily,
+            trailerLeaseVariations: Array.isArray(trailer.leaseVariations) ? trailer.leaseVariations : [],
+            ...(trailerHasFridge ? {
+              refrigerationEnabled: refCalc.enabled,
+              refrigerationTech: refCalc.tech,
+              refrigerationUnitCost: refCalc.unitCost,
+              refrigerationHourlyConsumption: refCalc.hourlyConsumption,
+              refrigerationCostDaily: refCalc.dailyCost
+            } : {})
           };
           const m = calculateSingleProjectMetrics(patched);
           return {
@@ -665,16 +815,17 @@ class StorageService {
       const synchronized = projects.map(p => {
         const veh = fleet.find(v => v.id === p.vehicleId);
         const trl = trailers.find(t => t.id === p.trailerId);
-        const vehVarJson = JSON.stringify(veh?.leaseVariations || []);
+        const expectedVehVars = p.managementType === 'T' ? [] : (veh?.leaseVariations || []);
+        const vehVarJson = JSON.stringify(expectedVehVars);
         const projVehVarJson = JSON.stringify(p.vehicleLeaseVariations || []);
         const trlVarJson = JSON.stringify(trl?.leaseVariations || []);
         const projTrlVarJson = JSON.stringify(p.trailerLeaseVariations || []);
 
-        if ((veh && vehVarJson !== projVehVarJson) || (trl && trlVarJson !== projTrlVarJson)) {
+        if (((veh || p.managementType === 'T') && vehVarJson !== projVehVarJson) || (trl && trlVarJson !== projTrlVarJson)) {
           needsSave = true;
           const patched = {
             ...p,
-            vehicleLeaseVariations: veh?.leaseVariations || [],
+            vehicleLeaseVariations: expectedVehVars,
             trailerLeaseVariations: trl?.leaseVariations || []
           };
           const m = calculateSingleProjectMetrics(patched);
@@ -745,9 +896,36 @@ class StorageService {
     const projects = this.getProjects();
     const index = projects.findIndex(p => p.id === id);
     if (index !== -1) {
-      projects[index] = { ...projects[index], ...projectData, updatedAt: new Date().toISOString() };
+      const prevProj = projects[index];
+      const nextProj = { ...prevProj, ...projectData, updatedAt: new Date().toISOString() };
+      projects[index] = nextProj;
       this.saveProjects(projects);
-      return projects[index];
+
+      // Riallinea stato flotta se è cambiato veicolo o semirimorchio
+      if (prevProj.vehicleId && prevProj.vehicleId !== nextProj.vehicleId) {
+        const otherUsingOld = projects.find(p => p.id !== id && p.vehicleId === prevProj.vehicleId);
+        this.updateVehicle(
+          prevProj.vehicleId,
+          otherUsingOld ? { status: 'assigned', assignedProject: otherUsingOld.name } : { status: 'available', assignedProject: null },
+          { syncProjects: false }
+        );
+      }
+      if (nextProj.vehicleId && nextProj.vehicleId !== prevProj.vehicleId) {
+        this.updateVehicle(nextProj.vehicleId, { status: 'assigned', assignedProject: nextProj.name }, { syncProjects: false });
+      }
+      if (prevProj.trailerId && prevProj.trailerId !== nextProj.trailerId) {
+        const otherUsingOldT = projects.find(p => p.id !== id && p.trailerId === prevProj.trailerId);
+        this.updateTrailer(
+          prevProj.trailerId,
+          otherUsingOldT ? { status: 'assigned', assignedProject: otherUsingOldT.name } : { status: 'available', assignedProject: null },
+          { syncProjects: false }
+        );
+      }
+      if (nextProj.trailerId && nextProj.trailerId !== prevProj.trailerId) {
+        this.updateTrailer(nextProj.trailerId, { status: 'assigned', assignedProject: nextProj.name }, { syncProjects: false });
+      }
+
+      return nextProj;
     }
     return null;
   }
@@ -777,6 +955,7 @@ class StorageService {
       const parsed = JSON.parse(data);
       if (
         !parsed.refrigerationParams ||
+        !parsed.refrigerationParams.elettrico ||
         !parsed.accessoryParams ||
         !parsed.paymentTermsDefaults ||
         parsed.tireParameters?.costPerTireTractorElectric === undefined ||
@@ -812,7 +991,31 @@ class StorageService {
     }
 
     const syncMeta = await fetchLiveWeeklyFuelPrices();
+
+    // Se l'auto-refresh in background non ottiene un feed remoto reale, non sovrascrive i prezzi personalizzati dell'utente
+    if (!options.force && !syncMeta.fetchedFromRemote) {
+      const metaOnlySettings = {
+        ...currentSettings,
+        lastFuelSyncMeta: {
+          lastSyncIso: syncMeta.lastSyncIso,
+          weekLabel: syncMeta.weekLabel,
+          sourceLabel: syncMeta.sourceLabel,
+          fetchedFromRemote: false
+        }
+      };
+      this.saveSettings(metaOnlySettings);
+      return {
+        updated: false,
+        settings: metaOnlySettings,
+        syncMeta
+      };
+    }
+
+    // Su auto-refresh live aggiorna solo i carburanti con feed remoto (gasolio/hvo) preservando prezzi personalizzati Bio-LNG/BEV/Azoto;
+    // su refresh manuale esplicito aggiorna tutti i listini di riferimento.
+    const liveFuelIds = new Set(['gasolio', 'hvo']);
     const updatedFuelTypes = (currentSettings.fuelTypes || []).map(f => {
+      if (!options.force && !liveFuelIds.has(f.id)) return f;
       const liveItem = syncMeta?.pricesByFuelId?.[f.id];
       if (!liveItem) return f;
       return {
@@ -829,7 +1032,9 @@ class StorageService {
       fuelTypes: updatedFuelTypes,
       standardCosts: {
         ...(currentSettings.standardCosts || {}),
-        adbluePricePerLiter: syncMeta?.pricesByFuelId?.adblue?.price ?? currentSettings.standardCosts?.adbluePricePerLiter ?? 0.85
+        adbluePricePerLiter: options.force
+          ? (syncMeta?.pricesByFuelId?.adblue?.price ?? currentSettings.standardCosts?.adbluePricePerLiter ?? 0.85)
+          : (currentSettings.standardCosts?.adbluePricePerLiter ?? 0.85)
       },
       lastFuelSyncMeta: {
         lastSyncIso: syncMeta.lastSyncIso,
@@ -970,12 +1175,19 @@ class StorageService {
 
   async importBackupJson(jsonString) {
     try {
+      const preview = this.parseBackupPreview(jsonString);
+      if (!preview.valid) {
+        return { success: false, error: preview.error };
+      }
+
       const data = JSON.parse(jsonString);
       const nextFleet = Array.isArray(data.fleet) ? data.fleet : this.getFleet();
       const nextTrailers = Array.isArray(data.trailers) ? data.trailers : this.getTrailers();
       const nextProjects = Array.isArray(data.projects) ? data.projects : this.getProjects();
-      const nextSettings = data.settings ? data.settings : this.getSettings();
-      const nextSims = Array.isArray(data.simulations) ? data.simulations : [];
+      const nextSettings = (data.settings && typeof data.settings === 'object' && !Array.isArray(data.settings))
+        ? this.mergeDefaultSettings(data.settings)
+        : this.getSettings();
+      const nextSims = Array.isArray(data.simulations) ? data.simulations : this.getSimulations();
 
       localStorage.setItem(STORAGE_KEYS.FLEET, JSON.stringify(nextFleet));
       localStorage.setItem(STORAGE_KEYS.TRAILERS, JSON.stringify(nextTrailers));
@@ -984,7 +1196,7 @@ class StorageService {
       localStorage.setItem(STORAGE_KEYS.SIMULATIONS, JSON.stringify(nextSims));
 
       this.notifyListeners({ type: 'data', source: 'local', scopes: ['fleet', 'trailers', 'projects', 'settings', 'simulations'] });
-      await this.pushFullStateToCloud({
+      const cloudRes = await this.pushFullStateToCloud({
         fleet: nextFleet,
         trailers: nextTrailers,
         projects: nextProjects,
@@ -993,6 +1205,8 @@ class StorageService {
       });
       return {
         success: true,
+        cloudSynced: Boolean(cloudRes?.ok),
+        cloudError: cloudRes?.error || null,
         counts: {
           fleet: nextFleet.length,
           trailers: nextTrailers.length,
@@ -1002,7 +1216,7 @@ class StorageService {
       };
     } catch (e) {
       console.error('Errore import backup:', e);
-      return { success: false, error: e.message };
+      return { success: false, error: e?.message || 'Errore nel formato del file di backup' };
     }
   }
 }

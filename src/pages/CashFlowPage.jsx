@@ -1,7 +1,9 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import storageService from '../services/storageService';
 import {
   calculateAnnualBudgetAndCashFlow,
+  isPotentialProject,
   formatEUR,
   formatPercent,
   MONTH_NAMES
@@ -46,16 +48,26 @@ import {
 import * as XLSX from 'xlsx';
 
 const CashFlowPage = () => {
+  const [searchParams] = useSearchParams();
   const [projects, setProjects] = useState([]);
   const [fleet, setFleet] = useState([]);
-  const [selectedYear, setSelectedYear] = useState(2026);
+  const [trailers, setTrailers] = useState([]);
+  const [selectedYear, setSelectedYear] = useState(() => {
+    const y = parseInt(searchParams.get('year'), 10);
+    return y === 2027 ? 2027 : 2026;
+  });
+  const [portfolioScope, setPortfolioScope] = useState(() => {
+    const s = searchParams.get('scope');
+    return ['consolidated', 'activeOnly', 'potentialOnly'].includes(s) ? s : 'consolidated';
+  }); // 'consolidated' | 'activeOnly' | 'potentialOnly'
   const [initialCash, setInitialCash] = useState(() => Number(storageService.getSettings()?.financialDefaults?.initialCashBalance ?? 50000));
+  const [initialCashInput, setInitialCashInput] = useState(() => String(Number(storageService.getSettings()?.financialDefaults?.initialCashBalance ?? 50000)));
+  const lastSavedInitialCashRef = useRef(Number(storageService.getSettings()?.financialDefaults?.initialCashBalance ?? 50000));
+  const isEditingInitialCashRef = useRef(false);
   const initialCashSaveTimerRef = useRef(null);
   const [stressTestDays, setStressTestDays] = useState(0); // 0, 15, 30, 60 gg di ritardo
   const [factoringEnabled, setFactoringEnabled] = useState(false);
   const [factoringRate, setFactoringRate] = useState(80); // 80% anticipato
-  const [acciseEnabled, setAcciseEnabled] = useState(false); // Prezzi carburante sempre "Alla Pompa" senza recupero accise
-  const [acciseRate, setAcciseRate] = useState(0);
   const [activeTab, setActiveTab] = useState('cashflow'); // 'cashflow' | 'biweekly' | 'pnl'
   const [showExpenseDetails, setShowExpenseDetails] = useState(false); // Toggle colonne di dettaglio uscite
   const [showCashSchedule, setShowCashSchedule] = useState(false); // Calendario Scadenze comprimibile
@@ -63,7 +75,7 @@ const CashFlowPage = () => {
   useEffect(() => {
     loadProjects();
     const unsubscribe = storageService.subscribe((event) => {
-      if (event.type === 'data' && (event.scopes?.includes('projects') || event.scopes?.includes('settings') || event.scopes?.includes('fleet'))) {
+      if (event.type === 'data' && (event.scopes?.includes('projects') || event.scopes?.includes('settings') || event.scopes?.includes('fleet') || event.scopes?.includes('trailers'))) {
         loadProjects();
       }
     });
@@ -76,13 +88,27 @@ const CashFlowPage = () => {
   const loadProjects = () => {
     setProjects(storageService.getProjects());
     setFleet(storageService.getFleet());
+    setTrailers(storageService.getTrailers());
     const settings = storageService.getSettings();
     const savedInitialCash = Number(settings?.financialDefaults?.initialCashBalance ?? 50000);
     setInitialCash(savedInitialCash);
+    lastSavedInitialCashRef.current = savedInitialCash;
+    if (!isEditingInitialCashRef.current) {
+      setInitialCashInput(String(savedInitialCash));
+    }
   };
 
   const persistInitialCash = (value) => {
-    const cleanVal = Number(value) || 0;
+    if (initialCashSaveTimerRef.current) {
+      clearTimeout(initialCashSaveTimerRef.current);
+      initialCashSaveTimerRef.current = null;
+    }
+    const parsed = parseFloat(value);
+    const cleanVal = Number.isFinite(parsed) ? parsed : 0;
+    setInitialCash(cleanVal);
+    setInitialCashInput(String(cleanVal));
+    if (cleanVal === lastSavedInitialCashRef.current) return;
+    lastSavedInitialCashRef.current = cleanVal;
     const curSettings = storageService.getSettings();
     storageService.saveSettings({
       ...curSettings,
@@ -94,23 +120,15 @@ const CashFlowPage = () => {
   };
 
   const handleInitialCashChange = (rawValue) => {
-    const nextVal = parseFloat(rawValue) || 0;
-    setInitialCash(nextVal);
+    setInitialCashInput(rawValue);
+    if (rawValue === '' || rawValue === '-') return;
+    const parsed = parseFloat(rawValue);
+    if (!Number.isFinite(parsed)) return;
+    setInitialCash(parsed);
     if (initialCashSaveTimerRef.current) clearTimeout(initialCashSaveTimerRef.current);
     initialCashSaveTimerRef.current = setTimeout(() => {
-      persistInitialCash(nextVal);
-    }, 400);
-  };
-
-  const [portfolioScope, setPortfolioScope] = useState('consolidated'); // 'consolidated' | 'activeOnly' | 'potentialOnly'
-
-  const isPotentialProject = (p) => {
-    if (!p) return false;
-    if (p.contractStatus) return p.contractStatus === 'potential' || p.contractStatus === 'simulation' || p.contractStatus === 'negotiation';
-    if (p.isPipelineFuture !== undefined) return Boolean(p.isPipelineFuture);
-    const start = p.startDate ? new Date(p.startDate) : new Date();
-    const today = new Date();
-    return start > today || (p.notes && (p.notes.toLowerCase().includes('preventivo') || p.notes.toLowerCase().includes('trattativa') || p.notes.toLowerCase().includes('simulazione'))) || (p.code && (p.code.startsWith('PRJ-FUT') || p.code.startsWith('SIM-')));
+      persistInitialCash(parsed);
+    }, 500);
   };
 
   const effectiveProjects = useMemo(() => {
@@ -125,18 +143,19 @@ const CashFlowPage = () => {
 
   const effectiveInitialCash = portfolioScope === 'potentialOnly' ? 0 : initialCash;
 
-  // Calcolo del budget e cash flow con il nuovo motore avanzato
-  const financialModel = calculateAnnualBudgetAndCashFlow(effectiveProjects, {
+  // Calcolo del budget e cash flow memoizzato
+  const financialModel = useMemo(() => calculateAnnualBudgetAndCashFlow(effectiveProjects, {
     year: selectedYear,
     initialCashBalance: effectiveInitialCash,
     stressTestClientDays: stressTestDays,
     factoringEnabled,
     factoringAdvanceRate: factoringRate,
     factoringFeePercent: 1.5,
-    acciseRecoveryEnabled: acciseEnabled,
-    acciseRatePerLiter: acciseRate,
-    fleet
-  });
+    acciseRecoveryEnabled: false,
+    acciseRatePerLiter: 0,
+    fleet,
+    trailers
+  }), [effectiveProjects, selectedYear, effectiveInitialCash, stressTestDays, factoringEnabled, factoringRate, fleet, trailers]);
 
   const {
     monthlyCashFlow,
@@ -154,12 +173,11 @@ const CashFlowPage = () => {
     suggestedCreditLine,
     peakDeficitMonth,
     peakDeficitBiweekly,
-    minCashBalance,
-    biweeklyMinCashBalance,
+    peakDeficitPeriod,
+    peakDeficitIsBiweekly,
     dscr,
     dscrRating,
     dscrColor,
-    totalAnnualLeases,
     cashScheduleDeadlines
   } = financialModel;
 
@@ -172,14 +190,46 @@ const CashFlowPage = () => {
         acc.fuelOut += m.outflowBreakdown.lngFuel || 0;
         acc.tollsOut += m.outflowBreakdown.tollsTelepass || 0;
         acc.leasesOut += m.outflowBreakdown.leasesTotal || 0;
+        acc.otherSuppliersOut += (m.outflowBreakdown.suppliersOther || 0) + (m.outflowBreakdown.deposits || 0);
         acc.pnlFuelNet += m.costBreakdown.fuelNet || 0;
+        acc.pnlDrivers += m.costBreakdown.driver || 0;
         acc.pnlLeases += (m.costBreakdown.vehicleLease || 0) + (m.costBreakdown.trailerLease || 0);
         acc.pnlAccAndFridge += (m.costBreakdown.refrigeration || 0) + (m.costBreakdown.telematics || 0) + (m.costBreakdown.washing || 0) + (m.costBreakdown.extraCosts || 0);
+        acc.pnlTollsTiresOther += (m.costBreakdown.tolls || 0) + (m.costBreakdown.tires || 0) + (m.costBreakdown.porterage || 0) + (m.costBreakdown.partnerMargin || 0) + (m.costBreakdown.otherCosts || 0);
         return acc;
       },
-      { driversOut: 0, fuelOut: 0, tollsOut: 0, leasesOut: 0, pnlFuelNet: 0, pnlLeases: 0, pnlAccAndFridge: 0 }
+      {
+        driversOut: 0,
+        fuelOut: 0,
+        tollsOut: 0,
+        leasesOut: 0,
+        otherSuppliersOut: 0,
+        pnlFuelNet: 0,
+        pnlDrivers: 0,
+        pnlLeases: 0,
+        pnlAccAndFridge: 0,
+        pnlTollsTiresOther: 0
+      }
     );
   }, [monthlyCashFlow]);
+
+  const biweeklyTotals = useMemo(() => {
+    return biweeklyCashFlow.reduce(
+      (acc, p) => {
+        acc.cashIn += (p.inflowBreakdown.clients || 0) + (p.inflowBreakdown.factoring || 0);
+        acc.accise += p.inflowBreakdown.accise || 0;
+        acc.cashOut += p.cashOut || 0;
+        acc.driversNet += p.outflowBreakdown.driversNet || 0;
+        acc.driversInps += p.outflowBreakdown.driversInpsF24 || 0;
+        acc.lngFuel += p.outflowBreakdown.lngFuel || 0;
+        acc.tolls += p.outflowBreakdown.tollsTelepass || 0;
+        acc.leases += p.outflowBreakdown.leases || 0;
+        acc.otherSupp += (p.outflowBreakdown.otherSuppliers || 0) + (p.outflowBreakdown.deposits || 0);
+        return acc;
+      },
+      { cashIn: 0, accise: 0, cashOut: 0, driversNet: 0, driversInps: 0, lngFuel: 0, tolls: 0, leases: 0, otherSupp: 0 }
+    );
+  }, [biweeklyCashFlow]);
 
   // Raggruppamento per Trimestri (Q1, Q2, Q3, Q4) con calcolo dei subtotali
   const quartersData = useMemo(() => {
@@ -242,6 +292,7 @@ const CashFlowPage = () => {
       const lngFuel = months.reduce((acc, m) => acc + m.outflowBreakdown.lngFuel, 0);
       const tollsTelepass = months.reduce((acc, m) => acc + m.outflowBreakdown.tollsTelepass, 0);
       const leasesTotal = months.reduce((acc, m) => acc + m.outflowBreakdown.leasesTotal, 0);
+      const otherSuppliers = months.reduce((acc, m) => acc + (m.outflowBreakdown.suppliersOther || 0) + (m.outflowBreakdown.deposits || 0), 0);
       const netCashFlow = months.reduce((acc, m) => acc + m.netCashFlow, 0);
       const closingCash = months[months.length - 1]?.closingCash || 0;
       const isDeficit = closingCash < 0;
@@ -262,6 +313,7 @@ const CashFlowPage = () => {
         lngFuel,
         tollsTelepass,
         leasesTotal,
+        otherSuppliers,
         netCashFlow,
         closingCash,
         isDeficit,
@@ -305,10 +357,9 @@ const CashFlowPage = () => {
       'Saldo Iniziale (€)': m.openingCash,
       'Incassi da Clienti (€)': m.inflowBreakdown.clientsRegular,
       'Anticipi Factoring (€)': m.inflowBreakdown.factoringAdvance,
-      'Recupero Accise F24 (€)': m.inflowBreakdown.acciseRefunds,
       'Totale Entrate (€)': m.cashIn,
       'Uscite Autisti (€)': m.outflowBreakdown.drivers,
-      'Uscite LNG Carburante (€)': m.outflowBreakdown.lngFuel,
+      'Uscite Energia / Carburante (€)': m.outflowBreakdown.lngFuel,
       'Uscite Telepass (€)': m.outflowBreakdown.tollsTelepass,
       'Uscite Noleggi M1-D10 (€)': m.outflowBreakdown.leasesM1D10,
       'Uscite Noleggi M1-D30 (€)': m.outflowBreakdown.leasesM1D30,
@@ -327,11 +378,10 @@ const CashFlowPage = () => {
       'Saldo Iniziale (€)': p.openingCash,
       'Incassi Clienti (€)': p.inflowBreakdown.clients,
       'Anticipi Factoring (€)': p.inflowBreakdown.factoring,
-      'Accise F24 (€)': p.inflowBreakdown.accise,
       'Totale Entrate (€)': p.cashIn,
       'Autisti Netti G.10 (€)': p.outflowBreakdown.driversNet,
       'Autisti INPS/F24 G.16 (€)': p.outflowBreakdown.driversInpsF24,
-      'LNG Carburante (€)': p.outflowBreakdown.lngFuel,
+      'Energia / Carburante (€)': p.outflowBreakdown.lngFuel,
       'Telepass (€)': p.outflowBreakdown.tollsTelepass,
       'Noleggi (€)': p.outflowBreakdown.leases,
       'Altri Fornitori (€)': p.outflowBreakdown.otherSuppliers,
@@ -349,9 +399,7 @@ const CashFlowPage = () => {
       'Ricavi (€)': m.revenue,
       'Costi Totali (€)': m.cost,
       'Autisti (€)': m.costBreakdown.driver,
-      'Carburante Lordo (€)': m.costBreakdown.fuelGross,
-      'Credito Accise (€)': m.costBreakdown.acciseCredit,
-      'Carburante Netto (€)': m.costBreakdown.fuelNet,
+      'Energia / Carburante (€)': m.costBreakdown.fuelNet,
       'Pedaggi (€)': m.costBreakdown.tolls,
       'Gomme (€)': m.costBreakdown.tires,
       'Noleggi Mezzi (€)': m.costBreakdown.vehicleLease,
@@ -361,6 +409,7 @@ const CashFlowPage = () => {
       'Lavaggi (€)': m.costBreakdown.washing || 0,
       'Costi Extra (€)': m.costBreakdown.extraCosts || 0,
       'Facchinaggio (€)': m.costBreakdown.porterage || 0,
+      'Altri Costi Operativi (€)': m.costBreakdown.otherCosts || 0,
       'Vettore Terzo / Partner (€)': m.costBreakdown.partnerMargin,
       'M.O.L. (€)': m.mol,
       'M.O.L. (%)': `${m.molPercent.toFixed(1)}%`
@@ -375,7 +424,7 @@ const CashFlowPage = () => {
     XLSX.utils.book_append_sheet(wb, wsBiweekly, 'Cash Flow Quindicinale (24P)');
     XLSX.utils.book_append_sheet(wb, wsPnl, 'Budget Economico P&L');
 
-    XLSX.writeFile(wb, `FOUR_Piano_Finanziario_Completo_${selectedYear}.xlsx`);
+    XLSX.writeFile(wb, `FOUR_Piano_Finanziario_${selectedYear}_${portfolioScope}.xlsx`);
   };
 
   return (
@@ -463,23 +512,23 @@ const CashFlowPage = () => {
 
               <select
                 value={selectedYear}
-                onChange={(e) => setSelectedYear(parseInt(e.target.value))}
+                onChange={(e) => setSelectedYear(parseInt(e.target.value, 10))}
                 className="text-xs font-bold py-1.5 px-2.5 rounded-xl border border-slate-300 bg-white focus:ring-2 focus:ring-emerald-500 shadow-sm"
               >
-                <option value="2027">Budget 2027 (+12m)</option>
                 <option value="2026">Budget 2026 (Corrente)</option>
+                <option value="2027">Budget 2027 (+12m)</option>
               </select>
 
               {activeTab === 'cashflow' && (
                 <button
                   type="button"
                   onClick={() => setShowExpenseDetails(!showExpenseDetails)}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition border shadow-xs ${
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition border shadow-sm ${
                     showExpenseDetails
                       ? 'bg-[#164e87] text-white border-[#164e87]'
                       : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-300'
                   }`}
-                  title="Mostra o nascondi le colonne analitiche di spesa (Autisti, LNG, Telepass, Noleggi)"
+                  title="Mostra o nascondi le colonne analitiche di spesa (Autisti, Energia/Carb., Telepass, Noleggi)"
                 >
                   {showExpenseDetails ? '📋 Vista Sintetica' : '🔍 Dettaglio Spese'}
                 </button>
@@ -534,11 +583,11 @@ const CashFlowPage = () => {
         )}
 
         {/* Dashboard Financial Summary Cards (Bancabilità & Tesoreria) */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3">
           {/* Ricavi */}
           <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200">
             <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Ricavi Annui Previsti</span>
-            <div className="text-xl font-black text-slate-900 mt-1.5">
+            <div className="text-lg xl:text-xl font-black text-slate-900 mt-1.5 whitespace-nowrap">
               {formatEUR(annualRevenue)}
             </div>
             <p className="text-[10px] text-slate-500 mt-0.5">Fatturato a budget</p>
@@ -547,7 +596,7 @@ const CashFlowPage = () => {
           {/* Costi */}
           <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200">
             <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Costi Totali Annui</span>
-            <div className="text-xl font-black text-slate-700 mt-1.5">
+            <div className="text-lg xl:text-xl font-black text-slate-700 mt-1.5 whitespace-nowrap">
               {formatEUR(annualCost)}
             </div>
             <p className="text-[10px] text-slate-500 mt-0.5">Op. + noleggi mezzi</p>
@@ -556,9 +605,17 @@ const CashFlowPage = () => {
           {/* M.O.L. */}
           <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200">
             <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">M.O.L. (EBITDA)</span>
-            <div className="flex items-baseline justify-between mt-1.5">
-              <span className="text-xl font-black text-emerald-600">{formatEUR(annualMol)}</span>
-              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
+            <div className="flex flex-wrap items-baseline justify-between gap-1 mt-1.5">
+              <span className={`text-lg xl:text-xl font-black whitespace-nowrap ${annualMol >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                {formatEUR(annualMol)}
+              </span>
+              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${
+                annualRevenue === 0
+                  ? 'bg-slate-100 text-slate-600'
+                  : annualMol >= 0
+                    ? 'bg-emerald-100 text-emerald-800'
+                    : 'bg-rose-100 text-rose-800'
+              }`}>
                 {formatPercent(annualMolPercent)}
               </span>
             </div>
@@ -571,41 +628,62 @@ const CashFlowPage = () => {
               <Building2 className="w-3 h-3 mr-1 text-slate-500" />
               Indice DSCR
             </span>
-            <div className="flex items-baseline justify-between mt-1.5">
-              <span className={`text-xl font-black ${
-                dscrColor === 'emerald' ? 'text-emerald-600' : dscrColor === 'amber' ? 'text-amber-600' : 'text-rose-600'
+            <div className="flex flex-wrap items-baseline justify-between gap-1 mt-1.5">
+              <span className={`text-lg xl:text-xl font-black whitespace-nowrap ${
+                dscrColor === 'emerald'
+                  ? 'text-emerald-600'
+                  : dscrColor === 'amber'
+                    ? 'text-amber-600'
+                    : dscrColor === 'slate'
+                      ? 'text-slate-500'
+                      : 'text-rose-600'
               }`}>
-                {dscr.toFixed(2)}x
+                {dscr !== null ? `${dscr.toFixed(2)}x` : dscrRating}
               </span>
               <span className={`text-[9px] font-extrabold px-1.5 py-0.5 rounded ${
-                dscrColor === 'emerald' ? 'bg-emerald-100 text-emerald-800' : dscrColor === 'amber' ? 'bg-amber-100 text-amber-800' : 'bg-rose-100 text-rose-800'
+                dscrColor === 'emerald'
+                  ? 'bg-emerald-100 text-emerald-800'
+                  : dscrColor === 'amber'
+                    ? 'bg-amber-100 text-amber-800'
+                    : dscrColor === 'slate'
+                      ? 'bg-slate-100 text-slate-600'
+                      : 'bg-rose-100 text-rose-800'
               }`}>
-                {dscrRating.split(' ')[0]}
+                {dscr !== null ? dscrRating.split(' ')[0] : '0 Canoni'}
               </span>
             </div>
-            <p className="text-[10px] text-slate-400 mt-0.5" title="Copertura canoni da cassa operativa">Copertura debiti/canoni</p>
+            <p className="text-[10px] text-slate-400 mt-0.5" title="Copertura canoni da cassa operativa (CFADS ante canoni)">Copertura debiti/canoni</p>
           </div>
 
           {/* FIDO BANCARIO CONSIGLIATO */}
           <div className={`p-4 rounded-2xl shadow-sm border ${
             peakFinancingRequired > 0 ? 'bg-amber-50/80 border-amber-300' : 'bg-white border-slate-200'
           }`}>
-            <span className="text-[10px] font-bold text-amber-900 uppercase tracking-wider flex items-center">
-              <AlertTriangle className="w-3 h-3 mr-1 text-amber-600" />
-              Fido / Fabbisogno
+            <span className={`text-[10px] font-bold uppercase tracking-wider flex items-center ${
+              peakFinancingRequired > 0 ? 'text-amber-900' : 'text-slate-400'
+            }`}>
+              <AlertTriangle className={`w-3 h-3 mr-1 ${peakFinancingRequired > 0 ? 'text-amber-600' : 'text-emerald-600'}`} />
+              Fido Consigliato
             </span>
-            <div className="text-xl font-black text-amber-700 mt-1.5">
+            <div className={`text-lg xl:text-xl font-black mt-1.5 whitespace-nowrap ${
+              peakFinancingRequired > 0 ? 'text-amber-700' : 'text-emerald-700'
+            }`}>
               {formatEUR(suggestedCreditLine)}
             </div>
-            <p className="text-[10px] text-amber-800 mt-0.5 font-semibold truncate" title={`Picco a ${peakDeficitMonth} (${peakDeficitBiweekly})`}>
-              {peakFinancingRequired > 0 ? `Picco: ${peakDeficitBiweekly || peakDeficitMonth}` : 'Nessun deficit'}
+            <p
+              className={`text-[10px] mt-0.5 font-semibold truncate ${peakFinancingRequired > 0 ? 'text-amber-800' : 'text-slate-500'}`}
+              title={peakFinancingRequired > 0 ? `Picco scoperto netto: ${formatEUR(peakFinancingRequired)} (${peakDeficitPeriod})` : 'Nessun deficit previsto'}
+            >
+              {peakFinancingRequired > 0
+                ? `Picco netto: ${formatEUR(peakFinancingRequired)} (${peakDeficitPeriod || peakDeficitBiweekly || peakDeficitMonth})`
+                : 'Nessun deficit di cassa'}
             </p>
           </div>
 
           {/* SALDO CASSA DICEMBRE */}
           <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200">
             <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Cassa a Dicembre</span>
-            <div className={`text-xl font-black mt-1.5 ${finalCashBalance >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+            <div className={`text-lg xl:text-xl font-black mt-1.5 whitespace-nowrap ${finalCashBalance >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
               {formatEUR(finalCashBalance)}
             </div>
             <p className="text-[10px] text-slate-500 mt-0.5">Liquidità finale</p>
@@ -637,9 +715,13 @@ const CashFlowPage = () => {
                   type="number"
                   step="5000"
                   disabled={portfolioScope === 'potentialOnly'}
-                  value={portfolioScope === 'potentialOnly' ? 0 : initialCash}
+                  value={portfolioScope === 'potentialOnly' ? 0 : initialCashInput}
+                  onFocus={() => { isEditingInitialCashRef.current = true; }}
                   onChange={(e) => handleInitialCashChange(e.target.value)}
-                  onBlur={(e) => persistInitialCash(e.target.value)}
+                  onBlur={(e) => {
+                    isEditingInitialCashRef.current = false;
+                    persistInitialCash(e.target.value);
+                  }}
                   className={`w-full px-3 py-1.5 border rounded-xl font-bold ${
                     portfolioScope === 'potentialOnly'
                       ? 'border-amber-200 bg-amber-50 text-amber-800 cursor-not-allowed'
@@ -702,7 +784,7 @@ const CashFlowPage = () => {
                   <span className="text-[10px] text-slate-500">(Costo 1.5%)</span>
                 </div>
               ) : (
-                <p className="text-[10px] text-slate-500">Anticipa l'80% delle fatture emesse</p>
+                <p className="text-[10px] text-slate-500">Anticipa il {factoringRate}% delle fatture emesse</p>
               )}
             </div>
 
@@ -780,58 +862,117 @@ const CashFlowPage = () => {
           )}
         </div>
 
-        {/* Grafico Andamento Cassa & Fabbisogno */}
+        {/* Banner Empty State se il perimetro non contiene commesse */}
+        {effectiveProjects.length === 0 && (
+          <div className="bg-amber-50 border border-amber-200 rounded-2xl p-5 flex items-center justify-between gap-3 text-xs text-amber-950">
+            <div className="flex items-center space-x-3">
+              <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0" />
+              <div>
+                <p className="font-bold">Nessuna commessa presente nel perimetro selezionato ({portfolioScope === 'potentialOnly' ? 'Solo Trattative' : portfolioScope === 'activeOnly' ? 'Solo Status Quo' : 'Portfolio'})</p>
+                <p className="text-[11px] text-amber-800 mt-0.5">Seleziona un altro perimetro oppure crea/converti una commessa dal Simulatore o da Commesse &amp; Budget.</p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Grafico Andamento Cassa / Budget P&L */}
         <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
             <div>
               <h3 className="text-base font-bold text-slate-900">
-                Evoluzione Saldo di Cassa & Fabbisogno Circolante ({selectedYear}) {isBiweeklyView ? '- Vista Quindicinale (24 Periodi)' : '- Vista Mensile'}
+                {activeTab === 'pnl'
+                  ? `Andamento Economico Mensile Ricavi, Costi & M.O.L. (${selectedYear})`
+                  : `Evoluzione Saldo di Cassa & Fabbisogno Circolante (${selectedYear}) ${isBiweeklyView ? '- Vista Quindicinale (24 Periodi)' : '- Vista Mensile'}`}
               </h3>
               <p className="text-xs text-slate-500">
-                La curva mostra il saldo cumulato: sotto la linea rossa (zero) si attiva il fido bancario necessario.
+                {activeTab === 'pnl'
+                  ? 'Confronto mensile per competenza economica tra ricavi operativi, costi totali e M.O.L. generato.'
+                  : 'La curva mostra il saldo cumulato: sotto la linea rossa (zero) si attiva il fido bancario necessario.'}
               </p>
             </div>
-            <div className="flex items-center space-x-2 text-xs">
-              <span className="flex items-center text-emerald-700 font-semibold">
-                <span className="w-3 h-3 bg-emerald-500 rounded-full mr-1 inline-block"></span>
-                Saldo Cassa
-              </span>
-              <span className="flex items-center text-blue-700 font-semibold">
-                <span className="w-3 h-3 bg-blue-500 rounded mr-1 inline-block"></span>
-                Incassi
-              </span>
-              <span className="flex items-center text-rose-700 font-semibold">
-                <span className="w-3 h-3 bg-rose-400 rounded mr-1 inline-block"></span>
-                Uscite
-              </span>
+            <div className="flex items-center space-x-3 text-xs">
+              {activeTab === 'pnl' ? (
+                <>
+                  <span className="flex items-center text-blue-700 font-semibold">
+                    <span className="w-3 h-3 bg-blue-500 rounded mr-1 inline-block"></span>
+                    Ricavi P&amp;L
+                  </span>
+                  <span className="flex items-center text-rose-700 font-semibold">
+                    <span className="w-3 h-3 bg-rose-400 rounded mr-1 inline-block"></span>
+                    Costi P&amp;L
+                  </span>
+                  <span className="flex items-center text-emerald-700 font-semibold">
+                    <span className="w-3 h-3 bg-emerald-500 rounded-full mr-1 inline-block"></span>
+                    M.O.L. Mensile
+                  </span>
+                </>
+              ) : (
+                <>
+                  <span className="flex items-center text-emerald-700 font-semibold">
+                    <span className="w-3 h-3 bg-emerald-500 rounded-full mr-1 inline-block"></span>
+                    Saldo Cassa
+                  </span>
+                  <span className="flex items-center text-blue-700 font-semibold">
+                    <span className="w-3 h-3 bg-blue-500 rounded mr-1 inline-block"></span>
+                    Incassi
+                  </span>
+                  <span className="flex items-center text-rose-700 font-semibold">
+                    <span className="w-3 h-3 bg-rose-400 rounded mr-1 inline-block"></span>
+                    Uscite
+                  </span>
+                </>
+              )}
             </div>
           </div>
 
           <div className="h-80 w-full pt-4">
             <ResponsiveContainer width="100%" height="100%">
-              <ComposedChart data={chartData} margin={{ top: 10, right: 30, left: 15, bottom: 0 }}>
+              <ComposedChart data={chartData} margin={{ top: 10, right: 20, left: 15, bottom: isBiweeklyView ? 20 : 5 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-                <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+                <XAxis
+                  dataKey="name"
+                  tick={{ fontSize: 10 }}
+                  interval={isBiweeklyView ? 1 : 0}
+                  angle={isBiweeklyView ? -25 : 0}
+                  textAnchor={isBiweeklyView ? 'end' : 'middle'}
+                  height={isBiweeklyView ? 45 : 30}
+                />
                 <YAxis
                   tick={{ fontSize: 11 }}
-                  tickFormatter={(val) => `€${(val / 1000).toFixed(0)}k`}
+                  tickFormatter={(val) => Math.abs(val) >= 1000 ? `€${(val / 1000).toFixed(0)}k` : `€${val}`}
                 />
                 <Tooltip
                   formatter={(val) => formatEUR(val)}
                   labelFormatter={(name, payload) => payload?.[0]?.payload?.fullName || name}
                 />
-                <Legend />
                 <ReferenceLine y={0} stroke="#ef4444" strokeWidth={1.5} strokeDasharray="4 4" />
-                <Bar dataKey="IncassiCassa" name="Incassi Cassa" fill="#3b82f6" fillOpacity={0.6} radius={[4, 4, 0, 0]} />
-                <Bar dataKey="UsciteCassa" name="Uscite Cassa" fill="#f43f5e" fillOpacity={0.6} radius={[4, 4, 0, 0]} />
-                <Line
-                  type="monotone"
-                  dataKey="SaldoCassa"
-                  name="Saldo Cassa Cumulato"
-                  stroke="#10b981"
-                  strokeWidth={3}
-                  dot={{ r: 3, fill: '#10b981' }}
-                />
+                {activeTab === 'pnl' ? (
+                  <>
+                    <Bar dataKey="RicaviPnl" name="Ricavi P&L" fill="#3b82f6" fillOpacity={0.7} radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="CostiPnl" name="Costi P&L" fill="#f43f5e" fillOpacity={0.65} radius={[4, 4, 0, 0]} />
+                    <Line
+                      type="monotone"
+                      dataKey="MolPnl"
+                      name="M.O.L. Mensile"
+                      stroke="#10b981"
+                      strokeWidth={3}
+                      dot={{ r: 3, fill: '#10b981' }}
+                    />
+                  </>
+                ) : (
+                  <>
+                    <Bar dataKey="IncassiCassa" name="Incassi Cassa" fill="#3b82f6" fillOpacity={0.6} radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="UsciteCassa" name="Uscite Cassa" fill="#f43f5e" fillOpacity={0.6} radius={[4, 4, 0, 0]} />
+                    <Line
+                      type="monotone"
+                      dataKey="SaldoCassa"
+                      name="Saldo Cassa Cumulato"
+                      stroke="#10b981"
+                      strokeWidth={3}
+                      dot={{ r: 3, fill: '#10b981' }}
+                    />
+                  </>
+                )}
               </ComposedChart>
             </ResponsiveContainer>
           </div>
@@ -873,6 +1014,7 @@ const CashFlowPage = () => {
                         <th className="py-3 px-3 text-right text-slate-300 bg-slate-800/80">Energia &amp; Carb.</th>
                         <th className="py-3 px-3 text-right text-slate-300 bg-slate-800/80">Telepass</th>
                         <th className="py-3 px-3 text-right text-slate-300 bg-slate-800/80">Noleggi</th>
+                        <th className="py-3 px-3 text-right text-slate-300 bg-slate-800/80">Altri Forn. &amp; Caparre</th>
                       </>
                     )}
                     <th className="py-3 px-3 text-right">Flusso Netto</th>
@@ -885,7 +1027,7 @@ const CashFlowPage = () => {
                     {/* Header del Trimestre */}
                     <tr className={q.headerClass}>
                       <td
-                        colSpan={(showExpenseDetails ? 11 : 7) + (showAcciseCol ? 1 : 0)}
+                        colSpan={(showExpenseDetails ? 12 : 7) + (showAcciseCol ? 1 : 0)}
                         className="py-2 px-4 font-black text-xs uppercase tracking-wider"
                       >
                         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -949,6 +1091,7 @@ const CashFlowPage = () => {
                               <td className="py-2.5 px-3 text-right text-slate-600 bg-slate-50/70">{formatEUR(m.outflowBreakdown.lngFuel)}</td>
                               <td className="py-2.5 px-3 text-right text-slate-600 bg-slate-50/70">{formatEUR(m.outflowBreakdown.tollsTelepass)}</td>
                               <td className="py-2.5 px-3 text-right text-slate-600 bg-slate-50/70">{formatEUR(m.outflowBreakdown.leasesTotal)}</td>
+                              <td className="py-2.5 px-3 text-right text-slate-600 bg-slate-50/70">{formatEUR((m.outflowBreakdown.suppliersOther || 0) + (m.outflowBreakdown.deposits || 0))}</td>
                             </>
                           )}
 
@@ -997,6 +1140,7 @@ const CashFlowPage = () => {
                           <td className="py-2 px-3 text-right font-bold text-slate-800">{formatEUR(q.lngFuel)}</td>
                           <td className="py-2 px-3 text-right font-bold text-slate-800">{formatEUR(q.tollsTelepass)}</td>
                           <td className="py-2 px-3 text-right font-bold text-slate-800">{formatEUR(q.leasesTotal)}</td>
+                          <td className="py-2 px-3 text-right font-bold text-slate-800">{formatEUR(q.otherSuppliers)}</td>
                         </>
                       )}
 
@@ -1028,7 +1172,7 @@ const CashFlowPage = () => {
                   <tr>
                     <td className="py-3 px-4 font-black">TOTALE ANNUO ({selectedYear})</td>
                     <td className="py-3 px-3 text-right text-slate-300">{formatEUR(effectiveInitialCash)}</td>
-                    <td className="py-3 px-3 text-right text-cyan-300 font-black">{formatEUR(totalCashIn - annualAcciseCredit)}</td>
+                    <td className="py-3 px-3 text-right text-cyan-300 font-black">{formatEUR(quartersData.reduce((s, q) => s + q.cashIn, 0))}</td>
                     {showAcciseCol && <td className="py-3 px-3 text-right text-emerald-300 font-black">{formatEUR(annualAcciseCredit)}</td>}
                     <td className="py-3 px-3 text-right text-rose-300 font-black">{formatEUR(totalCashOut)}</td>
                     {showExpenseDetails && (
@@ -1037,14 +1181,19 @@ const CashFlowPage = () => {
                         <td className="py-3 px-3 text-right text-slate-200 font-bold">{formatEUR(annualColumnTotals.fuelOut)}</td>
                         <td className="py-3 px-3 text-right text-slate-200 font-bold">{formatEUR(annualColumnTotals.tollsOut)}</td>
                         <td className="py-3 px-3 text-right text-slate-200 font-bold">{formatEUR(annualColumnTotals.leasesOut)}</td>
+                        <td className="py-3 px-3 text-right text-slate-200 font-bold">{formatEUR(annualColumnTotals.otherSuppliersOut)}</td>
                       </>
                     )}
-                    <td className="py-3 px-3 text-right text-emerald-300 font-black">
+                    <td className={`py-3 px-3 text-right font-black ${netAnnualCash >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>
                       {netAnnualCash >= 0 ? '+' : ''}{formatEUR(netAnnualCash)}
                     </td>
-                    <td className="py-3 px-3 text-right text-white font-black text-sm">{formatEUR(finalCashBalance)}</td>
+                    <td className={`py-3 px-3 text-right font-black text-sm ${finalCashBalance >= 0 ? 'text-white' : 'text-rose-300'}`}>{formatEUR(finalCashBalance)}</td>
                     <td className="py-3 px-3 text-center text-amber-300 font-extrabold text-[10px]">
-                      {peakFinancingRequired > 0 ? `Picco Deficit: ${formatEUR(peakFinancingRequired)}` : 'Coperto'}
+                      {peakFinancingRequired > 0
+                        ? (peakDeficitIsBiweekly
+                            ? `Picco intra-mese (15gg): ${formatEUR(peakFinancingRequired)}`
+                            : `Picco Deficit: ${formatEUR(peakFinancingRequired)}`)
+                        : 'Coperto'}
                     </td>
                   </tr>
                 </tfoot>
@@ -1057,61 +1206,66 @@ const CashFlowPage = () => {
                 <thead className="bg-slate-50 text-slate-700 font-bold uppercase tracking-wider">
                   <tr>
                     <th className="py-3 px-4">Periodo</th>
-                    <th className="py-3 px-4 text-right">Saldo Iniziale</th>
-                    <th className="py-3 px-4 text-right text-blue-700">(+) Incassi</th>
-                    {showAcciseCol && <th className="py-3 px-4 text-right text-emerald-700">(+) Accise</th>}
-                    <th className="py-3 px-4 text-right text-rose-700">(-) Uscite</th>
-                    <th className="py-3 px-4 text-right">Autisti Netto (G10)</th>
-                    <th className="py-3 px-4 text-right">Autisti INPS (G16)</th>
-                    <th className="py-3 px-4 text-right">Energia/LNG (G15/30)</th>
-                    <th className="py-3 px-4 text-right">Telepass</th>
-                    <th className="py-3 px-4 text-right">Noleggi</th>
-                    <th className="py-3 px-4 text-right font-black">Saldo Cassa</th>
-                    <th className="py-3 px-4 text-center">Allerta Cassa</th>
+                    <th className="py-3 px-3 text-right">Saldo Iniziale</th>
+                    <th className="py-3 px-3 text-right text-blue-700">(+) Incassi</th>
+                    {showAcciseCol && <th className="py-3 px-3 text-right text-emerald-700">(+) Accise</th>}
+                    <th className="py-3 px-3 text-right text-rose-700">(-) Uscite</th>
+                    <th className="py-3 px-3 text-right">Autisti Netto (G10)</th>
+                    <th className="py-3 px-3 text-right">Autisti INPS (G16)</th>
+                    <th className="py-3 px-3 text-right">Energia/Carb. (G15/30)</th>
+                    <th className="py-3 px-3 text-right">Telepass</th>
+                    <th className="py-3 px-3 text-right">Noleggi</th>
+                    <th className="py-3 px-3 text-right">Altri Forn. &amp; Caparre</th>
+                    <th className="py-3 px-3 text-right font-black">Saldo Cassa</th>
+                    <th className="py-3 px-3 text-center">Allerta Cassa</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 font-medium">
                   {biweeklyCashFlow.map((p) => {
                     const isDeficit = p.closingCash < 0;
+                    const otherAndDep = (p.outflowBreakdown.otherSuppliers || 0) + (p.outflowBreakdown.deposits || 0);
                     return (
                       <tr
                         key={p.periodIndex}
                         className={`hover:bg-slate-50 transition ${isDeficit ? 'bg-rose-50/50' : p.quindicina === 1 ? 'bg-slate-50/30' : ''}`}
                       >
                         <td className="py-2.5 px-4 font-bold text-slate-900">{p.label}</td>
-                        <td className="py-2.5 px-4 text-right text-slate-600">{formatEUR(p.openingCash)}</td>
-                        <td className="py-2.5 px-4 text-right font-bold text-blue-600">
+                        <td className="py-2.5 px-3 text-right text-slate-600">{formatEUR(p.openingCash)}</td>
+                        <td className="py-2.5 px-3 text-right font-bold text-blue-600">
                           {p.inflowBreakdown.clients + p.inflowBreakdown.factoring > 0
                             ? formatEUR(p.inflowBreakdown.clients + p.inflowBreakdown.factoring)
                             : '-'}
                         </td>
                         {showAcciseCol && (
-                          <td className="py-2.5 px-4 text-right font-bold text-emerald-600">
+                          <td className="py-2.5 px-3 text-right font-bold text-emerald-600">
                             {p.inflowBreakdown.accise > 0 ? `+${formatEUR(p.inflowBreakdown.accise)}` : '-'}
                           </td>
                         )}
-                        <td className="py-2.5 px-4 text-right font-bold text-rose-600">{formatEUR(p.cashOut)}</td>
-                        <td className="py-2.5 px-4 text-right text-slate-600">
+                        <td className="py-2.5 px-3 text-right font-bold text-rose-600">{formatEUR(p.cashOut)}</td>
+                        <td className="py-2.5 px-3 text-right text-slate-600">
                           {p.outflowBreakdown.driversNet > 0 ? formatEUR(p.outflowBreakdown.driversNet) : '-'}
                         </td>
-                        <td className="py-2.5 px-4 text-right text-slate-600">
+                        <td className="py-2.5 px-3 text-right text-slate-600">
                           {p.outflowBreakdown.driversInpsF24 > 0 ? formatEUR(p.outflowBreakdown.driversInpsF24) : '-'}
                         </td>
-                        <td className="py-2.5 px-4 text-right text-slate-600">
+                        <td className="py-2.5 px-3 text-right text-slate-600">
                           {p.outflowBreakdown.lngFuel > 0 ? formatEUR(p.outflowBreakdown.lngFuel) : '-'}
                         </td>
-                        <td className="py-2.5 px-4 text-right text-slate-600">
+                        <td className="py-2.5 px-3 text-right text-slate-600">
                           {p.outflowBreakdown.tollsTelepass > 0 ? formatEUR(p.outflowBreakdown.tollsTelepass) : '-'}
                         </td>
-                        <td className="py-2.5 px-4 text-right text-slate-600">
+                        <td className="py-2.5 px-3 text-right text-slate-600">
                           {p.outflowBreakdown.leases > 0 ? formatEUR(p.outflowBreakdown.leases) : '-'}
                         </td>
-                        <td className="py-2.5 px-4 text-right">
+                        <td className="py-2.5 px-3 text-right text-slate-600">
+                          {otherAndDep > 0 ? formatEUR(otherAndDep) : '-'}
+                        </td>
+                        <td className="py-2.5 px-3 text-right">
                           <span className={`font-black text-xs ${isDeficit ? 'text-rose-600' : 'text-emerald-700'}`}>
                             {formatEUR(p.closingCash)}
                           </span>
                         </td>
-                        <td className="py-2.5 px-4 text-center">
+                        <td className="py-2.5 px-3 text-center">
                           {isDeficit ? (
                             <span className="px-2 py-0.5 rounded-full text-[9px] font-extrabold bg-rose-100 text-rose-800">
                               SCOPERTO {formatEUR(Math.abs(p.closingCash))}
@@ -1124,6 +1278,27 @@ const CashFlowPage = () => {
                     );
                   })}
                 </tbody>
+                <tfoot className="bg-slate-900 text-white font-bold">
+                  <tr>
+                    <td className="py-3 px-4">TOTALE 24 PERIODI ({selectedYear})</td>
+                    <td className="py-3 px-3 text-right text-slate-300">{formatEUR(effectiveInitialCash)}</td>
+                    <td className="py-3 px-3 text-right text-cyan-300">{formatEUR(biweeklyTotals.cashIn)}</td>
+                    {showAcciseCol && <td className="py-3 px-3 text-right text-emerald-300">{formatEUR(biweeklyTotals.accise)}</td>}
+                    <td className="py-3 px-3 text-right text-rose-300">{formatEUR(biweeklyTotals.cashOut)}</td>
+                    <td className="py-3 px-3 text-right text-slate-200">{formatEUR(biweeklyTotals.driversNet)}</td>
+                    <td className="py-3 px-3 text-right text-slate-200">{formatEUR(biweeklyTotals.driversInps)}</td>
+                    <td className="py-3 px-3 text-right text-slate-200">{formatEUR(biweeklyTotals.lngFuel)}</td>
+                    <td className="py-3 px-3 text-right text-slate-200">{formatEUR(biweeklyTotals.tolls)}</td>
+                    <td className="py-3 px-3 text-right text-slate-200">{formatEUR(biweeklyTotals.leases)}</td>
+                    <td className="py-3 px-3 text-right text-slate-200">{formatEUR(biweeklyTotals.otherSupp)}</td>
+                    <td className={`py-3 px-3 text-right font-black ${finalCashBalance >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>
+                      {formatEUR(finalCashBalance)}
+                    </td>
+                    <td className="py-3 px-3 text-center text-amber-300 text-[10px]">
+                      {peakFinancingRequired > 0 ? `Picco: ${formatEUR(peakFinancingRequired)}` : 'Coperto'}
+                    </td>
+                  </tr>
+                </tfoot>
               </table>
             )}
 
@@ -1133,15 +1308,17 @@ const CashFlowPage = () => {
                 <thead className="bg-slate-50 text-slate-700 font-bold uppercase tracking-wider">
                   <tr>
                     <th className="py-3 px-4">Mese</th>
-                    <th className="py-3 px-4 text-center">Commesse</th>
-                    <th className="py-3 px-4 text-right">Ricavi Budget</th>
-                    <th className="py-3 px-4 text-right">Energia / Carb.</th>
-                    {showAcciseCol && <th className="py-3 px-4 text-right">Credito Accise</th>}
-                    <th className="py-3 px-4 text-right">Canoni Noleggio</th>
-                    <th className="py-3 px-4 text-right">Frigo &amp; Accessori</th>
-                    <th className="py-3 px-4 text-right">Costi Totali</th>
-                    <th className="py-3 px-4 text-right">M.O.L. (€)</th>
-                    <th className="py-3 px-4 text-right">M.O.L. (%)</th>
+                    <th className="py-3 px-3 text-center">Commesse</th>
+                    <th className="py-3 px-3 text-right">Ricavi Budget</th>
+                    <th className="py-3 px-3 text-right">Autisti</th>
+                    <th className="py-3 px-3 text-right">Energia / Carb.</th>
+                    {showAcciseCol && <th className="py-3 px-3 text-right">Credito Accise</th>}
+                    <th className="py-3 px-3 text-right">Canoni Noleggio</th>
+                    <th className="py-3 px-3 text-right">Frigo &amp; Accessori</th>
+                    <th className="py-3 px-3 text-right">Pedaggi, Gomme &amp; Altri</th>
+                    <th className="py-3 px-3 text-right">Costi Totali</th>
+                    <th className="py-3 px-3 text-right">M.O.L. (€)</th>
+                    <th className="py-3 px-3 text-right">M.O.L. (%)</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 font-medium">
@@ -1149,31 +1326,34 @@ const CashFlowPage = () => {
                     const isNegMol = m.mol < 0;
                     const leaseTotal = m.costBreakdown.vehicleLease + m.costBreakdown.trailerLease;
                     const accessoriesAndFridge = (m.costBreakdown.refrigeration || 0) + (m.costBreakdown.telematics || 0) + (m.costBreakdown.washing || 0) + (m.costBreakdown.extraCosts || 0);
+                    const tollsTiresOther = (m.costBreakdown.tolls || 0) + (m.costBreakdown.tires || 0) + (m.costBreakdown.porterage || 0) + (m.costBreakdown.partnerMargin || 0) + (m.costBreakdown.otherCosts || 0);
 
                     return (
                       <tr key={m.monthIndex} className="hover:bg-slate-50 transition">
                         <td className="py-3 px-4 font-bold text-slate-900">{m.monthName}</td>
-                        <td className="py-3 px-4 text-center">
+                        <td className="py-3 px-3 text-center">
                           <span className="px-2 py-0.5 rounded-full bg-slate-100 text-slate-800 text-[11px] font-bold">
                             {m.activeProjectsCount}
                           </span>
                         </td>
-                        <td className="py-3 px-4 text-right font-bold text-slate-900">{formatEUR(m.revenue)}</td>
-                        <td className="py-3 px-4 text-right text-slate-600">{formatEUR(m.costBreakdown.fuelNet)}</td>
+                        <td className="py-3 px-3 text-right font-bold text-slate-900">{formatEUR(m.revenue)}</td>
+                        <td className="py-3 px-3 text-right text-slate-600">{formatEUR(m.costBreakdown.driver)}</td>
+                        <td className="py-3 px-3 text-right text-slate-600">{formatEUR(m.costBreakdown.fuelNet)}</td>
                         {showAcciseCol && (
-                          <td className="py-3 px-4 text-right text-emerald-600 font-bold">
+                          <td className="py-3 px-3 text-right text-emerald-600 font-bold">
                             {m.acciseCredit > 0 ? `-${formatEUR(m.acciseCredit)}` : '-'}
                           </td>
                         )}
-                        <td className="py-3 px-4 text-right text-slate-600">{formatEUR(leaseTotal)}</td>
-                        <td className="py-3 px-4 text-right text-slate-600">{accessoriesAndFridge > 0 ? formatEUR(accessoriesAndFridge) : '-'}</td>
-                        <td className="py-3 px-4 text-right font-semibold text-slate-800">{formatEUR(m.cost)}</td>
-                        <td className="py-3 px-4 text-right font-black">
+                        <td className="py-3 px-3 text-right text-slate-600">{formatEUR(leaseTotal)}</td>
+                        <td className="py-3 px-3 text-right text-slate-600">{accessoriesAndFridge > 0 ? formatEUR(accessoriesAndFridge) : '-'}</td>
+                        <td className="py-3 px-3 text-right text-slate-600">{tollsTiresOther > 0 ? formatEUR(tollsTiresOther) : '-'}</td>
+                        <td className="py-3 px-3 text-right font-semibold text-slate-800">{formatEUR(m.cost)}</td>
+                        <td className="py-3 px-3 text-right font-black">
                           <span className={isNegMol ? 'text-rose-600' : 'text-emerald-600'}>
                             {formatEUR(m.mol)}
                           </span>
                         </td>
-                        <td className="py-3 px-4 text-right">
+                        <td className="py-3 px-3 text-right">
                           <span className={`px-2 py-0.5 rounded font-bold ${
                             isNegMol ? 'bg-rose-100 text-rose-800' : m.molPercent < 15 ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800'
                           }`}>
@@ -1187,17 +1367,21 @@ const CashFlowPage = () => {
                 <tfoot className="bg-slate-900 text-white font-bold">
                   <tr>
                     <td className="py-3.5 px-4">TOTALE ANNUO P&amp;L</td>
-                    <td className="py-3.5 px-4 text-center">-</td>
-                    <td className="py-3.5 px-4 text-right text-emerald-400">{formatEUR(annualRevenue)}</td>
-                    <td className="py-3.5 px-4 text-right text-slate-200">{formatEUR(annualColumnTotals.pnlFuelNet)}</td>
+                    <td className="py-3.5 px-3 text-center">-</td>
+                    <td className="py-3.5 px-3 text-right text-emerald-400">{formatEUR(annualRevenue)}</td>
+                    <td className="py-3.5 px-3 text-right text-slate-200">{formatEUR(annualColumnTotals.pnlDrivers)}</td>
+                    <td className="py-3.5 px-3 text-right text-slate-200">{formatEUR(annualColumnTotals.pnlFuelNet)}</td>
                     {showAcciseCol && (
-                      <td className="py-3.5 px-4 text-right text-emerald-300">-{formatEUR(annualAcciseCredit)}</td>
+                      <td className="py-3.5 px-3 text-right text-emerald-300">-{formatEUR(annualAcciseCredit)}</td>
                     )}
-                    <td className="py-3.5 px-4 text-right text-slate-200">{formatEUR(annualColumnTotals.pnlLeases)}</td>
-                    <td className="py-3.5 px-4 text-right text-slate-200">{formatEUR(annualColumnTotals.pnlAccAndFridge)}</td>
-                    <td className="py-3.5 px-4 text-right text-rose-300">{formatEUR(annualCost)}</td>
-                    <td className="py-3.5 px-4 text-right text-emerald-300 text-sm font-black">{formatEUR(annualMol)}</td>
-                    <td className="py-3.5 px-4 text-right text-white font-black">{formatPercent(annualMolPercent)}</td>
+                    <td className="py-3.5 px-3 text-right text-slate-200">{formatEUR(annualColumnTotals.pnlLeases)}</td>
+                    <td className="py-3.5 px-3 text-right text-slate-200">{formatEUR(annualColumnTotals.pnlAccAndFridge)}</td>
+                    <td className="py-3.5 px-3 text-right text-slate-200">{formatEUR(annualColumnTotals.pnlTollsTiresOther)}</td>
+                    <td className="py-3.5 px-3 text-right text-rose-300">{formatEUR(annualCost)}</td>
+                    <td className={`py-3.5 px-3 text-right text-sm font-black ${annualMol >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>
+                      {formatEUR(annualMol)}
+                    </td>
+                    <td className="py-3.5 px-3 text-right text-white font-black">{formatPercent(annualMolPercent)}</td>
                   </tr>
                 </tfoot>
               </table>
@@ -1212,7 +1396,7 @@ const CashFlowPage = () => {
             <h4>Come interpretare i disallineamenti di cassa in FOUR:</h4>
           </div>
           <p className="leading-relaxed">
-            I grandi clienti (Decathlon, Camst, BRT, K&N) pagano a <strong>60-90 giorni</strong> (DSO), mentre i noleggi escono il <strong>10 o 30 del mese</strong>, il carburante LNG a <strong>30 gg quindicinale</strong> (15 e 30 del mese succ.) e il Telepass a <strong>15 gg quindicinale</strong> (30 del mese e 15 del mese succ.).
+            I grandi clienti (Decathlon, Camst, BRT, K&amp;N) pagano a <strong>60-90 giorni</strong> (DSO), mentre i noleggi escono il <strong>10 o 30 del mese</strong>, Energia/Carburante a <strong>30 gg quindicinale</strong> (15 e 30 del mese succ.) e il Telepass a <strong>15 gg quindicinale</strong> (30 del mese e 15 del mese succ.).
           </p>
           <p className="leading-relaxed font-semibold">
             La vista quindicinale permette di vedere esattamente in quale giorno del mese il conto rischia di andare in rosso, permettendo alla direzione di FOUR di calibrare il fido bancario o anticipare le fatture prima del giorno 10 o 15.

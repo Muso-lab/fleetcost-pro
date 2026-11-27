@@ -1,26 +1,30 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { useNavigate } from 'react-router-dom';
-import { Lock, Mail, ShieldCheck, Eye, EyeOff, ArrowRight, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { useLocation, useNavigate } from 'react-router-dom';
+import { Lock, Mail, ShieldCheck, Eye, EyeOff, ArrowRight, AlertCircle } from 'lucide-react';
 import logoFour from '../assets/logo-four.png';
 
 const LoginPage = () => {
   const { currentUser, login, authConfig } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
+  const redirectTarget = location.state?.from?.pathname
+    ? `${location.state.from.pathname}${location.state.from.search || ''}`
+    : '/';
 
-  const [email, setEmail] = useState('amministrazione@four-logistics.it');
+  const [email, setEmail] = useState(() => authConfig?.adminEmail || 'amministrazione@four-logistics.it');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(true);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  // Se l'utente è già autenticato, reindirizza subito alla dashboard
+  // Se l'utente è già autenticato, reindirizza alla destinazione richiesta
   useEffect(() => {
     if (currentUser) {
-      navigate('/', { replace: true });
+      navigate(redirectTarget, { replace: true });
     }
-  }, [currentUser, navigate]);
+  }, [currentUser, navigate, redirectTarget]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -29,7 +33,7 @@ const LoginPage = () => {
 
     try {
       await login(email, password, rememberMe);
-      navigate('/', { replace: true });
+      navigate(redirectTarget, { replace: true });
     } catch (err) {
       setError(err.message || 'Errore durante l\'accesso. Controlla le credenziali.');
     } finally {
@@ -58,6 +62,7 @@ const LoginPage = () => {
               alt="FOUR Sustainable Logistics"
               className="h-12 w-auto object-contain"
               onError={(e) => {
+                e.currentTarget.onerror = null;
                 e.currentTarget.src = './logo-four.png';
               }}
             />
@@ -89,16 +94,16 @@ const LoginPage = () => {
           </div>
 
           {error && (
-            <div className="bg-rose-50 border border-rose-200 text-rose-800 px-3.5 py-2.5 rounded-xl text-xs flex items-start space-x-2 animate-shake">
+            <div className="bg-rose-50 border border-rose-200 text-rose-800 px-3.5 py-2.5 rounded-xl text-xs flex items-start space-x-2">
               <AlertCircle className="w-4 h-4 text-rose-600 mt-0.5 flex-shrink-0" />
               <span>{error}</span>
             </div>
           )}
 
-          <form onSubmit={handleSubmit} className="space-y-4 text-xs">
+          <form onSubmit={handleSubmit} className="space-y-4 text-sm">
             {/* Campo E-mail */}
             <div>
-              <label className="block font-semibold text-slate-700 mb-1">
+              <label htmlFor="login-email" className="block text-xs font-semibold text-slate-700 mb-1">
                 E-mail o Utente Aziendale
               </label>
               <div className="relative">
@@ -106,11 +111,12 @@ const LoginPage = () => {
                   <Mail className="w-4 h-4" />
                 </div>
                 <input
+                  id="login-email"
                   type="text"
                   required
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  className="w-full pl-9 pr-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-[#164e87] focus:border-[#164e87] font-medium text-slate-800 transition outline-none"
+                  className="w-full pl-9 pr-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-[#164e87] focus:border-[#164e87] text-base sm:text-sm font-medium text-slate-800 transition outline-none"
                   placeholder="amministrazione@four-logistics.it"
                   autoComplete="username"
                 />
@@ -120,7 +126,7 @@ const LoginPage = () => {
             {/* Campo Password */}
             <div>
               <div className="flex justify-between items-center mb-1">
-                <label className="block font-semibold text-slate-700">
+                <label htmlFor="login-password" className="block text-xs font-semibold text-slate-700">
                   Password di Accesso
                 </label>
               </div>
@@ -129,19 +135,20 @@ const LoginPage = () => {
                   <Lock className="w-4 h-4" />
                 </div>
                 <input
+                  id="login-password"
                   type={showPassword ? 'text' : 'password'}
                   required
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className="w-full pl-9 pr-10 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-[#164e87] focus:border-[#164e87] font-medium text-slate-800 transition outline-none"
+                  className="w-full pl-9 pr-10 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-[#164e87] focus:border-[#164e87] text-base sm:text-sm font-medium text-slate-800 transition outline-none"
                   placeholder="Inserisci la password"
                   autoComplete="current-password"
                 />
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
+                  aria-label={showPassword ? 'Nascondi password' : 'Mostra password'}
                   className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600"
-                  tabIndex={-1}
                 >
                   {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                 </button>

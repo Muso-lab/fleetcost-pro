@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef, Fragment } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import storageService from '../services/storageService';
 import {
@@ -7,6 +7,8 @@ import {
   calculateSingleProjectMetrics,
   calculateAnnualBudgetAndCashFlow,
   isProjectActiveInMonth,
+  getProjectStartYear,
+  isPotentialProject,
   LEASE_PAYMENT_TIMINGS,
   normalizeLeaseTiming,
   recalculateProjectCost,
@@ -72,7 +74,10 @@ import {
 
 const ProjectsPage = () => {
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const toolsMenuRef = useRef(null);
+  const hasInitializedWhatIfRef = useRef(false);
+  const prevHasActiveFiltersRef = useRef(false);
   const [projects, setProjects] = useState([]);
   const [fleet, setFleet] = useState([]);
   const [trailers, setTrailers] = useState([]);
@@ -179,6 +184,41 @@ const ProjectsPage = () => {
     notes: ''
   });
 
+  const handleCloseModal = () => {
+    setShowModal(false);
+    setModalFormError('');
+    setModalRouteError('');
+    if (
+      searchParams.get('edit') ||
+      searchParams.get('new') ||
+      searchParams.get('newFromVehicle') ||
+      searchParams.get('newFromTrailer')
+    ) {
+      setSearchParams({}, { replace: true });
+    }
+  };
+
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (showToolsMenu && toolsMenuRef.current && !toolsMenuRef.current.contains(e.target)) {
+        setShowToolsMenu(false);
+      }
+    };
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        if (showToolsMenu) setShowToolsMenu(false);
+        if (showModal) handleCloseModal();
+        if (showNextYearModal) setShowNextYearModal(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [showToolsMenu, showModal, showNextYearModal, searchParams]);
+
   useEffect(() => {
     loadData();
     const newFromVehicle = searchParams.get('newFromVehicle');
@@ -271,14 +311,31 @@ const ProjectsPage = () => {
     const curTrailers = trailers.length > 0 ? trailers : storageService.getTrailers();
     setModalTab('general');
     setModalFormError('');
+    setModalRouteError('');
+    setNewVariationDraft({
+      targetField: 'vehicleLeaseMonthly',
+      effectiveDate: '2026-07-01',
+      previousValue: '',
+      newValue: '',
+      note: ''
+    });
     if (project) {
       setEditingProject(project);
       const projVeh = curFleet.find(v => v.id === project.vehicleId);
       const projTrl = curTrailers.find(t => t.id === project.trailerId);
       const refDef = curSettings?.refrigerationParams || {};
-      const defaultTech = projTrl?.category === 'refrigerato_azoto' ? 'azoto' : 'gasolio';
+      const defaultTech = projTrl?.category === 'refrigerato_azoto'
+        ? 'azoto'
+        : projTrl?.category === 'refrigerato_elettrico' || projTrl?.fuelTypeId === 'elettrico'
+          ? 'elettrico'
+          : 'gasolio';
       const tech = project.refrigerationTech || defaultTech;
-      const techParams = refDef[tech] || (tech === 'azoto' ? { unitCost: 0.13, hourlyConsumption: 30 } : { unitCost: 1.80, hourlyConsumption: 3.0 });
+      const fallbackRefMap = {
+        azoto: { unitCost: 0.13, hourlyConsumption: 30 },
+        gasolio: { unitCost: 1.80, hourlyConsumption: 3.0 },
+        elettrico: { unitCost: 0.35, hourlyConsumption: 8.0 }
+      };
+      const techParams = refDef[tech] || fallbackRefMap[tech] || fallbackRefMap.gasolio;
       const telDef = curSettings?.accessoryParams?.telematics || { tractorMonthly: 14, trailerMonthly: 13, rigidMonthly: 12 };
       const washDef = curSettings?.accessoryParams?.washing || { costPerWash: 80, washesPerMonth: 2 };
 
@@ -490,7 +547,7 @@ const ProjectsPage = () => {
     const newTiming = selectedVeh ? (selectedVeh.leasePaymentTiming || normalizeLeaseTiming(selectedVeh)) : formData.leasePaymentTiming;
     const newTerms = selectedVeh && selectedVeh.leasePaymentTerms !== undefined ? selectedVeh.leasePaymentTerms : formData.paymentTermsLease;
     const isTerzi = selectedVeh?.ownershipType === 'terzi';
-    const newMgmt = isTerzi ? 'T' : formData.managementType;
+    const newMgmt = selectedVeh ? (isTerzi ? 'T' : 'D') : formData.managementType;
     const updated = applyAutoRecalculation({
       vehicleId: vId,
       managementType: newMgmt,
@@ -588,7 +645,7 @@ const ProjectsPage = () => {
     const updated = applyAutoRecalculation({
       managementType: type,
       telematicsAuto: true,
-      washingEnabled: type === 'D' ? formData.washingEnabled : false
+      washingEnabled: type === 'D' ? true : false
     }, { forceRecalculateDriver: type === 'D' });
     setFormData(updated);
   };
@@ -640,17 +697,48 @@ const ProjectsPage = () => {
     });
   };
 
+  const handleModalAllocationModeChange = (nextMode) => {
+    setFormData(prev => {
+      const list = Array.isArray(prev.billingEntities) ? [...prev.billingEntities] : [];
+      if (nextMode === 'manual_percent' && list.length > 1) {
+        const sum = list.reduce((s, e) => s + (Number(e.costSharePercent) || 0), 0);
+        if (Math.abs(sum - 100) > 0.5) {
+          const count = list.length;
+          const eq = +(100 / count).toFixed(2);
+          return {
+            ...prev,
+            costAllocationMode: nextMode,
+            billingEntities: list.map((e, i) => ({
+              ...e,
+              costSharePercent: i === count - 1 ? +(100 - eq * (count - 1)).toFixed(2) : eq
+            }))
+          };
+        }
+      }
+      return { ...prev, costAllocationMode: nextMode };
+    });
+  };
+
   const handleModalUpdateBillingEntity = (idx, patch) => {
     setFormData(prev => {
       const list = Array.isArray(prev.billingEntities) ? [...prev.billingEntities] : [];
       const next = list.map((item, i) => (i === idx ? { ...item, ...patch } : item));
-      const finalEntities =
-        patch.costSharePercent !== undefined && prev.costAllocationMode === 'manual_percent'
-          ? rebalanceManualCostShares(next, next.length, idx, patch.costSharePercent)
-          : next;
       return {
         ...prev,
-        billingEntities: finalEntities
+        billingEntities: next
+      };
+    });
+  };
+
+  const handleModalShareBlur = (idx) => {
+    setFormData(prev => {
+      if (prev.costAllocationMode !== 'manual_percent') return prev;
+      const list = Array.isArray(prev.billingEntities) ? [...prev.billingEntities] : [];
+      const raw = parseFloat(list[idx]?.costSharePercent);
+      const clamped = Number.isFinite(raw) ? Math.min(100, Math.max(0, raw)) : 0;
+      return {
+        ...prev,
+        billingEntities: rebalanceManualCostShares(list, list.length, idx, clamped)
       };
     });
   };
@@ -723,7 +811,7 @@ const ProjectsPage = () => {
       paymentTermsClient: hasMulti ? metrics.clientDso : formData.paymentTermsClient,
       contractStatus: isPot ? 'potential' : 'active',
       isPipelineFuture: isPot,
-      revenueDaily: metrics.revenueDaily,
+      revenueDaily: hasMulti ? metrics.revenueDaily : (Number(formData.revenueDaily) || 0),
       totalCostDaily: metrics.totalCostDaily,
       molDaily: metrics.molDaily,
       monthlyCost: metrics.monthlyCost,
@@ -740,7 +828,7 @@ const ProjectsPage = () => {
       storageService.addProject(projectDataToSave);
     }
 
-    setShowModal(false);
+    handleCloseModal();
     loadData();
   };
 
@@ -763,13 +851,14 @@ const ProjectsPage = () => {
     loadData();
   };
 
-  // Proroga rapida singolo contratto (+12 mesi o allineamento al 2026)
+  // Proroga rapida singolo contratto (+12 mesi o allineamento al 2026 se scaduto)
   const handleExtendContract = (projectId, monthsToAdd = 12) => {
     const updated = projects.map(p => {
       if (p.id !== projectId) return p;
+      const v = getContractValidity(p);
       let newStart = p.startDate || '2026-01-01';
       let newMonths = Number(p.operatingMonths) || 12;
-      if (newStart.startsWith('2025')) {
+      if (v.isExpired || v.endYear < 2026) {
         newStart = '2026-01-01';
         newMonths = 12;
       } else {
@@ -785,11 +874,12 @@ const ProjectsPage = () => {
     setProjects(updated);
   };
 
-  // Allineamento / rinnovo massivo di tutti i contratti all'esercizio 2026
+  // Allineamento / rinnovo massivo dei soli contratti scaduti all'esercizio 2026
   const handleRenewAllTo2026 = () => {
     const updated = projects.map(p => {
+      if (isFutureProject(p)) return p;
       const v = getContractValidity(p);
-      if (v.isExpired || v.endYear < 2026 || p.startDate?.startsWith('2025')) {
+      if (v.isExpired || v.endYear < 2026) {
         return {
           ...p,
           startDate: '2026-01-01',
@@ -802,13 +892,24 @@ const ProjectsPage = () => {
     setProjects(updated);
   };
 
-  // Estensione formale di tutti i contratti a tutto il 2027 (+12 mesi dando per buoni i dati 2026)
+  // Estensione formale dei contratti attivi che scadono prima del 31/12/2027 fino a fine 2027
   const handleExtendAllTo2027 = () => {
     const updated = projects.map(p => {
+      if (isFutureProject(p)) return p;
+      const v = getContractValidity(p);
+      if (v.isExpired) return p;
+      const s = p.startDate ? String(p.startDate).slice(0, 10) : '2026-01-01';
+      const startYear = parseInt(s.slice(0, 4), 10) || 2026;
+      const startMonth = parseInt(s.slice(5, 7), 10) || 1; // 1..12
+      const startDay = parseInt(s.slice(8, 10), 10) || 1;
+      // Numero mesi da inizio contratto a fine Dicembre 2027
+      let monthsNeededToEnd2027 = (2027 - startYear) * 12 + (13 - startMonth);
+      if (startDay > 15) monthsNeededToEnd2027 += 1;
       const currentMonths = Number(p.operatingMonths) || 12;
+      if (currentMonths >= monthsNeededToEnd2027) return p;
       return {
         ...p,
-        operatingMonths: Math.max(24, currentMonths + 12)
+        operatingMonths: monthsNeededToEnd2027
       };
     });
     storageService.saveProjects(updated);
@@ -857,9 +958,11 @@ const ProjectsPage = () => {
     setProjects(updated);
   };
 
-  // Statistiche scadenze contrattuali & elenco contratti scaduti
+  // Statistiche scadenze contrattuali & elenco contratti attivi scaduti
+  const isFutureProject = (p) => isPotentialProject(p);
+
   const expiredProjects = useMemo(() => {
-    return projects.filter(p => getContractValidity(p).isExpired);
+    return projects.filter(p => !isPotentialProject(p) && getContractValidity(p).isExpired);
   }, [projects]);
 
   const contractStats = useMemo(() => {
@@ -921,7 +1024,7 @@ const ProjectsPage = () => {
         orographicMultiplier: res.orography.consumptionMultiplier,
         orographyProfile: res.orography,
         routeStops: stops,
-        route: formData.route || res.generatedRouteName
+        route: res.generatedRouteName || formData.route
       });
       setFormData(updated);
     } catch (err) {
@@ -929,16 +1032,6 @@ const ProjectsPage = () => {
     } finally {
       setModalRouteCalculating(false);
     }
-  };
-
-  // Helper per distinguere commesse operative (Status Quo) da trattative / simulazioni / contratti potenziali
-  const isFutureProject = (p) => {
-    if (!p) return false;
-    if (p.contractStatus) return p.contractStatus === 'potential' || p.contractStatus === 'simulation' || p.contractStatus === 'negotiation';
-    if (p.isPipelineFuture !== undefined) return Boolean(p.isPipelineFuture);
-    const start = p.startDate ? new Date(p.startDate) : new Date();
-    const today = new Date();
-    return start > today || (p.notes && (p.notes.toLowerCase().includes('preventivo') || p.notes.toLowerCase().includes('trattativa') || p.notes.toLowerCase().includes('simulazione'))) || (p.code && (p.code.startsWith('PRJ-FUT') || p.code.startsWith('SIM-')));
   };
 
   const handleToggleFutureStatus = (projectId) => {
@@ -978,21 +1071,24 @@ const ProjectsPage = () => {
     });
   };
 
-  // Auto-inclusione di default delle trattative/simulazioni nel What-If per visione simultanea immediata
+  // Auto-inclusione di default delle trattative/simulazioni al primo caricamento (rispetta "Escludi Trattative" in seguito)
   useEffect(() => {
+    if (hasInitializedWhatIfRef.current) return;
     const potIds = projects.filter(isFutureProject).map(p => p.id);
     if (potIds.length > 0) {
-      setWhatIfIncludedIds(prev => {
-        if (prev.size === 0) return new Set(potIds);
-        return prev;
-      });
+      hasInitializedWhatIfRef.current = true;
+      setWhatIfIncludedIds(new Set(potIds));
     }
   }, [projects]);
 
   const handleSelectScenario = (scen) => {
     setSelectedScenario(scen);
-    if (scen === 'whatIf' && whatIfIncludedIds.size === 0) {
-      setWhatIfIncludedIds(new Set(projects.map(p => p.id)));
+    if (scen === 'whatIf' && whatIfIncludedIds.size === 0 && !hasInitializedWhatIfRef.current) {
+      const potIds = projects.filter(isFutureProject).map(p => p.id);
+      if (potIds.length > 0) {
+        hasInitializedWhatIfRef.current = true;
+        setWhatIfIncludedIds(new Set(potIds));
+      }
     }
   };
 
@@ -1045,11 +1141,25 @@ const ProjectsPage = () => {
     return [...statusQuoProjects, ...simulatedPotentialProjects];
   }, [statusQuoProjects, simulatedPotentialProjects]);
 
+  const projectMetricsMap = useMemo(() => {
+    const map = {};
+    const opts = budgetHorizon !== 'regime' ? { year: Number(budgetHorizon) } : {};
+    projects.forEach(p => {
+      map[p.id] = calculateSingleProjectMetrics(p, opts);
+    });
+    return map;
+  }, [projects, budgetHorizon]);
+
   const calcPortfolioTotals = (projList) => {
     const isAnnualHorizon = budgetHorizon === '2026' || budgetHorizon === '2027';
     const horizonYear = isAnnualHorizon ? Number(budgetHorizon) : 2026;
+    const rolloverPrev = horizonYear === 2027;
     const effectiveList = isAnnualHorizon
-      ? projList.filter(p => Array.from({ length: 12 }, (_, m) => isProjectActiveInMonth(p, horizonYear, m)).some(Boolean))
+      ? projList.filter(p =>
+          Array.from({ length: 12 }, (_, m) =>
+            isProjectActiveInMonth(p, m, horizonYear, { rolloverPreviousYearBudget: rolloverPrev })
+          ).some(Boolean)
+        )
       : projList;
 
     const count = effectiveList.length;
@@ -1064,8 +1174,9 @@ const ProjectsPage = () => {
     if (isAnnualHorizon) {
       const annualModel = calculateAnnualBudgetAndCashFlow(effectiveList, {
         year: horizonYear,
-        rolloverPreviousYearBudget: horizonYear === 2027,
-        fleet
+        rolloverPreviousYearBudget: rolloverPrev,
+        fleet,
+        trailers
       });
       revenueAnnual = annualModel.annualRevenue;
       revenueMonthly = annualModel.annualRevenue / 12;
@@ -1088,7 +1199,7 @@ const ProjectsPage = () => {
       const m = calculateSingleProjectMetrics(p, isAnnualHorizon ? { year: horizonYear } : {});
       return sum + (m.estimatedWorkingCapitalGap || 0);
     }, 0);
-    const creditLine = workingCapital > 0 ? Math.ceil((workingCapital * 1.15) / 5000) * 5000 : 15000;
+    const creditLine = workingCapital > 0 ? Math.ceil((workingCapital * 1.15) / 5000) * 5000 : 0;
 
     const uniqueVehicleIds = new Set(effectiveList.map(p => p.vehicleId).filter(Boolean));
     const uniqueTrailerIds = new Set(effectiveList.map(p => p.trailerId).filter(Boolean));
@@ -1121,7 +1232,14 @@ const ProjectsPage = () => {
     });
 
     const totalKmDaily = effectiveList.reduce((sum, p) => sum + (Number(p.kmDaily) || 0), 0);
-    const totalKmMonthly = effectiveList.reduce((sum, p) => sum + ((Number(p.kmDaily) || 0) * (Number(p.workingDaysMonth) || 22)), 0);
+    const totalKmMonthly = effectiveList.reduce((sum, p) => {
+      const monthlyKm = (Number(p.kmDaily) || 0) * (Number(p.workingDaysMonth) || 22);
+      if (!isAnnualHorizon) return sum + monthlyKm;
+      const activeMonthsInYear = Array.from({ length: 12 }, (_, m) =>
+        isProjectActiveInMonth(p, m, horizonYear, { rolloverPreviousYearBudget: rolloverPrev })
+      ).filter(Boolean).length;
+      return sum + monthlyKm * (activeMonthsInYear / 12);
+    }, 0);
     const avgRevenuePerKm = totalKmMonthly > 0 ? revenueMonthly / totalKmMonthly : 0;
     const avgCostPerKm = totalKmMonthly > 0 ? costMonthly / totalKmMonthly : 0;
 
@@ -1162,7 +1280,7 @@ const ProjectsPage = () => {
   // Progetti appartenenti allo scenario attivo della vista tabellare
   const effectiveScenarioProjects = useMemo(() => {
     if (selectedScenario === 'whatIf') {
-      return projects.filter(p => whatIfIncludedIds.has(p.id));
+      return [...statusQuoProjects, ...simulatedPotentialProjects];
     }
     if (selectedScenario === 'active2026') {
       return statusQuoProjects;
@@ -1170,13 +1288,13 @@ const ProjectsPage = () => {
     if (selectedScenario === 'futureOnly') {
       return allPotentialProjects;
     }
-    return combinedProjects; // consolidated
-  }, [projects, selectedScenario, whatIfIncludedIds, statusQuoProjects, allPotentialProjects, combinedProjects]);
+    return [...statusQuoProjects, ...allPotentialProjects]; // consolidated
+  }, [selectedScenario, statusQuoProjects, simulatedPotentialProjects, allPotentialProjects]);
 
-  const scenarioTotals = useMemo(() => calcPortfolioTotals(effectiveScenarioProjects), [effectiveScenarioProjects, fleet, budgetHorizon]);
-  const statusQuoTotals = useMemo(() => calcPortfolioTotals(statusQuoProjects), [statusQuoProjects, fleet, budgetHorizon]);
-  const potentialTotals = useMemo(() => calcPortfolioTotals(simulatedPotentialProjects), [simulatedPotentialProjects, fleet, budgetHorizon]);
-  const combinedTotals = useMemo(() => calcPortfolioTotals(combinedProjects), [combinedProjects, fleet, budgetHorizon]);
+  const scenarioTotals = useMemo(() => calcPortfolioTotals(effectiveScenarioProjects), [effectiveScenarioProjects, fleet, trailers, budgetHorizon]);
+  const statusQuoTotals = useMemo(() => calcPortfolioTotals(statusQuoProjects), [statusQuoProjects, fleet, trailers, budgetHorizon]);
+  const potentialTotals = useMemo(() => calcPortfolioTotals(simulatedPotentialProjects), [simulatedPotentialProjects, fleet, trailers, budgetHorizon]);
+  const combinedTotals = useMemo(() => calcPortfolioTotals(combinedProjects), [combinedProjects, fleet, trailers, budgetHorizon]);
 
   // Calcolo differenziali delta
   const deltaRevenueMonthly = potentialTotals.revenueMonthly;
@@ -1213,11 +1331,19 @@ const ProjectsPage = () => {
   // Filtro progetti
   const filteredProjects = projects.filter(p => {
     // 1. Filtro Scenario Previsionale (Attive 2026 / Nuove Future / Consolidato / What-If)
+    const validity = getContractValidity(p);
     if (selectedScenario === 'active2026') {
-      const validity = getContractValidity(p);
       if (isFutureProject(p) || validity.isExpired) return false;
     } else if (selectedScenario === 'futureOnly') {
       if (!isFutureProject(p)) return false;
+    } else if (selectedScenario === 'whatIf') {
+      if (isFutureProject(p)) {
+        if (!whatIfIncludedIds.has(p.id)) return false;
+      } else if (validity.isExpired && contractFilter !== 'expired') {
+        return false;
+      }
+    } else if (selectedScenario === 'consolidated') {
+      if (!isFutureProject(p) && validity.isExpired && contractFilter !== 'expired') return false;
     }
 
     const q = searchQuery.toLowerCase();
@@ -1238,13 +1364,14 @@ const ProjectsPage = () => {
       (p.isMultiClient && Array.isArray(p.billingEntities) && p.billingEntities.some(be => be.clientName && be.clientName.trim() === clientFilter));
     const matchesManagement = managementFilter === 'all' || p.managementType === managementFilter;
 
+    const pMetrics = projectMetricsMap[p.id];
+    const effectiveMolPercent = pMetrics ? pMetrics.molPercent : (p.molPercent || 0);
     let matchesMargin = true;
-    if (marginFilter === 'positive') matchesMargin = (p.molPercent || 0) >= 15;
-    if (marginFilter === 'low') matchesMargin = (p.molPercent || 0) > 0 && (p.molPercent || 0) < 15;
-    if (marginFilter === 'negative') matchesMargin = (p.molPercent || 0) <= 0;
+    if (marginFilter === 'positive') matchesMargin = effectiveMolPercent >= 15;
+    if (marginFilter === 'low') matchesMargin = effectiveMolPercent > 0 && effectiveMolPercent < 15;
+    if (marginFilter === 'negative') matchesMargin = effectiveMolPercent <= 0;
 
     let matchesContract = true;
-    const validity = getContractValidity(p);
     if (contractFilter === 'active2026') matchesContract = validity.isActive && validity.endYear >= 2026;
     if (contractFilter === 'expiring') matchesContract = validity.isExpiringSoon;
     if (contractFilter === 'expired') matchesContract = validity.isExpired;
@@ -1252,12 +1379,53 @@ const ProjectsPage = () => {
     return matchesSearch && matchesClient && matchesManagement && matchesMargin && matchesContract;
   });
 
-  // Gestione riordino manuale delle commesse (Drag & Drop e pulsanti Sposta Su/Giù)
+  // Ordinamento e filtro per Unità Operativa
+  const displayProjects = useMemo(() => {
+    let list = [...filteredProjects];
+
+    if (operatingUnitFilter !== 'all') {
+      list = list.filter(p => {
+        const v = fleet.find(item => item.id === p.vehicleId);
+        return getProjectOperatingUnit(p, v) === operatingUnitFilter;
+      });
+    }
+
+    if (sortBy === 'operatingUnit') {
+      const order = { 'Arborio': 1, 'Buccinasco': 2, 'Landriano': 3, 'Caorso': 4, 'Bologna': 5, 'Altro / Sede': 6 };
+      list.sort((a, b) => {
+        const vA = fleet.find(item => item.id === a.vehicleId);
+        const vB = fleet.find(item => item.id === b.vehicleId);
+        const uA = getProjectOperatingUnit(a, vA);
+        const uB = getProjectOperatingUnit(b, vB);
+        const orderA = order[uA] || 99;
+        const orderB = order[uB] || 99;
+        if (orderA !== orderB) return orderA - orderB;
+        return (a.name || '').localeCompare(b.name || '');
+      });
+    } else if (sortBy === 'client') {
+      list.sort((a, b) => (a.client || '').localeCompare(b.client || ''));
+    } else if (sortBy === 'molDesc') {
+      list.sort((a, b) => (projectMetricsMap[b.id]?.monthlyMol ?? b.monthlyMol ?? 0) - (projectMetricsMap[a.id]?.monthlyMol ?? a.monthlyMol ?? 0));
+    } else if (sortBy === 'revenueDesc') {
+      list.sort((a, b) => (projectMetricsMap[b.id]?.monthlyRevenue ?? b.monthlyRevenue ?? 0) - (projectMetricsMap[a.id]?.monthlyRevenue ?? a.monthlyRevenue ?? 0));
+    } else if (sortBy === 'marginDesc') {
+      list.sort((a, b) => (projectMetricsMap[b.id]?.molPercent ?? b.molPercent ?? 0) - (projectMetricsMap[a.id]?.molPercent ?? a.molPercent ?? 0));
+    }
+
+    return list;
+  }, [filteredProjects, operatingUnitFilter, sortBy, fleet, projectMetricsMap]);
+
+  // Gestione riordino manuale delle commesse (Drag & Drop e pulsanti Sposta Su/Giù sui vicini visibili)
   const handleMoveProject = (projectId, direction) => {
+    const visibleIdx = displayProjects.findIndex(p => p.id === projectId);
+    if (visibleIdx === -1) return;
+    const neighborIdx = direction === 'up' ? visibleIdx - 1 : visibleIdx + 1;
+    if (neighborIdx < 0 || neighborIdx >= displayProjects.length) return;
+
+    const neighborId = displayProjects[neighborIdx].id;
     const currentIndex = projects.findIndex(p => p.id === projectId);
-    if (currentIndex === -1) return;
-    const targetIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
-    if (targetIndex < 0 || targetIndex >= projects.length) return;
+    const targetIndex = projects.findIndex(p => p.id === neighborId);
+    if (currentIndex === -1 || targetIndex === -1) return;
 
     const newProjects = [...projects];
     const [moved] = newProjects.splice(currentIndex, 1);
@@ -1291,42 +1459,6 @@ const ProjectsPage = () => {
     setProjects(newProjects);
   };
 
-  // Ordinamento e filtro per Unità Operativa
-  const displayProjects = useMemo(() => {
-    let list = [...filteredProjects];
-
-    if (operatingUnitFilter !== 'all') {
-      list = list.filter(p => {
-        const v = fleet.find(item => item.id === p.vehicleId);
-        return getProjectOperatingUnit(p, v) === operatingUnitFilter;
-      });
-    }
-
-    if (sortBy === 'operatingUnit') {
-      const order = { 'Arborio': 1, 'Buccinasco': 2, 'Landriano': 3, 'Caorso': 4, 'Bologna': 5, 'Altro / Sede': 6 };
-      list.sort((a, b) => {
-        const vA = fleet.find(item => item.id === a.vehicleId);
-        const vB = fleet.find(item => item.id === b.vehicleId);
-        const uA = getProjectOperatingUnit(a, vA);
-        const uB = getProjectOperatingUnit(b, vB);
-        const orderA = order[uA] || 99;
-        const orderB = order[uB] || 99;
-        if (orderA !== orderB) return orderA - orderB;
-        return (a.name || '').localeCompare(b.name || '');
-      });
-    } else if (sortBy === 'client') {
-      list.sort((a, b) => (a.client || '').localeCompare(b.client || ''));
-    } else if (sortBy === 'molDesc') {
-      list.sort((a, b) => (b.monthlyMol || 0) - (a.monthlyMol || 0));
-    } else if (sortBy === 'revenueDesc') {
-      list.sort((a, b) => (b.monthlyRevenue || 0) - (a.monthlyRevenue || 0));
-    } else if (sortBy === 'marginDesc') {
-      list.sort((a, b) => (b.molPercent || 0) - (a.molPercent || 0));
-    }
-
-    return list;
-  }, [filteredProjects, operatingUnitFilter, sortBy, fleet]);
-
   // Progetti attivi nello scenario E nei filtri correnti (per ricalcolare dinamicamente tutti i KPI della Vista Scenario)
   const activeFilteredScenarioProjects = useMemo(() => {
     return displayProjects.filter(p => {
@@ -1338,7 +1470,7 @@ const ProjectsPage = () => {
 
   const activeFilteredTotals = useMemo(
     () => calcPortfolioTotals(activeFilteredScenarioProjects),
-    [activeFilteredScenarioProjects, fleet, budgetHorizon]
+    [activeFilteredScenarioProjects, fleet, trailers, budgetHorizon]
   );
 
   const hasActiveFilters = Boolean(
@@ -1349,6 +1481,13 @@ const ProjectsPage = () => {
     contractFilter !== 'all' ||
     operatingUnitFilter !== 'all'
   );
+
+  useEffect(() => {
+    if (hasActiveFilters && !prevHasActiveFiltersRef.current) {
+      setShowProjectsDetailList(true);
+    }
+    prevHasActiveFiltersRef.current = hasActiveFilters;
+  }, [hasActiveFilters]);
 
   const handleResetFilters = () => {
     setSearchQuery('');
@@ -1378,7 +1517,7 @@ const ProjectsPage = () => {
               <Briefcase className="w-6 h-6" />
             </div>
             <div>
-              <h1 className="text-xl md:text-2xl font-black text-slate-900 tracking-tight whitespace-nowrap">
+              <h1 className="text-xl md:text-2xl font-black text-slate-900 tracking-tight sm:whitespace-nowrap">
                 Commesse &amp; Budget Progetti
               </h1>
               <p className="text-xs text-slate-500">
@@ -1401,7 +1540,7 @@ const ProjectsPage = () => {
                   onClick={() => setBudgetHorizon(h.id)}
                   className={`px-2.5 py-1.5 rounded-lg font-bold transition whitespace-nowrap ${
                     budgetHorizon === h.id
-                      ? 'bg-[#164e87] text-white shadow-xs'
+                      ? 'bg-[#164e87] text-white shadow-sm'
                       : 'text-slate-600 hover:text-slate-900'
                   }`}
                 >
@@ -1427,7 +1566,7 @@ const ProjectsPage = () => {
             </button>
 
             {/* Dropdown Strumenti Batch */}
-            <div className="relative">
+            <div className="relative" ref={toolsMenuRef}>
               <button
                 type="button"
                 onClick={() => setShowToolsMenu(prev => !prev)}
@@ -1537,7 +1676,7 @@ const ProjectsPage = () => {
                     Visione Strategica di Portafoglio • {horizonLabel}
                   </h3>
                   <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-cyan-50 text-[#164e87] border border-cyan-200">
-                    {statusQuoProjects.length} Attivi + {allPotentialProjects.length} Trattative{expiredProjects.length > 0 ? ` (+${expiredProjects.length} scaduto)` : ''} = {projects.length}
+                    {statusQuoProjects.length} Attivi + {allPotentialProjects.length} Trattative{expiredProjects.length > 0 ? ` (+${expiredProjects.length} ${expiredProjects.length === 1 ? 'scaduto' : 'scaduti'})` : ''} = {projects.length}
                   </span>
                 </div>
                 <p className="text-xs text-slate-500 mt-0.5">
@@ -1568,7 +1707,7 @@ const ProjectsPage = () => {
               <button
                 type="button"
                 onClick={() => setShowScenarioSaveBox(!showScenarioSaveBox)}
-                className="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs rounded-xl transition shadow-xs whitespace-nowrap"
+                className="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs rounded-xl transition shadow-sm whitespace-nowrap"
               >
                 Salva Scenario What-If
               </button>
@@ -1576,14 +1715,14 @@ const ProjectsPage = () => {
                 type="button"
                 onClick={() => setShowProjectsDetailList(!showProjectsDetailList)}
                 className={`inline-flex items-center space-x-1.5 px-3.5 py-1.5 rounded-xl text-xs font-black transition border whitespace-nowrap ${
-                  (showProjectsDetailList || hasActiveFilters)
+                  showProjectsDetailList
                     ? 'bg-slate-800 text-white border-slate-900'
                     : 'bg-[#164e87] hover:bg-[#0e3a6c] text-white border-[#164e87]'
                 }`}
               >
                 <Eye className="w-3.5 h-3.5" />
-                <span>{(showProjectsDetailList || hasActiveFilters) ? 'Chiudi Dettaglio Commesse' : `Apri Dettaglio Commesse (${displayProjects.length})`}</span>
-                {(showProjectsDetailList || hasActiveFilters) ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                <span>{showProjectsDetailList ? 'Chiudi Dettaglio Commesse' : `Apri Dettaglio Commesse (${displayProjects.length})`}</span>
+                {showProjectsDetailList ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
               </button>
             </div>
           </div>
@@ -1600,7 +1739,7 @@ const ProjectsPage = () => {
               <button
                 type="button"
                 onClick={handleSaveCurrentScenario}
-                className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-bold text-xs shadow-xs"
+                className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-bold text-xs shadow-sm"
               >
                 Salva Simulazione
               </button>
@@ -1631,7 +1770,7 @@ const ProjectsPage = () => {
                 className={`bg-white rounded-xl p-4 border cursor-pointer transition flex flex-col justify-between ${
                   selectedScenario === 'active2026'
                     ? 'border-emerald-600 ring-2 ring-emerald-500/30 shadow-md'
-                    : 'border-emerald-300 hover:border-emerald-500 shadow-xs'
+                    : 'border-emerald-300 hover:border-emerald-500 shadow-sm'
                 }`}
               >
                 <div>
@@ -1683,7 +1822,7 @@ const ProjectsPage = () => {
                 className={`bg-white rounded-xl p-4 border cursor-pointer transition flex flex-col justify-between ${
                   selectedScenario === 'futureOnly'
                     ? 'border-amber-600 ring-2 ring-amber-500/30 shadow-md'
-                    : 'border-amber-300 hover:border-amber-500 shadow-xs'
+                    : 'border-amber-300 hover:border-amber-500 shadow-sm'
                 }`}
               >
                 <div>
@@ -1735,7 +1874,7 @@ const ProjectsPage = () => {
                 className={`bg-gradient-to-br from-blue-50/80 to-slate-50 rounded-xl p-4 border cursor-pointer transition flex flex-col justify-between ${
                   selectedScenario === 'consolidated' || selectedScenario === 'whatIf'
                     ? 'border-[#164e87] ring-2 ring-[#164e87]/30 shadow-md'
-                    : 'border-blue-300 hover:border-[#164e87] shadow-xs'
+                    : 'border-blue-300 hover:border-[#164e87] shadow-sm'
                 }`}
               >
                 <div>
@@ -1973,7 +2112,7 @@ const ProjectsPage = () => {
             className="p-4 bg-gradient-to-r from-slate-50 via-white to-blue-50/40 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3 cursor-pointer hover:bg-blue-50/30 transition"
           >
             <div className="flex items-center space-x-3">
-              <span className="p-2 bg-[#164e87] text-white rounded-xl shadow-2xs">
+              <span className="p-2 bg-[#164e87] text-white rounded-xl shadow-sm">
                 <Briefcase className="w-4 h-4" />
               </span>
               <div>
@@ -1986,7 +2125,7 @@ const ProjectsPage = () => {
                   </span>
                 </div>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  {(showProjectsDetailList || hasActiveFilters)
+                  {showProjectsDetailList
                     ? 'Clicca su una riga per modificare mezzo, tariffe, variazioni o configurare Multi-Commessa (1-4 Clienti). Trascina per riordinare.'
                     : 'Clicca qui per aprire ed esplorare l\'elenco dettagliato di tutte le singole commesse.'}
                 </p>
@@ -2000,18 +2139,18 @@ const ProjectsPage = () => {
                 setShowProjectsDetailList(!showProjectsDetailList);
               }}
               className={`inline-flex items-center space-x-2 px-4 py-2 rounded-xl font-black text-xs shadow-sm transition ${
-                (showProjectsDetailList || hasActiveFilters)
+                showProjectsDetailList
                   ? 'bg-slate-200 hover:bg-slate-300 text-slate-800'
                   : 'bg-[#164e87] hover:bg-[#0e3a6c] text-white'
               }`}
             >
               <Eye className="w-4 h-4" />
               <span>
-                {(showProjectsDetailList || hasActiveFilters)
+                {showProjectsDetailList
                   ? 'Chiudi Elenco Commesse'
                   : `Apri Elenco Commesse (${displayProjects.length})`}
               </span>
-              {(showProjectsDetailList || hasActiveFilters) ? (
+              {showProjectsDetailList ? (
                 <ChevronUp className="w-4 h-4" />
               ) : (
                 <ChevronDown className="w-4 h-4" />
@@ -2019,9 +2158,9 @@ const ProjectsPage = () => {
             </button>
           </div>
 
-          {(showProjectsDetailList || hasActiveFilters) && (
+          {showProjectsDetailList && (
             <div className="w-full overflow-x-auto">
-              <table className="w-full divide-y divide-slate-200 text-left text-xs">
+              <table className="w-full min-w-[980px] divide-y divide-slate-200 text-left text-xs">
                 <thead className="bg-[#f0f4f9] text-[#164e87] font-extrabold uppercase tracking-wider text-[11px] border-b border-slate-200">
                   <tr>
                     <th className="py-3 px-2 w-[4%] text-center">Pos.</th>
@@ -2034,12 +2173,12 @@ const ProjectsPage = () => {
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {displayProjects.map((project, idx) => {
-                    const metrics = calculateSingleProjectMetrics(
+                    const metrics = projectMetricsMap[project.id] || calculateSingleProjectMetrics(
                       project,
                       budgetHorizon !== 'regime' ? { year: Number(budgetHorizon) } : {}
                     );
                     const validity = getContractValidity(project);
-                    const startYear = project.startDate ? parseInt(String(project.startDate).slice(0, 4), 10) : 2026;
+                    const startYear = getProjectStartYear(project);
                     const isNegative = metrics.monthlyMol < 0;
                     const isLowMargin = !isNegative && metrics.molPercent < 15;
                     const assignedVeh = fleet.find(v => v.id === project.vehicleId);
@@ -2049,8 +2188,8 @@ const ProjectsPage = () => {
                     const isRowExpanded = expandedRowDetailId === project.id;
 
                     return (
+                      <Fragment key={project.id}>
                       <tr
-                        key={project.id}
                         draggable={sortBy === 'custom'}
                         onDragStart={(e) => handleDragStart(e, project.id)}
                         onDragOver={(e) => e.preventDefault()}
@@ -2143,7 +2282,7 @@ const ProjectsPage = () => {
                             {metrics.hasPriceVariations && metrics.variationSummary && (
                               <span
                                 className="text-[10px] font-black px-2 py-0.5 rounded-full bg-violet-100 text-violet-900 border border-violet-300 flex items-center gap-1"
-                                title={`Pre-variazione: ${formatEUR(metrics.variationSummary.preMonthlyCost)}/m → Post-variazione: ${formatEUR(metrics.variationSummary.postMonthlyCost)}/m`}
+                                title={`Pre-variazione: ${formatEUR(metrics.variationSummary.beforeMonthlyCost)}/m → Post-variazione: ${formatEUR(metrics.variationSummary.afterMonthlyCost)}/m`}
                               >
                                 <Calendar className="w-2.5 h-2.5 text-violet-700" />
                                 <span>
@@ -2164,7 +2303,7 @@ const ProjectsPage = () => {
                                     e.stopPropagation();
                                     handlePromoteToActive(project.id);
                                   }}
-                                  className="inline-flex items-center space-x-1 text-[11px] font-black px-2 py-0.5 rounded-full bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs transition"
+                                  className="inline-flex items-center space-x-1 text-[11px] font-black px-2 py-0.5 rounded-full bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition"
                                   title="Converti questa trattativa in un contratto vero e operativo a budget"
                                 >
                                   <CheckCircle2 className="w-3 h-3" />
@@ -2227,7 +2366,7 @@ const ProjectsPage = () => {
                               {metrics.billingEntities.map((be, bIdx) => (
                                 <div key={be.id || bIdx} className="flex flex-wrap items-center justify-between gap-2 text-[10px]">
                                   <div className="flex items-center space-x-1.5">
-                                    <span className="font-mono font-black text-indigo-800 bg-white px-1.5 py-0.2 rounded border border-indigo-200">
+                                    <span className="font-mono font-black text-indigo-800 bg-white px-1.5 py-0.5 rounded border border-indigo-200">
                                       {formatPercent(be.costSharePercent)}
                                     </span>
                                     <span className="font-bold text-slate-800">{be.clientName || `Cliente ${bIdx + 1}`}</span>
@@ -2236,7 +2375,7 @@ const ProjectsPage = () => {
                                   <div className="flex items-center space-x-2">
                                     <span className="text-slate-500">Costo: <strong>{formatEUR(be.allocatedCostMonthly)}/m</strong></span>
                                     <span className="text-[#164e87] font-bold">Ricavo: {formatEUR(be.revenueMonthly)}/m</span>
-                                    <span className={`font-black px-1.5 py-0.2 rounded border ${
+                                    <span className={`font-black px-1.5 py-0.5 rounded border ${
                                       be.molPercent < 0
                                         ? 'bg-rose-100 text-rose-800 border-rose-200'
                                         : be.molPercent < 15
@@ -2248,29 +2387,6 @@ const ProjectsPage = () => {
                                   </div>
                                 </div>
                               ))}
-                            </div>
-                          )}
-
-                          {/* Dettaglio Analitico Voci di Costo Apribile sulla singola commessa */}
-                          {isRowExpanded && (
-                            <div
-                              onClick={(e) => e.stopPropagation()}
-                              className="mt-2.5 p-2.5 bg-slate-50 rounded-xl border border-slate-200 text-[10px] space-y-1.5"
-                            >
-                              <div className="font-black text-slate-800 flex items-center justify-between border-b border-slate-200 pb-1">
-                                <span>Scomposizione Costi Giornalieri ({formatEUR(metrics.totalCostDaily)}/gg)</span>
-                                <span className="text-[#164e87]">Ricavo: {formatEUR(metrics.revenueDaily)}/gg • M.O.L.: {formatEUR(metrics.molDaily)}/gg</span>
-                              </div>
-                              <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 text-slate-600">
-                                <div>Autista: <strong className="text-slate-900">{formatEUR(project.driverCostDaily || 0)}/gg</strong></div>
-                                <div>Energia: <strong className="text-slate-900">{formatEUR(project.energyPayer === 'client' ? 0 : (project.fuelCostDaily || 0))}/gg</strong></div>
-                                <div>Pedaggi: <strong className="text-slate-900">{formatEUR(project.tollsDaily || 0)}/gg</strong></div>
-                                <div>Pneumatici: <strong className="text-slate-900">{formatEUR(project.tiresDaily || 0)}/gg</strong></div>
-                                <div>Nolo Mezzo: <strong className="text-slate-900">{formatEUR(project.vehicleLeaseDaily || 0)}/gg</strong></div>
-                                <div>Nolo Rimorchio: <strong className="text-slate-900">{formatEUR(project.trailerLeaseDaily || 0)}/gg</strong></div>
-                                <div>Telematica/Lav.: <strong className="text-slate-900">{formatEUR((Number(project.telematicsCostDaily) || 0) + (Number(project.washingCostDaily) || 0))}/gg</strong></div>
-                                <div>Partner/Terzi: <strong className="text-slate-900">{formatEUR(project.partnerMarginDaily || 0)}/gg</strong></div>
-                              </div>
                             </div>
                           )}
                         </td>
@@ -2294,8 +2410,8 @@ const ProjectsPage = () => {
                             </span>
 
                             {assignedVeh?.plate ? (
-                              <span className="font-mono text-[11px] font-bold bg-white text-slate-800 px-1.5 py-0.5 rounded border border-slate-300 shadow-2xs tracking-wider inline-flex items-center gap-0.5">
-                                <span className="text-[8px] text-blue-700 font-black">IT</span> {assignedVeh.plate}
+                              <span className="font-mono text-[11px] font-bold bg-white text-slate-800 px-1.5 py-0.5 rounded border border-slate-300 shadow-sm tracking-wider inline-flex items-center gap-0.5">
+                                <span className="text-[9px] text-blue-700 font-black">IT</span> {assignedVeh.plate}
                               </span>
                             ) : (
                               <span className="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded font-semibold">
@@ -2309,7 +2425,7 @@ const ProjectsPage = () => {
                             <div className="flex items-center gap-1.5 text-xs text-slate-600 mt-1">
                               <span className="font-medium text-slate-700">{assignedTrailer.name}</span>
                               {assignedTrailer.plate && (
-                                <span className="font-mono text-[10px] bg-slate-100 text-slate-700 font-bold px-1.5 py-0.2 rounded border border-slate-200">
+                                <span className="font-mono text-[10px] bg-slate-100 text-slate-700 font-bold px-1.5 py-0.5 rounded border border-slate-200">
                                   {assignedTrailer.plate}
                                 </span>
                               )}
@@ -2348,8 +2464,8 @@ const ProjectsPage = () => {
                             <span className="font-semibold text-slate-700">{formatEUR(metrics.monthlyCost)}</span>
                           </div>
                           {metrics.hasPriceVariations && metrics.variationSummary && (
-                            <div className="text-[9.5px] font-bold text-violet-800 bg-violet-50 border border-violet-200 rounded px-1.5 py-0.5 mt-1 inline-block">
-                              Pre: {formatEUR(metrics.variationSummary.preMonthlyCost)} → Post: {formatEUR(metrics.variationSummary.postMonthlyCost)}/m
+                            <div className="text-[10px] font-bold text-violet-800 bg-violet-50 border border-violet-200 rounded px-1.5 py-0.5 mt-1 inline-block">
+                              Pre: {formatEUR(metrics.variationSummary.beforeMonthlyCost)} → Post: {formatEUR(metrics.variationSummary.afterMonthlyCost)}/m
                             </div>
                           )}
                           <div className="flex items-baseline justify-end space-x-2 mt-1.5 pt-1 border-t border-slate-100">
@@ -2388,7 +2504,7 @@ const ProjectsPage = () => {
                             <button
                               type="button"
                               onClick={() => handleOpenModal(project)}
-                              className="inline-flex items-center space-x-1 px-2.5 py-1.5 bg-[#164e87] hover:bg-[#0b2440] text-white rounded-lg text-xs font-bold transition shadow-xs"
+                              className="inline-flex items-center space-x-1 px-2.5 py-1.5 bg-[#164e87] hover:bg-[#0b2440] text-white rounded-lg text-xs font-bold transition shadow-sm"
                               title="Modifica parametri, mezzo, costi e marginalità"
                             >
                               <Edit2 className="w-3.5 h-3.5" />
@@ -2415,6 +2531,54 @@ const ProjectsPage = () => {
                           </div>
                         </td>
                       </tr>
+                      {isRowExpanded && (
+                        <tr className="bg-slate-50/90" onClick={(e) => e.stopPropagation()}>
+                          <td colSpan={6} className="px-6 py-3 border-t border-slate-200">
+                            <div className="bg-white rounded-xl border border-slate-200 p-3 text-xs space-y-2 shadow-sm">
+                              <div className="font-black text-slate-800 flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-1.5">
+                                <span>Scomposizione Completa Costi Giornalieri ({formatEUR(metrics.totalCostDaily)}/gg • {formatEUR(metrics.monthlyCost)}/m)</span>
+                                <span className="text-[#164e87]">
+                                  Ricavo: {formatEUR(metrics.revenueDaily)}/gg • M.O.L.: {formatEUR(metrics.molDaily)}/gg ({formatPercent(metrics.molPercent)})
+                                </span>
+                              </div>
+                              <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-2 text-[11px] text-slate-600">
+                                {project.managementType !== 'T' && (
+                                  <>
+                                    <div>Autista: <strong className="text-slate-900">{formatEUR(project.driverCostDaily || 0)}/gg</strong></div>
+                                    <div>Energia: <strong className="text-slate-900">{formatEUR(project.energyPayer === 'client' ? 0 : (project.fuelCostDaily || 0))}/gg</strong></div>
+                                    <div>Pedaggi: <strong className="text-slate-900">{formatEUR(project.tollsDaily || 0)}/gg</strong></div>
+                                    <div>Pneumatici: <strong className="text-slate-900">{formatEUR(project.tiresDaily || 0)}/gg</strong></div>
+                                    <div>Nolo Mezzo: <strong className="text-slate-900">{formatEUR(project.vehicleLeaseDaily || 0)}/gg</strong></div>
+                                  </>
+                                )}
+                                <div>Nolo Rimorchio: <strong className="text-slate-900">{formatEUR(project.trailerLeaseDaily || 0)}/gg</strong></div>
+                                {(Number(project.refrigerationCostDaily) || 0) > 0 && (
+                                  <div>Frigo: <strong className="text-cyan-800">{formatEUR(project.refrigerationCostDaily)}/gg</strong></div>
+                                )}
+                                {(Number(project.telematicsCostDaily) || 0) > 0 && (
+                                  <div>Telematica: <strong className="text-indigo-700">{formatEUR(project.telematicsCostDaily)}/gg</strong></div>
+                                )}
+                                {(Number(project.washingCostDaily) || 0) > 0 && (
+                                  <div>Lavaggi: <strong className="text-indigo-700">{formatEUR(project.washingCostDaily)}/gg</strong></div>
+                                )}
+                                {(Number(project.extraCostDaily) || 0) > 0 && (
+                                  <div>Extra: <strong className="text-indigo-700">{formatEUR(project.extraCostDaily)}/gg</strong></div>
+                                )}
+                                {(Number(project.porterageDaily) || 0) > 0 && (
+                                  <div>Facchinaggio: <strong className="text-purple-800">{formatEUR(project.porterageDaily)}/gg</strong></div>
+                                )}
+                                {(Number(project.partnerMarginDaily) || 0) > 0 && (
+                                  <div>Partner/Terzi: <strong className="text-blue-900">{formatEUR(project.partnerMarginDaily)}/gg</strong></div>
+                                )}
+                                {(Number(project.otherCostsDaily) || 0) > 0 && (
+                                  <div>Altre Spese: <strong className="text-slate-900">{formatEUR(project.otherCostsDaily)}/gg</strong></div>
+                                )}
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                      </Fragment>
                     );
                   })}
                 </tbody>
@@ -2425,8 +2589,14 @@ const ProjectsPage = () => {
 
         {/* Modal Modifica/Crea Commessa a 4 Tab + Footer Live Sticky */}
         {showModal && (
-          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-            <div className="bg-white rounded-2xl shadow-2xl max-w-4xl w-full max-h-[92vh] flex flex-col border border-slate-200 overflow-hidden">
+          <div
+            onClick={handleCloseModal}
+            className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="bg-white rounded-2xl shadow-2xl max-w-4xl w-full max-h-[92vh] flex flex-col border border-slate-200 overflow-hidden"
+            >
               {/* Top Modal Header */}
               <div className="flex justify-between items-center px-6 py-4 border-b border-slate-200 bg-slate-50/70">
                 <div className="flex items-center space-x-2">
@@ -2443,7 +2613,7 @@ const ProjectsPage = () => {
                 </div>
                 <button
                   type="button"
-                  onClick={() => setShowModal(false)}
+                  onClick={handleCloseModal}
                   className="text-slate-400 hover:text-slate-600 p-1 rounded-lg"
                 >
                   <X className="w-5 h-5" />
@@ -2467,7 +2637,7 @@ const ProjectsPage = () => {
                     onClick={() => setModalTab(t.id)}
                     className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition whitespace-nowrap ${
                       modalTab === t.id
-                        ? 'bg-[#164e87] text-white shadow-xs'
+                        ? 'bg-[#164e87] text-white shadow-sm'
                         : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
                     }`}
                   >
@@ -2476,7 +2646,7 @@ const ProjectsPage = () => {
                 ))}
               </div>
 
-              <form onSubmit={handleSaveProject} className="flex flex-col flex-1 min-h-0">
+              <form onSubmit={handleSaveProject} noValidate className="flex flex-col flex-1 min-h-0">
                 <div className="flex-1 overflow-y-auto p-6 space-y-4 text-xs">
                   {modalFormError && (
                     <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 font-bold flex items-center gap-2">
@@ -2583,7 +2753,7 @@ const ProjectsPage = () => {
                             onClick={() => handleModalClientCountChange(n)}
                             className={`px-2.5 py-1 rounded-lg font-black text-xs transition ${
                               activeCount === n
-                                ? 'bg-[#164e87] text-white shadow-xs'
+                                ? 'bg-[#164e87] text-white shadow-sm'
                                 : 'text-slate-600 hover:bg-blue-50'
                             }`}
                           >
@@ -2603,7 +2773,7 @@ const ProjectsPage = () => {
                           </label>
                           <select
                             value={formData.costAllocationMode || 'equal'}
-                            onChange={(e) => setFormData({ ...formData, costAllocationMode: e.target.value })}
+                            onChange={(e) => handleModalAllocationModeChange(e.target.value)}
                             className="w-full px-3 py-2 border border-blue-300 rounded-xl bg-white font-bold text-slate-800 text-xs"
                           >
                             {Object.values(COST_ALLOCATION_MODES).map(mode => (
@@ -2636,7 +2806,7 @@ const ProjectsPage = () => {
                       {/* Tabella Entità di Fatturazione Separate (Tariffa Attiva & Marginalità per Cliente) */}
                       <div className="space-y-2">
                         {(liveModalMetrics.billingEntities || formData.billingEntities).map((entity, idx) => (
-                          <div key={entity.id || idx} className="p-3 bg-white rounded-xl border border-blue-200 shadow-2xs space-y-2">
+                          <div key={entity.id || idx} className="p-3 bg-white rounded-xl border border-blue-200 shadow-sm space-y-2">
                             <div className="flex flex-wrap items-center justify-between gap-2 pb-1.5 border-b border-slate-100">
                               <div className="flex items-center space-x-2">
                                 <span className="px-2 py-0.5 rounded bg-[#164e87] text-white font-black text-[10px]">
@@ -2647,6 +2817,20 @@ const ProjectsPage = () => {
                                 </span>
                               </div>
                               <div className="flex items-center space-x-2">
+                                <div className="flex items-center space-x-1">
+                                  <span className="text-[10px] text-slate-500 font-semibold">Incasso DSO:</span>
+                                  <select
+                                    value={formData.billingEntities[idx]?.paymentTermsClient ?? formData.paymentTermsClient ?? 60}
+                                    onChange={(e) => handleModalUpdateBillingEntity(idx, { paymentTermsClient: parseInt(e.target.value, 10) })}
+                                    className="px-1.5 py-0.5 border border-slate-300 rounded text-[10px] font-bold bg-slate-50"
+                                  >
+                                    <option value="0">0 gg</option>
+                                    <option value="30">30 gg</option>
+                                    <option value="60">60 gg</option>
+                                    <option value="90">90 gg</option>
+                                    <option value="120">120 gg</option>
+                                  </select>
+                                </div>
                                 <span className={`px-2 py-0.5 rounded-full text-[10px] font-black border ${
                                   entity.molPercent < 0
                                     ? 'bg-rose-100 text-rose-800 border-rose-200'
@@ -2714,10 +2898,17 @@ const ProjectsPage = () => {
                                       disabled={formData.costAllocationMode !== 'manual_percent'}
                                       value={formData.costAllocationMode === 'manual_percent' ? (formData.billingEntities[idx]?.costSharePercent ?? 0) : entity.costSharePercent}
                                       onChange={(e) => {
-                                        const raw = parseFloat(e.target.value);
-                                        const clamped = isNaN(raw) ? 0 : Math.min(100, Math.max(0, raw));
-                                        handleModalUpdateBillingEntity(idx, { costSharePercent: clamped });
+                                        const val = e.target.value;
+                                        if (val === '') {
+                                          handleModalUpdateBillingEntity(idx, { costSharePercent: '' });
+                                        } else {
+                                          const raw = parseFloat(val);
+                                          if (!isNaN(raw)) {
+                                            handleModalUpdateBillingEntity(idx, { costSharePercent: Math.min(100, Math.max(0, raw)) });
+                                          }
+                                        }
                                       }}
+                                      onBlur={() => handleModalShareBlur(idx)}
                                       className={`w-full px-2 py-1.5 border rounded-lg font-black text-xs ${
                                         formData.costAllocationMode === 'manual_percent'
                                           ? 'border-blue-400 bg-white text-slate-900'
@@ -2906,7 +3097,7 @@ const ProjectsPage = () => {
                       type="button"
                       onClick={handleModalCalculateRouteFromStops}
                       disabled={modalRouteCalculating}
-                      className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 disabled:bg-emerald-400 text-white rounded-lg font-black text-xs shadow-2xs transition flex items-center space-x-1.5"
+                      className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 disabled:bg-emerald-400 text-white rounded-lg font-black text-xs shadow-sm transition flex items-center space-x-1.5"
                     >
                       <MapPin className="w-3.5 h-3.5" />
                       <span>{modalRouteCalculating ? 'Calcolo API in corso...' : 'Calcola Km, Pedaggi & Consumi Orografici'}</span>
@@ -3038,7 +3229,17 @@ const ProjectsPage = () => {
                       min="1"
                       max="120"
                       value={formData.operatingMonths}
-                      onChange={(e) => setFormData({ ...formData, operatingMonths: parseInt(e.target.value) || 36 })}
+                      onChange={(e) => {
+                        const raw = e.target.value;
+                        setFormData({ ...formData, operatingMonths: raw === '' ? '' : (parseInt(raw, 10) || '') });
+                      }}
+                      onBlur={() => {
+                        const parsed = parseInt(formData.operatingMonths, 10);
+                        setFormData(prev => ({
+                          ...prev,
+                          operatingMonths: Number.isFinite(parsed) && parsed >= 1 ? Math.min(120, parsed) : 36
+                        }));
+                      }}
                       className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 font-bold"
                     />
                     <div className="flex gap-1 mt-1 flex-wrap">
@@ -3049,7 +3250,7 @@ const ProjectsPage = () => {
                           onClick={() => setFormData({ ...formData, operatingMonths: m })}
                           className={`px-1.5 py-0.5 rounded text-[10px] font-bold transition ${
                             formData.operatingMonths === m
-                              ? 'bg-[#164e87] text-white shadow-xs'
+                              ? 'bg-[#164e87] text-white shadow-sm'
                               : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
                           }`}
                         >
@@ -3066,7 +3267,26 @@ const ProjectsPage = () => {
                       min="1"
                       max="31"
                       value={formData.workingDaysMonth}
-                      onChange={(e) => handleWorkingDaysChange(parseInt(e.target.value) || 22)}
+                      onChange={(e) => {
+                        const raw = e.target.value;
+                        if (raw === '') {
+                          setFormData({ ...formData, workingDaysMonth: '' });
+                        } else {
+                          const parsed = parseInt(raw, 10);
+                          if (!isNaN(parsed) && parsed >= 1 && parsed <= 31) {
+                            handleWorkingDaysChange(parsed);
+                          } else {
+                            setFormData({ ...formData, workingDaysMonth: raw });
+                          }
+                        }
+                      }}
+                      onBlur={() => {
+                        const parsed = parseInt(formData.workingDaysMonth, 10);
+                        const safeDays = Number.isFinite(parsed) && parsed >= 1 && parsed <= 31 ? parsed : 22;
+                        if (safeDays !== formData.workingDaysMonth) {
+                          handleWorkingDaysChange(safeDays);
+                        }
+                      }}
                       className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 font-bold"
                     />
                   </div>
@@ -3079,6 +3299,56 @@ const ProjectsPage = () => {
                       onChange={(e) => handleKmChange(parseFloat(e.target.value) || 0)}
                       className="w-full px-3 py-2 border border-emerald-400 bg-emerald-50/40 rounded-xl focus:ring-2 focus:ring-emerald-500 font-bold"
                     />
+                  </div>
+
+                  {/* Parametri Tratta Stradali & Orografici */}
+                  <div className="col-span-2 md:col-span-4 grid grid-cols-1 sm:grid-cols-3 gap-3 bg-slate-50/90 border border-slate-200 rounded-xl p-3">
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-600 mb-0.5">% Percorrenza Autostrada</label>
+                      <input
+                        type="number"
+                        min="0"
+                        max="100"
+                        value={formData.highwayPercent ?? 65}
+                        onChange={(e) => {
+                          const raw = parseFloat(e.target.value);
+                          const val = isNaN(raw) ? 0 : Math.min(100, Math.max(0, raw));
+                          setFormData(applyAutoRecalculation({ highwayPercent: val }));
+                        }}
+                        className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg bg-white font-bold text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-600 mb-0.5">Tariffa Pedaggio (€/km autostr.)</label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value={formData.tollRate ?? 0.12}
+                        onChange={(e) => {
+                          const raw = parseFloat(e.target.value);
+                          const val = isNaN(raw) ? 0 : Math.max(0, raw);
+                          setFormData(applyAutoRecalculation({ tollRate: val }));
+                        }}
+                        className="w-full px-2.5 py-1.5 border border-blue-300 rounded-lg bg-white font-bold text-[#164e87] text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-600 mb-0.5">Fattore Orografia Consumi (x)</label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0.7"
+                        max="2.5"
+                        value={formData.orographicMultiplier ?? 1.0}
+                        onChange={(e) => {
+                          const raw = parseFloat(e.target.value);
+                          const val = isNaN(raw) || raw <= 0 ? 1.0 : raw;
+                          setFormData(applyAutoRecalculation({ orographicMultiplier: val }));
+                        }}
+                        className="w-full px-2.5 py-1.5 border border-emerald-300 rounded-lg bg-white font-bold text-emerald-900 text-xs"
+                      />
+                    </div>
                   </div>
 
                   {/* Calcolo Dinamico Scadenza Contratto */}
@@ -3207,6 +3477,29 @@ const ProjectsPage = () => {
                             className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-slate-700"
                           />
                         </div>
+                        {formData.isMultiClient ? (
+                          <div className="md:col-span-3 p-3 bg-blue-50/80 border border-blue-200 rounded-xl flex flex-wrap items-center justify-between gap-2 text-xs">
+                            <div>
+                              <span className="font-black text-[#164e87] block">
+                                Fatturazione Aggregata Multi-Commessa ({formData.billingEntities?.length || 2} Clienti):
+                              </span>
+                              <span className="text-[10px] text-slate-600">
+                                Le tariffe attive e le marginalità sono gestite separatamente per ciascun cliente nel Tab 1 (Anagrafica &amp; Clienti).
+                              </span>
+                            </div>
+                            <div className="flex items-center space-x-3">
+                              <span className="font-bold text-slate-700">
+                                Costo Comune: <strong>{formatEUR(liveModalMetrics.totalCostDaily)}/gg</strong>
+                              </span>
+                              <span className="font-black text-[#164e87]">
+                                Ricavo Tot.: {formatEUR(liveModalMetrics.revenueDaily)}/gg
+                              </span>
+                              <span className="px-2 py-0.5 rounded-full font-black bg-emerald-100 text-emerald-800 border border-emerald-300">
+                                M.O.L. {formatEUR(liveModalMetrics.molDaily)}/gg ({formatPercent(liveModalMetrics.molPercent)})
+                              </span>
+                            </div>
+                          </div>
+                        ) : (
                         <div className="md:col-span-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
                           <div>
                             <label className="block font-bold text-emerald-900 mb-0.5">Ricavo Giornaliero Riconosciuto da Cliente (€/gg) *</label>
@@ -3262,7 +3555,11 @@ const ProjectsPage = () => {
                                     const rev = +(cost / (1 - (pct / 100))).toFixed(2);
                                     setFormData({ ...formData, targetMarginPercent: pct, revenueDaily: rev });
                                   }}
-                                  className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-100 text-emerald-800 hover:bg-emerald-200"
+                                  className={`px-1.5 py-0.5 rounded text-[10px] font-bold transition ${
+                                    Math.round(formData.targetMarginPercent ?? liveModalMetrics.molPercent) === pct
+                                      ? 'bg-emerald-600 text-white shadow-sm'
+                                      : 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200'
+                                  }`}
                                 >
                                   {pct}%{pct === 21 ? ' (Std)' : ''}
                                 </button>
@@ -3270,6 +3567,7 @@ const ProjectsPage = () => {
                             </div>
                           </div>
                         </div>
+                        )}
                       </div>
                     </div>
                   ) : (
@@ -3405,9 +3703,15 @@ const ProjectsPage = () => {
                             onChange={(e) => handleRefrigerationTechChange(e.target.value)}
                             className="w-full px-2 py-1.5 border border-cyan-300 rounded-lg bg-white font-bold text-[11px]"
                           >
-                            <option value="elettrico">Frigo Elettrico (0,35 €/kWh • 8 kWh/h)</option>
-                            <option value="azoto">Azoto Liquido (0,13 €/kg • 30 kg/h)</option>
-                            <option value="gasolio">Gasolio Frigo (1,80 €/L • 3 L/h)</option>
+                            <option value="elettrico">
+                              Frigo Elettrico ({settings?.refrigerationParams?.elettrico?.unitCost ?? 0.35} €/kWh • {settings?.refrigerationParams?.elettrico?.hourlyConsumption ?? 8} kWh/h)
+                            </option>
+                            <option value="azoto">
+                              Azoto Liquido ({settings?.refrigerationParams?.azoto?.unitCost ?? 0.13} €/kg • {settings?.refrigerationParams?.azoto?.hourlyConsumption ?? 30} kg/h)
+                            </option>
+                            <option value="gasolio">
+                              Gasolio Frigo ({settings?.refrigerationParams?.gasolio?.unitCost ?? 1.8} €/L • {settings?.refrigerationParams?.gasolio?.hourlyConsumption ?? 3} L/h)
+                            </option>
                           </select>
                         </div>
                         <div>
@@ -3435,7 +3739,7 @@ const ProjectsPage = () => {
                           />
                         </div>
                         <div>
-                          <label className="block text-[10px] font-bold text-cyan-900 mb-0.5">Ore Frigo / Viaggio (h)</label>
+                          <label className="block text-[10px] font-bold text-cyan-900 mb-0.5">Ore Frigo / Giorno (h)</label>
                           <input
                             type="number"
                             step="0.5"
@@ -3653,7 +3957,11 @@ const ProjectsPage = () => {
                                       const rev = +(cost / (1 - (pct / 100))).toFixed(2);
                                       setFormData({ ...formData, targetMarginPercent: pct, revenueDaily: rev });
                                     }}
-                                    className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800 hover:bg-emerald-200"
+                                    className={`px-1.5 py-0.5 rounded text-[10px] font-bold transition ${
+                                      Math.round(formData.targetMarginPercent ?? liveModalMetrics.molPercent) === pct
+                                        ? 'bg-emerald-600 text-white shadow-sm'
+                                        : 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200'
+                                    }`}
                                   >
                                     {pct}%{pct === 21 ? ' (Std)' : ''}
                                   </button>
@@ -3756,7 +4064,7 @@ const ProjectsPage = () => {
 
                     {/* Form Inserimento Nuova Variazione Prezzo/Costo da Data */}
                     <div className="grid grid-cols-1 sm:grid-cols-12 gap-2 items-end bg-white p-2.5 rounded-xl border border-violet-200/80">
-                      <div className="sm:col-span-4">
+                      <div className="sm:col-span-3">
                         <label className="block text-[10px] font-bold text-slate-700 mb-0.5">Voce soggetta a Variazione</label>
                         <select
                           value={newVariationDraft.targetField}
@@ -3776,9 +4084,11 @@ const ProjectsPage = () => {
                           }}
                           className="w-full px-2 py-1.5 border border-slate-300 rounded-lg bg-white text-xs font-bold"
                         >
-                          {Object.values(COST_VARIATION_TARGETS).map(t => (
-                            <option key={t.id} value={t.id}>{t.label} ({t.unit})</option>
-                          ))}
+                          {Object.values(COST_VARIATION_TARGETS)
+                            .filter(t => !(formData.isMultiClient && t.id === 'revenueDaily'))
+                            .map(t => (
+                              <option key={t.id} value={t.id}>{t.label} ({t.unit})</option>
+                            ))}
                         </select>
                       </div>
                       <div className="sm:col-span-2">
@@ -3821,6 +4131,16 @@ const ProjectsPage = () => {
                         />
                       </div>
                       <div className="sm:col-span-2">
+                        <label className="block text-[10px] font-bold text-slate-600 mb-0.5">Nota</label>
+                        <input
+                          type="text"
+                          placeholder="Es. Adeguam. ISTAT"
+                          value={newVariationDraft.note}
+                          onChange={(e) => setNewVariationDraft(prev => ({ ...prev, note: e.target.value }))}
+                          className="w-full px-2 py-1.5 border border-slate-300 rounded-lg bg-white text-xs"
+                        />
+                      </div>
+                      <div className="sm:col-span-1">
                         <button
                           type="button"
                           onClick={() => {
@@ -3846,11 +4166,11 @@ const ProjectsPage = () => {
                             const nextList = [...(formData.costVariations || []), entry]
                               .sort((a, b) => String(a.effectiveDate).localeCompare(String(b.effectiveDate)));
                             setFormData({ ...formData, costVariations: nextList });
-                            setNewVariationDraft(prev => ({ ...prev, newValue: '', note: '' }));
+                            setNewVariationDraft(prev => ({ ...prev, previousValue: '', newValue: '', note: '' }));
                           }}
-                          className="w-full py-1.5 px-2.5 bg-violet-600 hover:bg-violet-700 text-white rounded-lg font-bold text-xs transition shadow-xs"
+                          className="w-full py-1.5 px-2 bg-violet-600 hover:bg-violet-700 text-white rounded-lg font-bold text-xs transition shadow-sm"
                         >
-                          + Aggiungi
+                          + Add
                         </button>
                       </div>
                     </div>
@@ -3865,10 +4185,10 @@ const ProjectsPage = () => {
                         </div>
                         <div className="flex flex-wrap items-center gap-3">
                           <span className="text-slate-700">
-                            Prima: <strong>{formatEUR(liveModalMetrics.variationSummary.preMonthlyCost)}/m</strong> (MOL {formatPercent(liveModalMetrics.variationSummary.preMolPercent)})
+                            Prima: <strong>{formatEUR(liveModalMetrics.variationSummary.beforeMonthlyCost)}/m</strong> (MOL {formatPercent(liveModalMetrics.variationSummary.beforeMolPercent)})
                           </span>
                           <span className="text-violet-900">
-                            Dal {liveModalMetrics.variationSummary.latestEffectiveDateFormatted}: <strong>{formatEUR(liveModalMetrics.variationSummary.postMonthlyCost)}/m</strong> (MOL {formatPercent(liveModalMetrics.variationSummary.postMolPercent)})
+                            Dal {liveModalMetrics.variationSummary.latestEffectiveDateFormatted}: <strong>{formatEUR(liveModalMetrics.variationSummary.afterMonthlyCost)}/m</strong> (MOL {formatPercent(liveModalMetrics.variationSummary.afterMolPercent)})
                           </span>
                           <span className="px-2 py-0.5 rounded-full font-black bg-white text-violet-950 border border-violet-300">
                             Media Ponderata Annua: {formatEUR(liveModalMetrics.monthlyCost)}/m • MOL {formatEUR(liveModalMetrics.monthlyMol)}/m ({formatPercent(liveModalMetrics.molPercent)})
@@ -3899,16 +4219,23 @@ const ProjectsPage = () => {
                       <label className="block font-semibold text-slate-700 mb-1">
                         Incasso Cliente (DSO) *
                       </label>
-                      <select
-                        value={formData.paymentTermsClient}
-                        onChange={(e) => setFormData({ ...formData, paymentTermsClient: parseInt(e.target.value) })}
-                        className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-amber-500 bg-white font-bold"
-                      >
-                        <option value="30">30 giorni d.f.f.m.</option>
-                        <option value="60">60 giorni d.f.f.m. (Standard)</option>
-                        <option value="90">90 giorni d.f.f.m.</option>
-                        <option value="120">120 giorni d.f.f.m.</option>
-                      </select>
+                      {formData.isMultiClient ? (
+                        <div className="w-full px-3 py-2 border border-blue-200 rounded-xl bg-blue-50/70 font-bold text-xs text-[#164e87]">
+                          Ponderato Multi-Cliente: {liveModalMetrics.clientDso} gg (impostato per singolo cliente in Tab 1)
+                        </div>
+                      ) : (
+                        <select
+                          value={formData.paymentTermsClient}
+                          onChange={(e) => setFormData({ ...formData, paymentTermsClient: parseInt(e.target.value) })}
+                          className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-amber-500 bg-white font-bold"
+                        >
+                          <option value="0">0 giorni (Vista fattura)</option>
+                          <option value="30">30 giorni d.f.f.m.</option>
+                          <option value="60">60 giorni d.f.f.m. (Standard)</option>
+                          <option value="90">90 giorni d.f.f.m.</option>
+                          <option value="120">120 giorni d.f.f.m.</option>
+                        </select>
+                      )}
                     </div>
 
                     <div>
@@ -4130,7 +4457,7 @@ const ProjectsPage = () => {
                   <div className="flex items-center space-x-2">
                     <button
                       type="button"
-                      onClick={() => setShowModal(false)}
+                      onClick={handleCloseModal}
                       className="px-4 py-2 border border-slate-600 rounded-xl font-bold text-xs text-slate-200 hover:bg-slate-800 transition"
                     >
                       Annulla
@@ -4149,9 +4476,22 @@ const ProjectsPage = () => {
           </div>
         )}
         {/* Modal Pianificazione Budget Anno Successivo 2027 */}
-        {showNextYearModal && (
-          <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
-            <div className="bg-white rounded-2xl shadow-2xl max-w-xl w-full p-6 border border-slate-200">
+        {showNextYearModal && (() => {
+          const forecast2027 = calculateAnnualBudgetAndCashFlow(statusQuoProjects, {
+            year: 2027,
+            rolloverPreviousYearBudget: true,
+            fleet,
+            trailers
+          });
+          return (
+          <div
+            onClick={() => setShowNextYearModal(false)}
+            className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4"
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="bg-white rounded-2xl shadow-2xl max-w-xl w-full p-6 border border-slate-200"
+            >
               <div className="flex justify-between items-center pb-4 border-b border-slate-100">
                 <div className="flex items-center space-x-2">
                   <div className="p-2 bg-teal-100 text-teal-800 rounded-xl">
@@ -4177,8 +4517,8 @@ const ProjectsPage = () => {
               <div className="mt-4 space-y-4 text-xs">
                 <p className="text-slate-600 leading-relaxed">
                   Il sistema implementa la <strong>continuità aziendale a regime</strong> per il 2027:
-                  tutte le 19 linee attive nel 2026 vengono considerate operative con le medesime tariffe,
-                  percorrenze chilometriche e canoni di noleggio, senza il buco di cassa iniziale da startup.
+                  tutte le <strong>{statusQuoProjects.length}</strong> linee operative attive vengono considerate in esercizio con le medesime tariffe,
+                  percorrenze chilometriche e canoni di noleggio, con continuità finanziaria rispetto al 2026.
                 </p>
 
                 {/* KPI Anteprima 2027 */}
@@ -4186,19 +4526,19 @@ const ProjectsPage = () => {
                   <div>
                     <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Ricavi Stimati 2027</span>
                     <div className="text-sm font-black text-slate-900 mt-0.5">
-                      {formatEUR(totalMonthlyBudgetRevenue * 12)}
+                      {formatEUR(forecast2027.annualRevenue)}
                     </div>
                   </div>
                   <div>
                     <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Costi Operativi 2027</span>
                     <div className="text-sm font-bold text-slate-700 mt-0.5">
-                      {formatEUR(totalMonthlyBudgetCost * 12)}
+                      {formatEUR(forecast2027.annualCost)}
                     </div>
                   </div>
                   <div className="col-span-2 sm:col-span-1">
                     <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">M.O.L. Annuo (EBITDA)</span>
                     <div className="text-sm font-black text-emerald-600 mt-0.5">
-                      {formatEUR(totalMonthlyBudgetMol * 12)}
+                      {formatEUR(forecast2027.annualMol)}
                     </div>
                   </div>
                 </div>
@@ -4207,10 +4547,10 @@ const ProjectsPage = () => {
                   <p className="font-bold">Come viene applicato il Budget 2027:</p>
                   <ul className="list-disc pl-4 space-y-1 text-[11px] text-emerald-900">
                     <li>
-                      <strong>Proiezione nei Report (Attiva)</strong>: selezionando <em>"Anno Budget 2027"</em> nel Cash Flow e nella Dashboard visualizzi l'intero piano finanziario del nuovo anno senza dover modificare i contratti.
+                      <strong>Proiezione nei Report (Attiva)</strong>: selezionando <em>&quot;Budget 2027&quot;</em> in Commesse, Cash Flow o Dashboard visualizzi il piano finanziario completo con continuità dal 2026 senza modificare i contratti.
                     </li>
                     <li>
-                      <strong>Proroga Formale Contratti (+12m)</strong>: puoi estendere formalmente la scadenza contrattuale di tutte le commesse al <strong>31 Dicembre 2027</strong>.
+                      <strong>Proroga Formale Contratti al 31/12/2027</strong>: estende automaticamente la durata dei soli contratti attivi che terminano prima di fine 2027 fino al <strong>31 Dicembre 2027</strong>.
                     </li>
                   </ul>
                 </div>
@@ -4229,13 +4569,14 @@ const ProjectsPage = () => {
                     className="w-full sm:w-auto px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold shadow-sm transition flex items-center justify-center space-x-1.5"
                   >
                     <CheckCircle2 className="w-4 h-4" />
-                    <span>Estendi Contratti al 31/12/2027 (+12m)</span>
+                    <span>Estendi Contratti al 31/12/2027</span>
                   </button>
                 </div>
               </div>
             </div>
           </div>
-        )}
+          );
+        })()}
       </div>
     </div>
   );

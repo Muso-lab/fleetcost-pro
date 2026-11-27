@@ -1,4 +1,4 @@
-import { HashRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { HashRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import Navbar from './components/Navbar';
 import LoginPage from './pages/LoginPage';
@@ -11,7 +11,8 @@ import SettingsPage from './pages/SettingsPage';
 
 const PrivateRoute = ({ children }) => {
   const { currentUser } = useAuth();
-  return currentUser ? children : <Navigate to="/login" />;
+  const location = useLocation();
+  return currentUser ? children : <Navigate to="/login" replace state={{ from: location }} />;
 };
 
 function App() {

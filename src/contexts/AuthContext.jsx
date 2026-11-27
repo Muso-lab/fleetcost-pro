@@ -8,16 +8,14 @@ export const useAuth = () => useContext(AuthContext);
 // Funzione di utilità per hashing SHA-256 standard (Web Crypto API nativa del browser)
 // Nessuna password aziendale in chiaro viene mai memorizzata o esposta nel codice
 const hashPassword = async (str) => {
-  try {
-    const enc = new TextEncoder().encode(str);
-    const buf = await crypto.subtle.digest('SHA-256', enc);
-    return Array.from(new Uint8Array(buf))
-      .map(b => b.toString(16).padStart(2, '0'))
-      .join('');
-  } catch (e) {
-    console.error('Errore hashing password:', e);
-    return '';
+  if (!window.crypto?.subtle) {
+    throw new Error('Connessione sicura HTTPS richiesta per la verifica delle credenziali.');
   }
+  const enc = new TextEncoder().encode(str);
+  const buf = await window.crypto.subtle.digest('SHA-256', enc);
+  return Array.from(new Uint8Array(buf))
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('');
 };
 
 // Hash crittografico di default (SHA-256) per primo avvio
@@ -76,24 +74,29 @@ export const AuthProvider = ({ children }) => {
     return () => unsubscribe();
   }, [currentUser]);
 
-  // Funzione di Login sicuro (verifica basata su hash SHA-256)
+  // Funzione di Login sicuro (verifica basata su hash SHA-256, sincronizzata col doc Cloud security)
   const login = async (email, password, rememberMe = true) => {
+    await storageService.fetchSecurityConfigFromCloud();
     const currentConfig = getStoredAuthConfig();
     const cleanEmail = (email || '').trim().toLowerCase();
-    const cleanConfigEmail = (currentConfig.adminEmail || '').toLowerCase();
+    const cleanConfigEmail = (currentConfig.adminEmail || DEFAULT_AUTH_CONFIG.adminEmail).toLowerCase();
 
-    // Accetta l'email aziendale configurata o alias operativi
-    const isEmailValid = cleanEmail === cleanConfigEmail ||
-      cleanEmail === 'direzione@four-logistics.it' ||
-      cleanEmail === 'operativo@four-logistics.it' ||
-      cleanEmail === 'admin' ||
-      cleanEmail.includes('four');
+    const allowedEmails = new Set([
+      cleanConfigEmail,
+      'amministrazione@four-logistics.it',
+      'direzione@four-logistics.it',
+      'operativo@four-logistics.it',
+      'admin'
+    ]);
 
-    if (!isEmailValid) {
+    if (!allowedEmails.has(cleanEmail)) {
       throw new Error('E-mail aziendale non riconosciuta.');
     }
 
     const inputHash = await hashPassword(password);
+    if (!inputHash) {
+      throw new Error('Impossibile verificare la password in questo browser.');
+    }
     const targetHash = currentConfig.passwordHash || DEFAULT_AUTH_CONFIG.passwordHash;
 
     if (inputHash !== targetHash) {
@@ -120,8 +123,9 @@ export const AuthProvider = ({ children }) => {
     return authenticatedUser;
   };
 
-  // Funzione di Logout (termina la sessione e protegge i dati)
+  // Funzione di Logout (termina la sessione, ferma Cloud Sync e protegge i dati)
   const logout = async () => {
+    storageService.stopCloudSync();
     sessionStorage.removeItem('four_active_session');
     localStorage.removeItem('four_active_session');
     localStorage.removeItem('four_local_user');
@@ -142,6 +146,9 @@ export const AuthProvider = ({ children }) => {
     }
 
     const newHash = await hashPassword(newPassword);
+    if (!newHash) {
+      throw new Error('Impossibile generare l\'hash sicuro della nuova password.');
+    }
     const updated = {
       adminEmail: currentConfig.adminEmail || DEFAULT_AUTH_CONFIG.adminEmail,
       passwordHash: newHash,

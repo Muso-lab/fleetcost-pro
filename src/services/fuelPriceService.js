@@ -124,16 +124,17 @@ export const fetchLiveWeeklyFuelPrices = async () => {
 
       if (res.ok) {
         const text = await res.text();
-        // Cerca valore numerico gasolio tra 1.50 e 2.20 €/L
-        const dieselMatch = text.match(/gasolio["'\s:;]+([12]\.\d{2,3})/i) || text.match(/diesel["'\s:;]+([12]\.\d{2,3})/i);
-        if (dieselMatch && dieselMatch[1]) {
-          const parsed = parseFloat(dieselMatch[1]);
-          if (parsed >= 1.50 && parsed <= 2.25) {
-            liveDieselPump = +parsed.toFixed(3);
-            fetchedFromRemote = true;
-            liveSourceType = 'MASE Open-Data Live (Prezzo Medio Settimanale Alla Pompa)';
-            break;
-          }
+        // Cerca tutti i valori numerici gasolio tra 1.50 e 2.25 €/L e prende il più recente (ultimo della serie)
+        const allMatches = Array.from(text.matchAll(/(?:gasolio|diesel)["'\s:;]+([12]\.\d{2,3})/gi));
+        const validMatches = allMatches
+          .map(m => parseFloat(m[1]))
+          .filter(v => Number.isFinite(v) && v >= 1.50 && v <= 2.25);
+        if (validMatches.length > 0) {
+          const latestParsed = validMatches[validMatches.length - 1];
+          liveDieselPump = +latestParsed.toFixed(3);
+          fetchedFromRemote = true;
+          liveSourceType = 'MASE Open-Data Live (Prezzo Medio Settimanale Alla Pompa)';
+          break;
         }
       }
     } catch {
@@ -225,8 +226,11 @@ export const getFuelSyncMetadata = () => {
  */
 export const shouldAutoRefreshWeeklyFuelPrices = (settings) => {
   if (settings?.autoWeeklyFuelSync === false) return false;
-  const meta = getFuelSyncMetadata();
-  if (!meta || !meta.lastSyncIso) return true;
-  const elapsed = Date.now() - new Date(meta.lastSyncIso).getTime();
-  return elapsed >= ONE_WEEK_MS;
+  const localMeta = getFuelSyncMetadata();
+  const cloudIso = settings?.lastFuelSyncMeta?.lastSyncIso;
+  const localIso = localMeta?.lastSyncIso;
+  const latestIso = [cloudIso, localIso].filter(Boolean).sort().pop();
+  if (!latestIso) return true;
+  const elapsed = Date.now() - new Date(latestIso).getTime();
+  return !Number.isFinite(elapsed) || elapsed >= ONE_WEEK_MS;
 };

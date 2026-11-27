@@ -105,7 +105,7 @@ export const MARKET_VEHICLE_BENCHMARKS = [
     indicativeMonthlyLease: 2800,
     indicativePurchasePrice: 148000,
     capacityPlt: 33,
-    tiresCount: 12,
+    tireCount: 12,
     notes: 'Motore Volvo G13C con ciclo Diesel HPDI ad altissimo rendimento: resa certificata 4,2 km per ogni kg di biometano liquefatto.'
   },
   {
@@ -122,7 +122,7 @@ export const MARKET_VEHICLE_BENCHMARKS = [
     indicativeMonthlyLease: 6200, // Canone NLT full service batterie
     indicativePurchasePrice: 285000,
     capacityPlt: 33,
-    tiresCount: 12, // con semirimorchio
+    tireCount: 12, // con semirimorchio
     notes: 'Autonomia reale 300-450 km. Ricarica rapida MCS/CCS 375kW.'
   },
   {
@@ -139,7 +139,7 @@ export const MARKET_VEHICLE_BENCHMARKS = [
     indicativeMonthlyLease: 3200,
     indicativePurchasePrice: 145000,
     capacityPlt: 33,
-    tiresCount: 12,
+    tireCount: 12,
     notes: 'Autonomia fino a 1.600 km. Ideale per lunghe distanze H24 e tratte pesanti.'
   },
   {
@@ -156,7 +156,7 @@ export const MARKET_VEHICLE_BENCHMARKS = [
     indicativeMonthlyLease: 3900,
     indicativePurchasePrice: 185000,
     capacityPlt: 18,
-    tiresCount: 6,
+    tireCount: 6,
     notes: 'Distribuzione regionale GDO e fresco. Ottima rigenerazione in frenata.'
   },
   {
@@ -173,7 +173,7 @@ export const MARKET_VEHICLE_BENCHMARKS = [
     indicativeMonthlyLease: 2800,
     indicativePurchasePrice: 140000,
     capacityPlt: 12,
-    tiresCount: 6,
+    tireCount: 6,
     notes: 'Rifornimento punti vendita centri commerciali e negozi retail.'
   },
   {
@@ -190,7 +190,7 @@ export const MARKET_VEHICLE_BENCHMARKS = [
     indicativeMonthlyLease: 2150,
     indicativePurchasePrice: 95000,
     capacityPlt: 9,
-    tiresCount: 6,
+    tireCount: 6,
     notes: 'Accesso libero ZTL, consegne centro storico e ultimo miglio.'
   },
   {
@@ -207,7 +207,7 @@ export const MARKET_VEHICLE_BENCHMARKS = [
     indicativeMonthlyLease: 4100, // combinato motrice + rimorchio
     indicativePurchasePrice: 190000,
     capacityPlt: 36,
-    tiresCount: 14,
+    tireCount: 14,
     notes: 'Massima volumetria per merci leggere e retail (Decathlon, abbigliamento).'
   },
   {
@@ -224,7 +224,7 @@ export const MARKET_VEHICLE_BENCHMARKS = [
     indicativeMonthlyLease: 2300,
     indicativePurchasePrice: 125000,
     capacityPlt: 33,
-    tiresCount: 12,
+    tireCount: 12,
     notes: 'Benchmark gasolio/HVO. Con HVO -90% emissioni CO2 nette well-to-wheel.'
   }
 ];
@@ -3332,6 +3332,15 @@ export const DEFAULT_SETTINGS = {
       "unitCost": 1.8,
       "hourlyConsumption": 3,
       "hourlyCost": 5.4,
+      "paymentTermsDays": 30
+    },
+    "elettrico": {
+      "id": "elettrico",
+      "name": "Gruppo Frigo Elettrico (e-Reefer)",
+      "unit": "kWh",
+      "unitCost": 0.35,
+      "hourlyConsumption": 8.0,
+      "hourlyCost": 2.8,
       "paymentTermsDays": 30
     }
   },

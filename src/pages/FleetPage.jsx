@@ -48,10 +48,28 @@ const TRAILER_CATEGORIES = [
 ];
 
 const FRIDGE_TECH_CONFIG = {
-  elettrico: { label: 'Frigo Elettrico', short: 'Elettrico', unit: 'kWh/h', defaultCost: 0.35, defaultHourly: 8.0 },
-  azoto: { label: 'Frigo Azoto Cryo', short: 'Azoto Cryo', unit: 'kg/h', defaultCost: 0.13, defaultHourly: 30 },
-  gasolio: { label: 'Frigo Gasolio', short: 'Gasolio', unit: 'L/h', defaultCost: 1.80, defaultHourly: 3.0 }
+  elettrico: { label: 'Frigo Elettrico', short: 'Elettrico', unit: 'kWh/h', defaultCost: 0.35, defaultHourly: 8.0, catId: 'refrigerato', catLabel: 'Semirimorchio Frigo Elettrico' },
+  azoto: { label: 'Frigo Azoto Cryo', short: 'Azoto Cryo', unit: 'kg/h', defaultCost: 0.13, defaultHourly: 30, catId: 'refrigerato_azoto', catLabel: 'Semirimorchio Frigo Azoto (Cryo)' },
+  gasolio: { label: 'Frigo Gasolio', short: 'Gasolio', unit: 'L/h', defaultCost: 1.80, defaultHourly: 3.0, catId: 'refrigerato_gasolio', catLabel: 'Semirimorchio Frigo Gasolio' }
 };
+
+const getFuelUnits = (fuelTypeId) => {
+  if (fuelTypeId === 'elettrico') {
+    return { consUnit: 'kWh/km', yieldUnit: 'km/kWh', isDirectPerKm: true, defaultCons: 1.2, defaultYield: 0.83 };
+  }
+  if (fuelTypeId === 'biolng') {
+    return { consUnit: 'kg/100km', yieldUnit: 'km/kg', isDirectPerKm: false, defaultCons: 29.5, defaultYield: 3.39 };
+  }
+  return { consUnit: 'L/100km', yieldUnit: 'km/L', isDirectPerKm: false, defaultCons: 29.0, defaultYield: 3.45 };
+};
+
+const getDefaultNextMonthIso = () => {
+  const now = new Date();
+  const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+  return `${nextMonth.getFullYear()}-${String(nextMonth.getMonth() + 1).padStart(2, '0')}-01`;
+};
+
+const toNumOrEmpty = (val) => (val === '' || val === null || val === undefined ? '' : val);
 
 const FleetPage = () => {
   const navigate = useNavigate();
@@ -71,9 +89,11 @@ const FleetPage = () => {
   const [editingItem, setEditingItem] = useState(null);
   const [showLeaseVariationsSection, setShowLeaseVariationsSection] = useState(false);
   const [applyLeaseFromEffectiveDate, setApplyLeaseFromEffectiveDate] = useState(false);
-  const [newLeaseEffectiveDate, setNewLeaseEffectiveDate] = useState('2026-07-01');
+  const [newLeaseEffectiveDate, setNewLeaseEffectiveDate] = useState(getDefaultNextMonthIso);
   const [variationPrevLease, setVariationPrevLease] = useState(0);
+  const [variationNewLease, setVariationNewLease] = useState(0);
   const [newLeaseVariationNote, setNewLeaseVariationNote] = useState('');
+  const [savedNltLease, setSavedNltLease] = useState(null);
 
   const [formData, setFormData] = useState({
     name: '',
@@ -123,6 +143,15 @@ const FleetPage = () => {
     });
     return () => unsubscribe();
   }, []);
+
+  useEffect(() => {
+    if (!showModal) return;
+    const onKeyDown = (e) => {
+      if (e.key === 'Escape') setShowModal(false);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [showModal]);
 
   const loadData = () => {
     setFleet(storageService.getFleet());
@@ -189,10 +218,15 @@ const FleetPage = () => {
 
   const handleOpenModal = (item = null, type = activeTab) => {
     setApplyLeaseFromEffectiveDate(false);
-    setNewLeaseEffectiveDate('2026-07-01');
+    setNewLeaseEffectiveDate(getDefaultNextMonthIso());
     setNewLeaseVariationNote('');
 
-    const curRefParams = settings?.refrigerationParams || storageService.getSettings()?.refrigerationParams || {};
+    const curSettings = settings || storageService.getSettings();
+    const curRefParams = curSettings?.refrigerationParams || {};
+    const curOwnDef = curSettings?.ownershipDefaults || {};
+    const defaultInsuranceOwn = (Number(curOwnDef.annualInsuranceRCA ?? 3200) + Number(curOwnDef.annualInsuranceKasko ?? 2400));
+    const defaultTiming = curSettings?.treasuryRules?.defaultLeaseTiming || (type === 'trailers' ? 'M1_D30' : 'M1_D10');
+    const defaultTrailerIns = Number(curOwnDef.trailerInsuranceYearlyDefault ?? 1200);
 
     if (item) {
       setEditingItem({ ...item, itemType: type });
@@ -204,6 +238,8 @@ const FleetPage = () => {
       const existingVars = Array.isArray(item.leaseVariations) ? item.leaseVariations : [];
       setShowLeaseVariationsSection(existingVars.length > 0);
       setVariationPrevLease(Number(item.monthlyLease) || 0);
+      setVariationNewLease(Number(item.monthlyLease) || 0);
+      setSavedNltLease(item.ownershipType === 'proprieta' ? null : (Number(item.monthlyLease) || 0));
 
       setFormData({
         name: item.name || '',
@@ -213,22 +249,24 @@ const FleetPage = () => {
         categoryLabel: item.categoryLabel || '',
         fuelTypeId: type === 'trailers' ? (frInfo.hasFridge ? frInfo.tech : 'nessuno') : (item.fuelTypeId || 'elettrico'),
         fridgeTech: type === 'trailers' ? frInfo.tech : 'nessuno',
-        fridgeHourlyConsumption: type === 'trailers' ? frInfo.hourlyConsumption : 0,
+        fridgeHourlyConsumption: type === 'trailers' ? (item.fridgeHourlyConsumption !== undefined ? Number(item.fridgeHourlyConsumption) : frInfo.hourlyConsumption) : 0,
         avgConsumption: cons || (type === 'vehicles' ? 1.2 : 0),
         yieldKmPerUnit: item.yieldKmPerUnit || yieldVal,
         monthlyLease: item.monthlyLease ?? 0,
         leaseVariations: existingVars,
         ownershipType: item.ownershipType || 'noleggio',
         purchaseCost: item.purchaseCost || (type === 'vehicles' ? 140000 : 65000),
-        amortizationYears: item.amortizationYears || (type === 'vehicles' ? 5 : 7),
-        insuranceIncluded: item.insuranceIncluded !== undefined
-          ? Boolean(item.insuranceIncluded)
-          : (type === 'vehicles' && (item.ownershipType || 'noleggio') === 'noleggio'),
+        amortizationYears: item.amortizationYears || (type === 'vehicles' ? (Number(curOwnDef.amortizationYears) || 5) : 7),
+        insuranceIncluded: (item.ownershipType === 'proprieta')
+          ? true
+          : (item.insuranceIncluded !== undefined
+              ? Boolean(item.insuranceIncluded)
+              : (type === 'vehicles' && (item.ownershipType || 'noleggio') === 'noleggio')),
         insuranceYearly: item.insuranceYearly !== undefined
           ? item.insuranceYearly
-          : (type === 'trailers' ? 1380 : ((item.ownershipType === 'proprieta') ? 5600 : 0)),
-        roadTaxYearly: item.roadTaxYearly || 0,
-        maintenanceMonthly: item.maintenanceMonthly || (type === 'vehicles' ? 350 : 150),
+          : (type === 'trailers' ? defaultTrailerIns : ((item.ownershipType === 'proprieta') ? defaultInsuranceOwn : 0)),
+        roadTaxYearly: item.roadTaxYearly ?? (Number(curOwnDef.annualRoadTax ?? 1100)),
+        maintenanceMonthly: item.maintenanceMonthly ?? (type === 'vehicles' ? Number(curOwnDef.monthlyMaintenance ?? 350) : 150),
         costPerTire: item.costPerTire ?? '',
         tireCostKm: item.tireCostKm || 0.04,
         tireCount: item.tireCount || 6,
@@ -237,7 +275,7 @@ const FleetPage = () => {
         lessorName: item.lessorName || '',
         licenseTypeId: item.licenseTypeId || 'ce_diurno',
         capacityPlt: item.capacityPlt || 33,
-        status: item.status || 'available',
+        status: item.status === 'maintenance' ? 'maintenance' : 'available',
         assignedProject: item.assignedProject || '',
         notes: item.notes || ''
       });
@@ -246,6 +284,8 @@ const FleetPage = () => {
       setShowLeaseVariationsSection(false);
       if (type === 'vehicles') {
         setVariationPrevLease(4800);
+        setVariationNewLease(4800);
+        setSavedNltLease(4800);
         setFormData({
           name: '',
           plate: '',
@@ -261,16 +301,16 @@ const FleetPage = () => {
           leaseVariations: [],
           ownershipType: 'noleggio',
           purchaseCost: 150000,
-          amortizationYears: 5,
+          amortizationYears: Number(curOwnDef.amortizationYears) || 5,
           insuranceIncluded: true,
-          insuranceYearly: 0,
-          roadTaxYearly: 0,
-          maintenanceMonthly: 350,
+          insuranceYearly: defaultInsuranceOwn,
+          roadTaxYearly: Number(curOwnDef.annualRoadTax ?? 1100),
+          maintenanceMonthly: Number(curOwnDef.monthlyMaintenance ?? 350),
           costPerTire: '',
           tireCostKm: 0.04,
           tireCount: 6,
-          leasePaymentTiming: 'M1_D10',
-          leasePaymentTerms: 0,
+          leasePaymentTiming: defaultTiming,
+          leasePaymentTerms: defaultTiming === 'M1_D10' ? 0 : defaultTiming === 'M1_D30' ? 30 : 60,
           lessorName: '',
           licenseTypeId: 'ce_diurno',
           capacityPlt: 33,
@@ -280,6 +320,8 @@ const FleetPage = () => {
         });
       } else {
         setVariationPrevLease(1600);
+        setVariationNewLease(1600);
+        setSavedNltLease(1600);
         const defElecHourly = Number(curRefParams?.elettrico?.hourlyConsumption ?? 8.0);
         setFormData({
           name: '',
@@ -298,13 +340,13 @@ const FleetPage = () => {
           purchaseCost: 65000,
           amortizationYears: 7,
           insuranceIncluded: false,
-          insuranceYearly: 1380,
+          insuranceYearly: defaultTrailerIns,
           roadTaxYearly: 400,
           maintenanceMonthly: 150,
           costPerTire: 380,
           tireCostKm: 0.0285,
           tireCount: 6,
-          leasePaymentTiming: 'M1_D30',
+          leasePaymentTiming: curSettings?.treasuryRules?.defaultLeaseTiming || 'M1_D30',
           leasePaymentTerms: 30,
           lessorName: '',
           licenseTypeId: 'ce_diurno',
@@ -319,10 +361,10 @@ const FleetPage = () => {
   };
 
   const calculateOwnedMonthlyCost = (fData) => {
-    const amortMonths = (fData.amortizationYears || 5) * 12;
-    const amortMonthly = amortMonths > 0 ? (fData.purchaseCost || 0) / amortMonths : 0;
-    const insMonthly = (fData.insuranceYearly || 0) / 12;
-    const taxMonthly = (fData.roadTaxYearly || 0) / 12;
+    const amortMonths = (Number(fData.amortizationYears) || 5) * 12;
+    const amortMonthly = amortMonths > 0 ? (Number(fData.purchaseCost) || 0) / amortMonths : 0;
+    const insMonthly = (Number(fData.insuranceYearly) || 0) / 12;
+    const taxMonthly = (Number(fData.roadTaxYearly) || 0) / 12;
     const maintMonthly = Number(fData.maintenanceMonthly) || 0;
     return Math.round(amortMonthly + insMonthly + taxMonthly + maintMonthly);
   };
@@ -332,17 +374,43 @@ const FleetPage = () => {
     if (!formData.name) return;
 
     const modalType = editingItem?.itemType || activeTab;
-    let payload = { ...formData };
+    const linked = editingItem?.id ? getLinkedProjects(editingItem, modalType) : [];
+    if (formData.status === 'maintenance' && linked.length > 0 && editingItem?.status !== 'maintenance') {
+      const ok = confirm(
+        `Attenzione: questa unità è attualmente assegnata a ${linked.length} commess${linked.length === 1 ? 'a' : 'e'}. Impostandola "In Manutenzione" verrà contrassegnata come non operativa pur rimanendo collegata alle commesse finché non sostituita. Confermi?`
+      );
+      if (!ok) return;
+    }
+
+    const previewTireRate = modalType === 'vehicles' ? modalTirePreview.vehicleRate : modalTirePreview.trailerRate;
+    const cleanTireCount = Number(formData.tireCount) >= 4 ? Number(formData.tireCount) : 6;
+    const cleanCapacityPlt = Number(formData.capacityPlt) > 0 ? Number(formData.capacityPlt) : 33;
+    const cleanAmortYears = Number(formData.amortizationYears) >= 2 ? Number(formData.amortizationYears) : 5;
+
+    let payload = {
+      ...formData,
+      tireCount: cleanTireCount,
+      capacityPlt: cleanCapacityPlt,
+      amortizationYears: cleanAmortYears,
+      tireCostKm: Number(previewTireRate) > 0 ? +Number(previewTireRate).toFixed(4) : (formData.tireCostKm || 0.04),
+      insuranceIncluded: formData.ownershipType === 'proprieta' ? true : Boolean(formData.insuranceIncluded)
+    };
 
     if (modalType === 'trailers') {
       const catObj = TRAILER_CATEGORIES.find(c => c.id === formData.category);
       const isFrigoCat = catObj ? catObj.isFrigo : isRefrigeratedTrailer(formData);
       if (isFrigoCat && formData.fridgeTech && formData.fridgeTech !== 'nessuno') {
+        const cfg = FRIDGE_TECH_CONFIG[formData.fridgeTech];
+        const parsedHourly = Number(formData.fridgeHourlyConsumption);
         payload.fuelTypeId = formData.fridgeTech;
-        payload.tractionType = FRIDGE_TECH_CONFIG[formData.fridgeTech]?.label || formData.fridgeTech;
+        payload.tractionType = cfg?.label || formData.fridgeTech;
+        payload.category = cfg?.catId || formData.category;
+        payload.categoryLabel = cfg?.catLabel || formData.categoryLabel;
         payload.avgConsumption = 0;
         payload.yieldKmPerUnit = 0;
-        payload.fridgeHourlyConsumption = Number(formData.fridgeHourlyConsumption) || FRIDGE_TECH_CONFIG[formData.fridgeTech]?.defaultHourly || 0;
+        payload.fridgeHourlyConsumption = (formData.fridgeHourlyConsumption !== '' && formData.fridgeHourlyConsumption !== undefined && Number.isFinite(parsedHourly) && parsedHourly >= 0)
+          ? parsedHourly
+          : (cfg?.defaultHourly ?? 0);
       } else {
         payload.fridgeTech = 'nessuno';
         payload.fuelTypeId = 'nessuno';
@@ -354,6 +422,7 @@ const FleetPage = () => {
     }
 
     if (
+      formData.ownershipType !== 'proprieta' &&
       editingItem &&
       editingItem.id &&
       applyLeaseFromEffectiveDate &&
@@ -391,7 +460,11 @@ const FleetPage = () => {
   };
 
   const handleDelete = (id, type) => {
-    if (confirm('Sei sicuro di voler eliminare questo mezzo dalla flotta?')) {
+    const linked = projects.filter(p => (type === 'vehicles' ? p.vehicleId === id : p.trailerId === id));
+    const msg = linked.length > 0
+      ? `ATTENZIONE: questa unità è collegata a ${linked.length} commess${linked.length === 1 ? 'a' : 'e'} (${linked.slice(0, 2).map(p => p.name).join(', ')}). Eliminandola i riferimenti sulle commesse resteranno scollegati. Confermi l'eliminazione?`
+      : 'Sei sicuro di voler eliminare questa unità dalla flotta?';
+    if (confirm(msg)) {
       if (type === 'vehicles') {
         storageService.deleteVehicle(id);
       } else {
@@ -434,18 +507,22 @@ const FleetPage = () => {
 
   const totalMonthlyLeaseVehicles = fleet.reduce((sum, v) => sum + (Number(v.monthlyLease) || 0), 0);
   const totalMonthlyLeaseTrailers = trailers.reduce((sum, t) => sum + (Number(t.monthlyLease) || 0), 0);
+  const totalNltOnlyMonthly = [...fleet, ...trailers]
+    .filter(it => (it.ownershipType || 'noleggio') !== 'proprieta' && it.ownershipType !== 'terzi')
+    .reduce((sum, it) => sum + (Number(it.monthlyLease) || 0), 0);
   const totalMonthlyLease = totalMonthlyLeaseVehicles + totalMonthlyLeaseTrailers;
 
+  const defaultTrailerInsYearly = Number(settings?.ownershipDefaults?.trailerInsuranceYearlyDefault ?? 1200);
   const totalExtraInsuranceMonthly = useMemo(() => {
     const calcExtra = (list, defaultIncluded) =>
       list.reduce((sum, it) => {
         if (it.ownershipType === 'proprieta' || it.ownershipType === 'terzi') return sum;
         const inc = it.insuranceIncluded !== undefined ? Boolean(it.insuranceIncluded) : defaultIncluded;
         if (inc) return sum;
-        return sum + (Number(it.insuranceYearly) || 1200) / 12;
+        return sum + (Number(it.insuranceYearly) || defaultTrailerInsYearly) / 12;
       }, 0);
     return calcExtra(fleet, true) + calcExtra(trailers, false);
-  }, [fleet, trailers]);
+  }, [fleet, trailers, defaultTrailerInsYearly]);
 
   const activeTabStats = activeTab === 'vehicles' ? vehicleStats : trailerStats;
 
@@ -459,7 +536,7 @@ const FleetPage = () => {
     );
     const matchesSearch =
       !q ||
-      item.name.toLowerCase().includes(q) ||
+      (item.name || '').toLowerCase().includes(q) ||
       (item.plate && item.plate.toLowerCase().includes(q)) ||
       (item.code && item.code.toLowerCase().includes(q)) ||
       (item.lessorName && item.lessorName.toLowerCase().includes(q)) ||
@@ -510,6 +587,13 @@ const FleetPage = () => {
           <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-teal-100 text-teal-800 border border-teal-300 whitespace-nowrap">
             <Leaf className="w-3 h-3 mr-1 text-teal-600 flex-shrink-0" />
             HVO Biodiesel
+          </span>
+        );
+      case 'gasolio':
+        return (
+          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-amber-100 text-amber-900 border border-amber-300 whitespace-nowrap">
+            <Fuel className="w-3 h-3 mr-1 text-amber-700 flex-shrink-0" />
+            Gasolio
           </span>
         );
       default:
@@ -586,7 +670,7 @@ const FleetPage = () => {
               </span>
             )}
           </div>
-          <div className="mt-1 flex flex-wrap gap-x-2 gap-y-0.5 text-[11px] text-blue-900 font-semibold truncate">
+          <div className="mt-1 flex flex-wrap gap-x-2 gap-y-0.5 text-[11px] text-blue-900 font-semibold">
             {linked.length > 0 ? (
               linked.slice(0, 2).map((p, i) => (
                 <button
@@ -704,13 +788,13 @@ const FleetPage = () => {
           </div>
 
           <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
-            <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Totale Canoni Noleggio / Mese</span>
+            <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Costo Fisso &amp; Canoni Flotta / Mese</span>
             <div className="flex items-baseline justify-between mt-2">
               <span className="text-2xl font-black text-slate-900">{formatEUR(totalMonthlyLease)}</span>
               <span className="text-[11px] font-medium text-slate-500">fisso/m</span>
             </div>
             <p className="text-[11px] text-slate-500 mt-1">
-              Mezzi: <strong className="text-slate-700">{formatEUR(totalMonthlyLeaseVehicles)}</strong> • Rim.: <strong className="text-slate-700">{formatEUR(totalMonthlyLeaseTrailers)}</strong>
+              NLT: <strong className="text-slate-700">{formatEUR(totalNltOnlyMonthly)}</strong> • Mezzi: <strong className="text-slate-700">{formatEUR(totalMonthlyLeaseVehicles)}</strong> • Rim.: <strong className="text-slate-700">{formatEUR(totalMonthlyLeaseTrailers)}</strong>
               {totalExtraInsuranceMonthly > 0 && ` (+${formatEUR(totalExtraInsuranceMonthly)} assic.)`}
             </p>
           </div>
@@ -743,14 +827,14 @@ const FleetPage = () => {
 
             {/* Filters + View Mode */}
             <div className="flex flex-wrap items-center gap-2">
-              <div className="relative">
+              <div className="relative w-full sm:w-auto">
                 <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
                 <input
                   type="text"
                   placeholder="Cerca targa, modello, fornitore, commessa..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="pl-9 pr-3 py-1.5 text-xs rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-500 w-56 sm:w-64"
+                  className="pl-9 pr-3 py-1.5 text-xs rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-500 w-full sm:w-64"
                 />
               </div>
 
@@ -798,7 +882,7 @@ const FleetPage = () => {
                 <button
                   type="button"
                   onClick={() => setViewMode('cards')}
-                  className={`p-1.5 rounded-lg transition ${viewMode === 'cards' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-500 hover:text-slate-900'}`}
+                  className={`p-1.5 rounded-lg transition ${viewMode === 'cards' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-900'}`}
                   title="Vista Schede"
                 >
                   <LayoutGrid className="w-4 h-4" />
@@ -806,7 +890,7 @@ const FleetPage = () => {
                 <button
                   type="button"
                   onClick={() => setViewMode('table')}
-                  className={`p-1.5 rounded-lg transition ${viewMode === 'table' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-500 hover:text-slate-900'}`}
+                  className={`p-1.5 rounded-lg transition ${viewMode === 'table' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-900'}`}
                   title="Vista Tabella Compatta"
                 >
                   <List className="w-4 h-4" />
@@ -911,7 +995,7 @@ const FleetPage = () => {
                         <span className="text-slate-500">Assicurazione Specifica:</span>
                         {item.ownershipType === 'proprieta' ? (
                           <span className="text-[11px] font-bold text-blue-800 bg-blue-50 px-2 py-0.5 rounded border border-blue-200 whitespace-nowrap">
-                            Inclusa ({formatEUR(item.insuranceYearly || 5600)}/a)
+                            Inclusa ({formatEUR(item.insuranceYearly ?? (activeTab === 'trailers' ? defaultTrailerInsYearly : 5600))}/a)
                           </span>
                         ) : (item.insuranceIncluded !== undefined ? item.insuranceIncluded : (activeTab === 'vehicles')) ? (
                           <span className="text-[11px] font-bold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 whitespace-nowrap">
@@ -919,12 +1003,12 @@ const FleetPage = () => {
                           </span>
                         ) : (
                           <span className="text-[11px] font-extrabold text-amber-900 bg-amber-50 px-2 py-0.5 rounded border border-amber-300 whitespace-nowrap">
-                            +{formatEUR((Number(item.insuranceYearly) || 1200) / 12)}/m ({formatEUR(item.insuranceYearly || 1200)}/a)
+                            +{formatEUR((Number(item.insuranceYearly ?? defaultTrailerInsYearly) || 0) / 12)}/m ({formatEUR(item.insuranceYearly ?? defaultTrailerInsYearly)}/a)
                           </span>
                         )}
                       </div>
 
-                      {Array.isArray(item.leaseVariations) && item.leaseVariations.length > 0 && (
+                      {item.ownershipType !== 'proprieta' && Array.isArray(item.leaseVariations) && item.leaseVariations.length > 0 && (
                         <div className="p-2 rounded-lg bg-indigo-50 border border-indigo-200 space-y-1">
                           {item.leaseVariations.map((lv, lIdx) => (
                             <div key={lv.id || lIdx} className="flex items-center justify-between text-[10px]">
@@ -941,40 +1025,65 @@ const FleetPage = () => {
                         </div>
                       )}
 
-                      <div className="flex justify-between items-center gap-2">
-                        <span className="text-slate-500">Addebito Scadenza Nolo:</span>
-                        <span className="font-bold text-amber-900 bg-amber-50 px-2 py-0.5 rounded border border-amber-200 whitespace-nowrap text-[11px]">
-                          {LEASE_PAYMENT_TIMINGS[item.leasePaymentTiming || normalizeLeaseTiming(item)]?.shortName || `${item.leasePaymentTerms || 30} gg f.m.`}
-                        </span>
-                      </div>
-
-                      <div className="flex justify-between items-center gap-2">
-                        <span className="text-slate-500">Fornitore / Noleggiatore:</span>
-                        <span className="font-semibold text-slate-700 truncate max-w-[160px]" title={item.lessorName || 'Non indicato'}>
-                          {item.lessorName || '—'}
-                        </span>
-                      </div>
+                      {item.ownershipType === 'proprieta' ? (
+                        <>
+                          <div className="flex justify-between items-center gap-2">
+                            <span className="text-slate-500">Regime Finanziario:</span>
+                            <span className="font-bold text-blue-900 bg-blue-50 px-2 py-0.5 rounded border border-blue-200 whitespace-nowrap text-[11px]">
+                              Ammort. {item.amortizationYears || 5} anni • Cespite
+                            </span>
+                          </div>
+                          <div className="flex justify-between items-center gap-2">
+                            <span className="text-slate-500">Manutenzione / Bollo:</span>
+                            <span className="font-semibold text-slate-700 whitespace-nowrap">
+                              {formatEUR(item.maintenanceMonthly || 0)}/m • {formatEUR(item.roadTaxYearly || 0)}/a
+                            </span>
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <div className="flex justify-between items-center gap-2">
+                            <span className="text-slate-500">Addebito Scadenza Nolo:</span>
+                            <span className="font-bold text-amber-900 bg-amber-50 px-2 py-0.5 rounded border border-amber-200 whitespace-nowrap text-[11px]">
+                              {LEASE_PAYMENT_TIMINGS[item.leasePaymentTiming || normalizeLeaseTiming(item)]?.shortName || `${item.leasePaymentTerms || 30} gg f.m.`}
+                            </span>
+                          </div>
+                          <div className="flex justify-between items-center gap-2">
+                            <span className="text-slate-500">Fornitore / Noleggiatore:</span>
+                            <span className="font-semibold text-slate-700 truncate max-w-[160px]" title={item.lessorName || 'Non indicato'}>
+                              {item.lessorName || '—'}
+                            </span>
+                          </div>
+                        </>
+                      )}
 
                       <div className="flex justify-between items-center gap-2">
                         <span className="text-slate-500">Quota Giornaliera (22gg):</span>
                         <span className="font-semibold text-slate-700 whitespace-nowrap">
-                          {formatEUR(item.monthlyLease ? item.monthlyLease / 22 : 0)} / gg
+                          {(() => {
+                            const hasExtraIns = item.ownershipType !== 'proprieta' && item.ownershipType !== 'terzi' &&
+                              !(item.insuranceIncluded !== undefined ? Boolean(item.insuranceIncluded) : (activeTab === 'vehicles'));
+                            const extraInsMonthly = hasExtraIns ? ((Number(item.insuranceYearly ?? defaultTrailerInsYearly) || 0) / 12) : 0;
+                            return formatEUR(((Number(item.monthlyLease) || 0) + extraInsMonthly) / 22);
+                          })()} / gg
                         </span>
                       </div>
 
                       {activeTab === 'vehicles' ? (
                         <div className="flex justify-between items-center gap-2">
                           <span className="text-slate-500">Consumo &amp; Resa:</span>
-                          {item.avgConsumption > 0 ? (
-                            <span className="font-bold text-slate-900 whitespace-nowrap">
-                              {item.avgConsumption} {item.fuelTypeId === 'elettrico' ? 'kWh/km' : 'kg/100km'}
-                              <span className="text-[10px] text-emerald-700 font-bold ml-1.5">
-                                ({item.fuelTypeId === 'elettrico'
-                                  ? `~${(1 / item.avgConsumption).toFixed(2)} km/kWh`
-                                  : `~${(100 / item.avgConsumption).toFixed(1)} km/kg`})
+                          {item.avgConsumption > 0 ? (() => {
+                            const u = getFuelUnits(item.fuelTypeId);
+                            const yieldStr = u.isDirectPerKm
+                              ? `~${(1 / item.avgConsumption).toFixed(2)} ${u.yieldUnit}`
+                              : `~${(100 / item.avgConsumption).toFixed(1)} ${u.yieldUnit}`;
+                            return (
+                              <span className="font-bold text-slate-900 whitespace-nowrap">
+                                {item.avgConsumption} {u.consUnit}
+                                <span className="text-[10px] text-emerald-700 font-bold ml-1.5">({yieldStr})</span>
                               </span>
-                            </span>
-                          ) : (
+                            );
+                          })() : (
                             <span className="text-slate-400">—</span>
                           )}
                         </div>
@@ -1087,8 +1196,16 @@ const FleetPage = () => {
                         </div>
                       </td>
                       <td className="py-2.5 px-3">
-                        <div className="font-bold text-slate-900">{item.name}</div>
-                        <div className="text-[10px] text-slate-500">{item.categoryLabel || item.category} • {item.capacityPlt || 33} plt</div>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span className="font-bold text-slate-900">{item.name}</span>
+                          {activeTab === 'vehicles' && getFuelBadge(item.fuelTypeId)}
+                          {item.ownershipType !== 'proprieta' && Array.isArray(item.leaseVariations) && item.leaseVariations.length > 0 && (
+                            <span className="px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-900 text-[10px] font-bold">
+                              {item.leaseVariations.length} var. canone
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[10px] text-slate-500 mt-0.5">{item.categoryLabel || item.category} • {item.capacityPlt || 33} plt</div>
                       </td>
                       <td className="py-2.5 px-3">
                         {effStatus === 'available' ? (
@@ -1118,24 +1235,38 @@ const FleetPage = () => {
                         <div className="font-semibold text-slate-800">
                           {item.ownershipType === 'proprieta' ? 'Proprietà FOUR' : item.ownershipType === 'terzi' ? 'Terzi' : 'NLT'}
                         </div>
-                        <div className="text-[10px] text-slate-500">{item.lessorName || '—'}</div>
+                        <div className="text-[10px] text-slate-500">
+                          {item.ownershipType === 'proprieta' ? `Amm. ${item.amortizationYears || 5} anni` : (item.lessorName || '—')}
+                        </div>
                       </td>
                       <td className="py-2.5 px-3 text-right font-extrabold text-slate-900 whitespace-nowrap">
                         {formatEUR(item.monthlyLease)}
                       </td>
                       <td className="py-2.5 px-3 whitespace-nowrap text-[11px]">
-                        {item.ownershipType === 'proprieta'
-                          ? `Inclusa (${formatEUR(item.insuranceYearly || 5600)}/a)`
-                          : (item.insuranceIncluded !== undefined ? item.insuranceIncluded : activeTab === 'vehicles')
-                            ? 'Integrata Nolo'
-                            : `+${formatEUR((Number(item.insuranceYearly) || 1200) / 12)}/m`}
+                        {item.ownershipType === 'proprieta' ? (
+                          <span className="px-2 py-0.5 rounded bg-blue-50 text-blue-800 font-bold border border-blue-200">
+                            Inclusa ({formatEUR(item.insuranceYearly ?? (activeTab === 'trailers' ? defaultTrailerInsYearly : 5600))}/a)
+                          </span>
+                        ) : (item.insuranceIncluded !== undefined ? item.insuranceIncluded : activeTab === 'vehicles') ? (
+                          <span className="px-2 py-0.5 rounded bg-emerald-50 text-emerald-800 font-bold border border-emerald-200">
+                            ✓ Integrata Nolo
+                          </span>
+                        ) : (
+                          <span className="px-2 py-0.5 rounded bg-amber-50 text-amber-900 font-bold border border-amber-200">
+                            +{formatEUR((Number(item.insuranceYearly ?? defaultTrailerInsYearly) || 0) / 12)}/m
+                          </span>
+                        )}
                       </td>
                       <td className="py-2.5 px-3 whitespace-nowrap text-[11px] font-semibold text-amber-900">
-                        {LEASE_PAYMENT_TIMINGS[item.leasePaymentTiming || normalizeLeaseTiming(item)]?.shortName || `${item.leasePaymentTerms || 30} gg`}
+                        {item.ownershipType === 'proprieta' ? (
+                          <span className="text-blue-700 font-bold">Proprietà FOUR</span>
+                        ) : (
+                          LEASE_PAYMENT_TIMINGS[item.leasePaymentTiming || normalizeLeaseTiming(item)]?.shortName || `${item.leasePaymentTerms || 30} gg`
+                        )}
                       </td>
                       <td className="py-2.5 px-3 whitespace-nowrap">
                         {activeTab === 'vehicles' ? (
-                          item.avgConsumption > 0 ? `${item.avgConsumption} ${item.fuelTypeId === 'elettrico' ? 'kWh/km' : 'kg/100km'}` : '—'
+                          item.avgConsumption > 0 ? `${item.avgConsumption} ${getFuelUnits(item.fuelTypeId).consUnit}` : '—'
                         ) : frInfo.hasFridge ? (
                           `${frInfo.shortLabel} (${frInfo.hourlyConsumption} ${frInfo.unit})`
                         ) : (
@@ -1143,6 +1274,16 @@ const FleetPage = () => {
                         )}
                       </td>
                       <td className="py-2.5 px-3 text-center whitespace-nowrap">
+                        {effStatus === 'available' && (
+                          <button
+                            type="button"
+                            onClick={() => navigate(activeTab === 'vehicles' ? `/projects?newFromVehicle=${item.id}` : `/projects?newFromTrailer=${item.id}`)}
+                            className="px-2 py-1 mr-1 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-[10px] font-bold transition"
+                            title="Assegna a Nuova Commessa"
+                          >
+                            + Assegna
+                          </button>
+                        )}
                         <button
                           onClick={() => handleOpenModal(item, activeTab)}
                           className="p-1.5 text-slate-500 hover:text-emerald-600 rounded-lg transition"
@@ -1177,7 +1318,10 @@ const FleetPage = () => {
 
       {/* Modal Aggiungi / Modifica Mezzo o Semirimorchio (max-w-2xl allineato) */}
       {showModal && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div
+          onClick={(e) => { if (e.target === e.currentTarget) setShowModal(false); }}
+          className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+        >
           <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto p-6 border border-slate-200">
             <div className="flex justify-between items-center pb-4 border-b border-slate-100">
               <h3 className="text-lg font-bold text-slate-900">
@@ -1186,8 +1330,10 @@ const FleetPage = () => {
                   : (modalType === 'vehicles' ? 'Inserisci Nuovo Mezzo Motore' : 'Inserisci Nuovo Semirimorchio')}
               </h3>
               <button
+                type="button"
                 onClick={() => setShowModal(false)}
                 className="text-slate-400 hover:text-slate-600 p-1 rounded-lg"
+                aria-label="Chiudi"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -1197,7 +1343,7 @@ const FleetPage = () => {
               {/* Benchmark Costruttori (solo nuovi o modifica Mezzi Motori) */}
               {modalType === 'vehicles' && (
                 <div className="p-3 bg-emerald-50/80 border border-emerald-300 rounded-xl space-y-1.5">
-                  <label className="text-[11px] font-extrabold text-emerald-950 uppercase flex items-center justify-between">
+                  <label className="text-[11px] font-extrabold text-emerald-950 uppercase flex flex-wrap items-center justify-between gap-2">
                     <span className="flex items-center">
                       <Sparkles className="w-3.5 h-3.5 mr-1 text-emerald-700" />
                       Applica Dati Ufficiali da Benchmark di Mercato
@@ -1211,19 +1357,29 @@ const FleetPage = () => {
                       if (!bId) return;
                       const bench = MARKET_VEHICLE_BENCHMARKS.find(b => b.id === bId);
                       if (bench) {
-                        setFormData(prev => ({
-                          ...prev,
-                          name: bench.name,
-                          category: bench.category,
-                          categoryLabel: bench.name,
-                          fuelTypeId: bench.fuelTypeId,
-                          avgConsumption: bench.avgConsumption,
-                          yieldKmPerUnit: bench.yieldKmPerUnit,
-                          monthlyLease: bench.indicativeMonthlyLease,
-                          purchaseCost: bench.indicativePurchasePrice,
-                          capacityPlt: bench.capacityPlt,
-                          notes: `${bench.models}. ${bench.notes}`
-                        }));
+                        const defLicense = bench.category === 'motrice' ? 'c_diurno' : 'ce_diurno';
+                        setFormData(prev => {
+                          const nextDraft = {
+                            ...prev,
+                            name: bench.name,
+                            category: bench.category,
+                            categoryLabel: bench.name,
+                            licenseTypeId: defLicense,
+                            fuelTypeId: bench.fuelTypeId,
+                            avgConsumption: bench.avgConsumption,
+                            yieldKmPerUnit: bench.yieldKmPerUnit,
+                            purchaseCost: bench.indicativePurchasePrice,
+                            capacityPlt: bench.capacityPlt,
+                            tireCount: bench.tireCount || (bench.category === 'motrice' ? 6 : 6),
+                            notes: `${bench.models}. ${bench.notes}`
+                          };
+                          return {
+                            ...nextDraft,
+                            monthlyLease: prev.ownershipType === 'proprieta'
+                              ? calculateOwnedMonthlyCost(nextDraft)
+                              : bench.indicativeMonthlyLease
+                          };
+                        });
                       }
                     }}
                     className="w-full px-2.5 py-1.5 border border-emerald-400 rounded-lg text-xs font-bold bg-white text-emerald-950 focus:ring-2 focus:ring-emerald-500"
@@ -1335,7 +1491,16 @@ const FleetPage = () => {
                       <label className="block font-semibold text-slate-700 mb-1">Alimentazione</label>
                       <select
                         value={formData.fuelTypeId}
-                        onChange={(e) => setFormData({ ...formData, fuelTypeId: e.target.value })}
+                        onChange={(e) => {
+                          const nextFuel = e.target.value;
+                          const u = getFuelUnits(nextFuel);
+                          setFormData({
+                            ...formData,
+                            fuelTypeId: nextFuel,
+                            avgConsumption: u.defaultCons,
+                            yieldKmPerUnit: u.defaultYield
+                          });
+                        }}
                         className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 bg-white font-semibold"
                       >
                         <option value="elettrico">Elettrico 100% (BEV)</option>
@@ -1365,8 +1530,9 @@ const FleetPage = () => {
                     <label className="block font-semibold text-slate-700 mb-1">Capacità Carico (Pallet EPAL)</label>
                     <input
                       type="number"
-                      value={formData.capacityPlt}
-                      onChange={(e) => setFormData({ ...formData, capacityPlt: parseInt(e.target.value) || 33 })}
+                      value={toNumOrEmpty(formData.capacityPlt)}
+                      onChange={(e) => setFormData({ ...formData, capacityPlt: e.target.value === '' ? '' : parseInt(e.target.value, 10) })}
+                      onBlur={() => setFormData(prev => ({ ...prev, capacityPlt: Number(prev.capacityPlt) > 0 ? Number(prev.capacityPlt) : 33 }))}
                       className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 font-bold"
                     />
                   </div>
@@ -1382,10 +1548,21 @@ const FleetPage = () => {
                     onChange={(e) => {
                       const own = e.target.value;
                       if (own === 'proprieta') {
+                        setSavedNltLease(Number(formData.monthlyLease) || 0);
                         const calculated = calculateOwnedMonthlyCost(formData);
-                        setFormData({ ...formData, ownershipType: own, monthlyLease: calculated });
+                        setFormData({
+                          ...formData,
+                          ownershipType: own,
+                          monthlyLease: calculated,
+                          insuranceIncluded: true
+                        });
                       } else {
-                        setFormData({ ...formData, ownershipType: own });
+                        setFormData({
+                          ...formData,
+                          ownershipType: own,
+                          monthlyLease: savedNltLease !== null ? savedNltLease : formData.monthlyLease,
+                          insuranceIncluded: modalType === 'trailers' ? false : true
+                        });
                       }
                     }}
                     className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 font-bold bg-white"
@@ -1401,8 +1578,9 @@ const FleetPage = () => {
                     <label className="block font-semibold text-slate-700 mb-1">Capacità Carico (Pallet)</label>
                     <input
                       type="number"
-                      value={formData.capacityPlt}
-                      onChange={(e) => setFormData({ ...formData, capacityPlt: parseInt(e.target.value) || 33 })}
+                      value={toNumOrEmpty(formData.capacityPlt)}
+                      onChange={(e) => setFormData({ ...formData, capacityPlt: e.target.value === '' ? '' : parseInt(e.target.value, 10) })}
+                      onBlur={() => setFormData(prev => ({ ...prev, capacityPlt: Number(prev.capacityPlt) > 0 ? Number(prev.capacityPlt) : 33 }))}
                       className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500"
                     />
                   </div>
@@ -1411,7 +1589,7 @@ const FleetPage = () => {
                 <div className={modalType === 'trailers' ? 'sm:col-span-2' : ''}>
                   <label className="block font-semibold text-slate-700 mb-1">Stato Operativo</label>
                   <select
-                    value={formData.status}
+                    value={formData.status === 'maintenance' ? 'maintenance' : 'available'}
                     onChange={(e) => setFormData({ ...formData, status: e.target.value })}
                     className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 font-bold bg-white"
                   >
@@ -1435,9 +1613,10 @@ const FleetPage = () => {
                       <input
                         type="number"
                         step="1000"
-                        value={formData.purchaseCost}
+                        value={toNumOrEmpty(formData.purchaseCost)}
                         onChange={(e) => {
-                          const val = parseFloat(e.target.value) || 0;
+                          const raw = e.target.value;
+                          const val = raw === '' ? '' : (parseFloat(raw) || 0);
                           const next = { ...formData, purchaseCost: val };
                           setFormData({ ...next, monthlyLease: calculateOwnedMonthlyCost(next) });
                         }}
@@ -1450,12 +1629,18 @@ const FleetPage = () => {
                         type="number"
                         min="2"
                         max="10"
-                        value={formData.amortizationYears}
+                        value={toNumOrEmpty(formData.amortizationYears)}
                         onChange={(e) => {
-                          const val = parseInt(e.target.value) || 5;
+                          const raw = e.target.value;
+                          const val = raw === '' ? '' : parseInt(raw, 10);
                           const next = { ...formData, amortizationYears: val };
                           setFormData({ ...next, monthlyLease: calculateOwnedMonthlyCost(next) });
                         }}
+                        onBlur={() => setFormData(prev => {
+                          const safeY = Number(prev.amortizationYears) >= 2 ? Number(prev.amortizationYears) : 5;
+                          const next = { ...prev, amortizationYears: safeY };
+                          return { ...next, monthlyLease: calculateOwnedMonthlyCost(next) };
+                        })}
                         className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg bg-white"
                       />
                     </div>
@@ -1553,7 +1738,7 @@ const FleetPage = () => {
 
               {/* Box Assicurazione Specifica & Gomme (niente doppio campo assicurazione per Proprietà) */}
               <div className="p-3.5 bg-amber-50/70 border border-amber-200 rounded-xl space-y-2.5">
-                <div className="flex items-center justify-between">
+                <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className="text-[11px] font-extrabold text-amber-950 uppercase tracking-wider flex items-center gap-1.5">
                     <Shield className="w-3.5 h-3.5 text-amber-700" />
                     <span>
@@ -1579,7 +1764,7 @@ const FleetPage = () => {
                             setFormData({
                               ...formData,
                               insuranceIncluded: inc,
-                              insuranceYearly: inc ? 0 : (formData.insuranceYearly || (modalType === 'trailers' ? 1380 : 3200))
+                              insuranceYearly: inc ? 0 : (formData.insuranceYearly || (modalType === 'trailers' ? defaultTrailerInsYearly : 3200))
                             });
                           }}
                           className="w-full px-2.5 py-1.5 border border-amber-300 rounded-lg bg-white text-xs font-bold"
@@ -1595,8 +1780,8 @@ const FleetPage = () => {
                           type="number"
                           step="60"
                           disabled={Boolean(formData.insuranceIncluded)}
-                          value={formData.insuranceIncluded ? 0 : (formData.insuranceYearly ?? 1380)}
-                          onChange={(e) => setFormData({ ...formData, insuranceYearly: parseFloat(e.target.value) || 0 })}
+                          value={formData.insuranceIncluded ? 0 : (formData.insuranceYearly ?? defaultTrailerInsYearly)}
+                          onChange={(e) => setFormData({ ...formData, insuranceYearly: e.target.value === '' ? '' : (parseFloat(e.target.value) || 0) })}
                           className={`w-full px-2.5 py-1.5 border rounded-lg text-xs font-bold ${
                             formData.insuranceIncluded
                               ? 'border-emerald-200 bg-emerald-50 text-emerald-700 cursor-not-allowed'
@@ -1604,7 +1789,7 @@ const FleetPage = () => {
                           }`}
                         />
                         {!formData.insuranceIncluded && (
-                          <span className="text-[9.5px] text-amber-800 font-semibold block mt-0.5">
+                          <span className="text-[11px] text-amber-800 font-semibold block mt-0.5">
                             +{formatEUR((Number(formData.insuranceYearly) || 0) / 12)}/m
                           </span>
                         )}
@@ -1632,8 +1817,9 @@ const FleetPage = () => {
                         step="2"
                         min="4"
                         max="12"
-                        value={formData.tireCount || 6}
-                        onChange={(e) => setFormData({ ...formData, tireCount: parseInt(e.target.value) || 6 })}
+                        value={toNumOrEmpty(formData.tireCount)}
+                        onChange={(e) => setFormData({ ...formData, tireCount: e.target.value === '' ? '' : parseInt(e.target.value, 10) })}
+                        onBlur={() => setFormData(prev => ({ ...prev, tireCount: Number(prev.tireCount) >= 4 ? Number(prev.tireCount) : 6 }))}
                         className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg bg-white text-xs font-bold"
                       />
                     </div>
@@ -1641,7 +1827,7 @@ const FleetPage = () => {
                 </div>
 
                 {formData.ownershipType !== 'proprieta' && (
-                  <div className="flex items-center justify-between text-[10px] text-slate-600 pt-1">
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-600 pt-1">
                     <span>N. Gomme considerate: <strong>{formData.tireCount || 6}</strong></span>
                     <div className="flex items-center gap-1.5">
                       <span>Modifica N. Gomme:</span>
@@ -1650,8 +1836,9 @@ const FleetPage = () => {
                         step="2"
                         min="4"
                         max="12"
-                        value={formData.tireCount || 6}
-                        onChange={(e) => setFormData({ ...formData, tireCount: parseInt(e.target.value) || 6 })}
+                        value={toNumOrEmpty(formData.tireCount)}
+                        onChange={(e) => setFormData({ ...formData, tireCount: e.target.value === '' ? '' : parseInt(e.target.value, 10) })}
+                        onBlur={() => setFormData(prev => ({ ...prev, tireCount: Number(prev.tireCount) >= 4 ? Number(prev.tireCount) : 6 }))}
                         className="w-16 px-2 py-0.5 border border-slate-300 rounded bg-white text-xs font-bold text-center"
                       />
                     </div>
@@ -1662,7 +1849,7 @@ const FleetPage = () => {
               {/* SEZIONE CONSUMI: Trattori/Motrici vs Semirimorchi Frigo */}
               {modalType === 'vehicles' ? (
                 <div className="p-3.5 bg-emerald-50/70 border border-emerald-200/80 rounded-xl space-y-2">
-                  <div className="flex items-center justify-between">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
                     <span className="text-[11px] font-bold text-emerald-950 uppercase tracking-wider flex items-center">
                       <ArrowRightLeft className="w-3.5 h-3.5 mr-1 text-emerald-700" />
                       Consumo Specifico &amp; Resa &ldquo;Al Contrario&rdquo;
@@ -1673,7 +1860,7 @@ const FleetPage = () => {
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
                       <label className="block font-semibold text-slate-700 mb-1">
-                        Consumo ({formData.fuelTypeId === 'elettrico' ? 'kWh/km' : 'kg o L / 100km'})
+                        Consumo ({getFuelUnits(formData.fuelTypeId).consUnit})
                       </label>
                       <input
                         type="number"
@@ -1692,7 +1879,7 @@ const FleetPage = () => {
 
                     <div>
                       <label className="block font-semibold text-emerald-900 mb-1">
-                        Resa &ldquo;Al Contrario&rdquo; ({formData.fuelTypeId === 'elettrico' ? 'km/kWh' : 'km con 1 kg o L'})
+                        Resa &ldquo;Al Contrario&rdquo; ({getFuelUnits(formData.fuelTypeId).yieldUnit})
                       </label>
                       <input
                         type="number"
@@ -1712,7 +1899,7 @@ const FleetPage = () => {
                 </div>
               ) : isModalTrailerFrigo ? (
                 <div className="p-3.5 bg-cyan-50/70 border border-cyan-200 rounded-xl space-y-2.5">
-                  <div className="flex items-center justify-between">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
                     <span className="text-[11px] font-extrabold text-cyan-950 uppercase tracking-wider flex items-center gap-1.5">
                       <Snowflake className="w-3.5 h-3.5 text-cyan-700" />
                       <span>Gruppo Frigorifero &amp; Consumo Orario</span>
@@ -1738,6 +1925,8 @@ const FleetPage = () => {
                             ...formData,
                             fridgeTech: nextTech,
                             fuelTypeId: nextTech,
+                            category: cfg?.catId || formData.category,
+                            categoryLabel: cfg?.catLabel || formData.categoryLabel,
                             fridgeHourlyConsumption: defHourly
                           });
                         }}
@@ -1757,8 +1946,15 @@ const FleetPage = () => {
                         type="number"
                         step="0.5"
                         min="0"
-                        value={formData.fridgeHourlyConsumption ?? 0}
-                        onChange={(e) => setFormData({ ...formData, fridgeHourlyConsumption: parseFloat(e.target.value) || 0 })}
+                        value={toNumOrEmpty(formData.fridgeHourlyConsumption)}
+                        onChange={(e) => setFormData({
+                          ...formData,
+                          fridgeHourlyConsumption: e.target.value === '' ? '' : (Number.isFinite(parseFloat(e.target.value)) ? parseFloat(e.target.value) : 0)
+                        })}
+                        onBlur={() => setFormData(prev => ({
+                          ...prev,
+                          fridgeHourlyConsumption: prev.fridgeHourlyConsumption === '' ? 0 : Math.max(0, Number(prev.fridgeHourlyConsumption) || 0)
+                        }))}
                         className="w-full px-3 py-1.5 border border-cyan-400 rounded-lg font-extrabold text-cyan-950 bg-white"
                       />
                     </div>
@@ -1771,11 +1967,12 @@ const FleetPage = () => {
                 </div>
               )}
 
-              {/* VARIAZIONE CANONE DA DATA (Collassabile, aperta solo se richiesta o già presente) */}
+              {/* VARIAZIONE CANONE DA DATA (Collassabile, nascosta per Proprietà FOUR) */}
+              {formData.ownershipType !== 'proprieta' && (
               <div className="p-3.5 bg-indigo-50/70 border border-indigo-200 rounded-xl space-y-2.5">
                 <div
                   onClick={() => setShowLeaseVariationsSection(prev => !prev)}
-                  className="flex items-center justify-between cursor-pointer"
+                  className="flex flex-wrap items-center justify-between gap-2 cursor-pointer"
                 >
                   <span className="text-[11px] font-extrabold text-indigo-950 uppercase tracking-wider flex items-center gap-1.5">
                     <Calendar className="w-3.5 h-3.5 text-indigo-700" />
@@ -1864,7 +2061,7 @@ const FleetPage = () => {
                     )}
 
                     <div className="pt-1 flex flex-wrap items-end gap-2">
-                      <div className="flex-1 min-w-[130px]">
+                      <div className="min-w-[125px]">
                         <label className="block text-[10px] font-semibold text-slate-600 mb-0.5">Data Decorrenza</label>
                         <input
                           type="date"
@@ -1873,8 +2070,8 @@ const FleetPage = () => {
                           className="w-full px-2 py-1.5 border border-slate-300 rounded-lg bg-white text-xs font-bold"
                         />
                       </div>
-                      <div className="w-28">
-                        <label className="block text-[10px] font-semibold text-slate-600 mb-0.5">Canone Prima (€/m)</label>
+                      <div className="w-24">
+                        <label className="block text-[10px] font-semibold text-slate-600 mb-0.5">Prima (€/m)</label>
                         <input
                           type="number"
                           step="50"
@@ -1883,14 +2080,24 @@ const FleetPage = () => {
                           className="w-full px-2 py-1.5 border border-slate-300 rounded-lg bg-white text-xs font-semibold"
                         />
                       </div>
-                      <div className="w-28">
-                        <label className="block text-[10px] font-semibold text-indigo-900 mb-0.5">Nuovo Canone (€/m)</label>
+                      <div className="w-24">
+                        <label className="block text-[10px] font-semibold text-indigo-900 mb-0.5">Nuovo (€/m)</label>
                         <input
                           type="number"
                           step="50"
-                          value={formData.monthlyLease}
-                          onChange={(e) => setFormData({ ...formData, monthlyLease: parseFloat(e.target.value) || 0 })}
+                          value={variationNewLease}
+                          onChange={(e) => setVariationNewLease(parseFloat(e.target.value) || 0)}
                           className="w-full px-2 py-1.5 border border-indigo-400 rounded-lg bg-white text-xs font-bold text-indigo-950"
+                        />
+                      </div>
+                      <div className="flex-1 min-w-[120px]">
+                        <label className="block text-[10px] font-semibold text-slate-600 mb-0.5">Nota</label>
+                        <input
+                          type="text"
+                          placeholder="Es. ISTAT / Rinnovo"
+                          value={newLeaseVariationNote}
+                          onChange={(e) => setNewLeaseVariationNote(e.target.value)}
+                          className="w-full px-2 py-1.5 border border-slate-300 rounded-lg bg-white text-xs"
                         />
                       </div>
                       <button
@@ -1898,7 +2105,7 @@ const FleetPage = () => {
                         onClick={() => {
                           if (!newLeaseEffectiveDate) return;
                           const prevVal = Number(variationPrevLease) || 0;
-                          const nextVal = Number(formData.monthlyLease) || 0;
+                          const nextVal = Number(variationNewLease) || 0;
                           const entry = {
                             id: 'lvar_' + Date.now(),
                             effectiveDate: newLeaseEffectiveDate,
@@ -1911,6 +2118,8 @@ const FleetPage = () => {
                             entry
                           ].sort((a, b) => String(a.effectiveDate).localeCompare(String(b.effectiveDate)));
                           setFormData({ ...formData, leaseVariations: nextList });
+                          setVariationPrevLease(nextVal);
+                          setNewLeaseVariationNote('');
                           setApplyLeaseFromEffectiveDate(false);
                         }}
                         className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-bold text-xs transition"
@@ -1921,6 +2130,7 @@ const FleetPage = () => {
                   </div>
                 )}
               </div>
+              )}
 
               <div>
                 <label className="block font-semibold text-slate-700 mb-1">Note e Allestimenti</label>

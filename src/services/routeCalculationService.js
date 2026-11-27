@@ -78,6 +78,16 @@ const haversineDistanceKm = (lat1, lon1, lat2, lon2) => {
   return R * c;
 };
 
+const fetchWithTimeout = async (url, options = {}, timeoutMs = 7000) => {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(id);
+  }
+};
+
 /**
  * Risolve un indirizzo o nome località in coordinate geografiche { lat, lon, displayName }
  * Usa Photon (OpenStreetMap) + Nominatim fallback + dizionario locale immediato
@@ -105,8 +115,8 @@ export const geocodeStopAddress = async (rawQuery) => {
 
   // 2. API pubblica Photon Komoot (OpenStreetMap) - veloce e CORS-friendly
   try {
-    const photonUrl = `https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=3&lang=it& bbox=6.5,35.4,18.6,47.2`;
-    const res = await fetch(photonUrl);
+    const photonUrl = `https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=3&lang=it&bbox=6.5,35.4,18.6,47.2`;
+    const res = await fetchWithTimeout(photonUrl);
     if (res.ok) {
       const data = await res.json();
       if (data?.features?.length > 0) {
@@ -130,7 +140,7 @@ export const geocodeStopAddress = async (rawQuery) => {
   // 3. Fallback API pubblica Nominatim OpenStreetMap
   try {
     const nomUrl = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}&countrycodes=it,ch,fr,at,de,si&limit=2`;
-    const res = await fetch(nomUrl, {
+    const res = await fetchWithTimeout(nomUrl, {
       headers: { 'Accept-Language': 'it' }
     });
     if (res.ok) {
@@ -148,9 +158,17 @@ export const geocodeStopAddress = async (rawQuery) => {
     // Passa al fallback locale
   }
 
-  // 4. Fallback parziale nel dizionario locale
+  // 4. Fallback parziale nel dizionario locale (word boundaries per sigle corte <= 3 caratteri)
   const partialHub = KNOWN_LOGISTICS_HUBS.find(
-    h => lower.includes(h.name.toLowerCase()) || h.aliases.some(a => lower.includes(a))
+    h =>
+      lower.includes(h.name.toLowerCase()) ||
+      h.aliases.some(a => {
+        if (a.length <= 3) {
+          const escaped = a.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          return new RegExp(`\\b${escaped}\\b`, 'i').test(lower);
+        }
+        return lower.includes(a);
+      })
   );
   if (partialHub) {
     return {
@@ -184,24 +202,23 @@ export const analyzeRouteOrography = async (routeCoords = [], totalDistanceKm = 
     };
   }
 
-  // Campiona fino a 30 punti equidistanti lungo la geometria del percorso
-  const maxSamples = 30;
-  const step = Math.max(1, Math.floor(routeCoords.length / maxSamples));
-  const sampled = [];
+  // Campiona fino a 45 punti equidistanti lungo la geometria del percorso garantendo sempre partenza e arrivo
+  const maxSamples = 44;
+  const step = Math.max(1, Math.ceil(routeCoords.length / maxSamples));
+  const finalSamples = [];
   for (let i = 0; i < routeCoords.length; i += step) {
-    sampled.push(routeCoords[i]);
+    finalSamples.push(routeCoords[i]);
   }
-  if (sampled[sampled.length - 1] !== routeCoords[routeCoords.length - 1]) {
-    sampled.push(routeCoords[routeCoords.length - 1]);
+  if (finalSamples[finalSamples.length - 1] !== routeCoords[routeCoords.length - 1]) {
+    finalSamples.push(routeCoords[routeCoords.length - 1]);
   }
-  const finalSamples = sampled.slice(0, 45);
 
   let elevations = [];
   try {
     const lats = finalSamples.map(c => Number(c[1]).toFixed(4)).join(',');
     const lons = finalSamples.map(c => Number(c[0]).toFixed(4)).join(',');
     const url = `https://api.open-meteo.com/v1/elevation?latitude=${lats}&longitude=${lons}`;
-    const res = await fetch(url);
+    const res = await fetchWithTimeout(url);
     if (res.ok) {
       const data = await res.json();
       if (Array.isArray(data?.elevation) && data.elevation.length > 0) {
@@ -258,9 +275,10 @@ export const analyzeRouteOrography = async (routeCoords = [], totalDistanceKm = 
   let regenerativeRecoveryPercent = 0;
 
   if (terrainType === 'pianeggiante') {
-    // Légère variazione per piccoli cavalcavia o pendenze minime
-    consumptionDeltaPercent = metersGainPerKm > 1.5 ? 2 : 0;
+    // Lieve variazione per cavalcavia o pendenze minime; BEV recupera energia in frenata
+    const grossFlat = metersGainPerKm > 1.5 ? 2 : 0;
     regenerativeRecoveryPercent = isElectric && elevationLossM > 50 ? 2 : 0;
+    consumptionDeltaPercent = Math.max(-2, grossFlat - regenerativeRecoveryPercent);
   } else if (terrainType === 'collinare') {
     const grossPenalty = isHeavyTractor ? 13 : 9;
     regenerativeRecoveryPercent = isElectric ? 5 : 0; // I veicoli elettrici recuperano ~38% dell'energia potenziale in discesa
@@ -374,7 +392,7 @@ export const calculateRouteFromStops = async (rawStops = [], options = {}) => {
   let detectedMotorways = new Set();
 
   try {
-    const res = await fetch(osrmUrl);
+    const res = await fetchWithTimeout(osrmUrl, {}, 9000);
     if (res.ok) {
       const data = await res.json();
       if (data?.routes?.length > 0) {
@@ -400,6 +418,7 @@ export const calculateRouteFromStops = async (rawStops = [], options = {}) => {
             from: fromStop?.displayName || fromStop?.address,
             to: toStop?.displayName || toStop?.address,
             clientTag: toStop?.clientTag || fromStop?.clientTag || '',
+            isReturnLeg: Boolean(toStop?.isReturnLeg),
             km: legKm,
             durationMin: legMin
           });
@@ -413,16 +432,18 @@ export const calculateRouteFromStops = async (rawStops = [], options = {}) => {
 
             totalMeters += dist;
 
-            // Riconosce codici autostradali italiani/europei (A1, A4, A14, A22, E35, E45, Raccordo...)
-            const isAutostradaRef = /\b(A\d+|E\d+|RA\d+)\b/i.test(ref);
-            const isAutostradaName = /\b(autostrad|autosole|brennero|serravalle|adriatica|cisa|tangenziale)\b/i.test(name);
+            // Riconosce autostrade a pedaggio italiane (escludendo raccordi gratuiti RA*, tangenziali gratuite, A2/A19/A29 gratuite)
+            const aMatches = ref.match(/\bA\d+\b/gi) || [];
+            const tollMotorways = aMatches.filter(code => !['A2', 'A19', 'A29'].includes(code.toUpperCase()));
+            const isFreeBypassOrRaccordo = /\bRA\d+\b/i.test(ref) || /\btangenziale\b/i.test(name);
+            const isTollAutostradaRef = tollMotorways.length > 0;
+            const isTollAutostradaName = /\b(autostrad|autosole|brennero|serravalle|adriatica|cisa|pedemontana|brebemi|teem)\b/i.test(name);
 
-            if (isAutostradaRef) {
-              const matches = ref.match(/\bA\d+\b/gi);
-              if (matches) matches.forEach(m => detectedMotorways.add(m.toUpperCase()));
+            if (tollMotorways.length > 0) {
+              tollMotorways.forEach(m => detectedMotorways.add(m.toUpperCase()));
             }
 
-            if (isAutostradaRef || isAutostradaName || (dist > 1500 && speedKmh >= 84)) {
+            if (!isFreeBypassOrRaccordo && (isTollAutostradaRef || isTollAutostradaName || (dist > 2500 && speedKmh >= 88))) {
               highwayMeters += dist;
             }
           });
