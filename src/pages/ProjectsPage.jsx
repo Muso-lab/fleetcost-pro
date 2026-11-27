@@ -5,6 +5,8 @@ import {
   formatEUR,
   formatPercent,
   calculateSingleProjectMetrics,
+  calculateAnnualBudgetAndCashFlow,
+  isProjectActiveInMonth,
   LEASE_PAYMENT_TIMINGS,
   normalizeLeaseTiming,
   recalculateProjectCost,
@@ -84,7 +86,12 @@ const ProjectsPage = () => {
   const [sortBy, setSortBy] = useState(() => localStorage.getItem('four_projects_sort_by') || 'custom');
   const [draggedProjectId, setDraggedProjectId] = useState(null);
   const [showModal, setShowModal] = useState(false);
+  const [modalTab, setModalTab] = useState('general'); // 'general' | 'costs' | 'variations' | 'terms'
+  const [modalFormError, setModalFormError] = useState('');
   const [showNextYearModal, setShowNextYearModal] = useState(false);
+  const [showToolsMenu, setShowToolsMenu] = useState(false);
+  const [budgetHorizon, setBudgetHorizon] = useState('2026'); // '2026' | '2027' | 'regime'
+  const [simulationsCount, setSimulationsCount] = useState(0);
   const [showPerItemTerms, setShowPerItemTerms] = useState(false);
   const [editingProject, setEditingProject] = useState(null);
   const [newVariationDraft, setNewVariationDraft] = useState({
@@ -175,10 +182,14 @@ const ProjectsPage = () => {
   useEffect(() => {
     loadData();
     const newFromVehicle = searchParams.get('newFromVehicle');
+    const newFromTrailer = searchParams.get('newFromTrailer');
     const openNew = searchParams.get('new');
     const editId = searchParams.get('edit');
     if (newFromVehicle) {
       handleOpenCreateWithVehicle(newFromVehicle);
+    } else if (newFromTrailer) {
+      const trl = storageService.getTrailers().find(item => item.id === newFromTrailer);
+      handleOpenModal(null, null, 'active', trl || null);
     } else if (openNew === 'true') {
       handleOpenModal(null);
     } else if (editId) {
@@ -200,10 +211,12 @@ const ProjectsPage = () => {
     const f = storageService.getFleet();
     const t = storageService.getTrailers();
     const s = storageService.getSettings();
+    const sims = storageService.getSimulations();
     setProjects(p);
     setFleet(f);
     setTrailers(t);
     setSettings(s);
+    setSimulationsCount(Array.isArray(sims) ? sims.length : 0);
   };
 
   const handleOpenCreateWithVehicle = (vehicleId) => {
@@ -252,10 +265,12 @@ const ProjectsPage = () => {
     };
   };
 
-  const handleOpenModal = (project = null, preselectedVehicle = null, defaultContractStatus = 'active') => {
+  const handleOpenModal = (project = null, preselectedVehicle = null, defaultContractStatus = 'active', preselectedTrailer = null) => {
     const curSettings = settings || storageService.getSettings();
     const curFleet = fleet.length > 0 ? fleet : storageService.getFleet();
     const curTrailers = trailers.length > 0 ? trailers : storageService.getTrailers();
+    setModalTab('general');
+    setModalFormError('');
     if (project) {
       setEditingProject(project);
       const projVeh = curFleet.find(v => v.id === project.vehicleId);
@@ -383,6 +398,12 @@ const ProjectsPage = () => {
       const washDef = curSettings?.accessoryParams?.washing || { costPerWash: 80, washesPerMonth: 2 };
       const payDef = curSettings?.paymentTermsDefaults || {};
       const gasolioRef = curSettings?.refrigerationParams?.gasolio || { unitCost: 1.80, hourlyConsumption: 3.0 };
+      const initTrailer = preselectedTrailer || null;
+      const initTrlIsFrigo = initTrailer ? isRefrigeratedTrailer(initTrailer) && initTrailer.fridgeTech !== 'nessuno' : false;
+      const initFrigoTech = initTrailer?.fridgeTech && initTrailer.fridgeTech !== 'nessuno'
+        ? initTrailer.fridgeTech
+        : (initTrailer?.category === 'refrigerato_azoto' ? 'azoto' : (initTrailer?.fuelTypeId === 'elettrico' ? 'elettrico' : 'gasolio'));
+      const initFrigoDef = curSettings?.refrigerationParams?.[initFrigoTech] || gasolioRef;
 
       const isPot = defaultContractStatus === 'potential';
       const initialProject = {
@@ -402,7 +423,7 @@ const ProjectsPage = () => {
         kmDaily: 250,
         managementType: defaultVeh?.ownershipType === 'terzi' ? 'T' : 'D',
         vehicleId: defaultVeh ? defaultVeh.id : '',
-        trailerId: '',
+        trailerId: initTrailer ? initTrailer.id : '',
         driverShiftType: defaultShift,
         driverManualOverride: false,
         driverCostDaily: calculateDriverDailyCost(defaultVeh, defaultShift, curSettings),
@@ -410,15 +431,15 @@ const ProjectsPage = () => {
         fuelCostDaily: 35,
         tollsDaily: 30,
         tiresDaily: 12,
-        refrigerationEnabled: false,
-        refrigerationTech: 'gasolio',
-        refrigerationUnitCost: gasolioRef.unitCost,
-        refrigerationHourlyConsumption: gasolioRef.hourlyConsumption,
-        refrigerationHoursDaily: 8,
+        refrigerationEnabled: initTrlIsFrigo,
+        refrigerationTech: initTrlIsFrigo ? initFrigoTech : 'gasolio',
+        refrigerationUnitCost: initTrlIsFrigo ? initFrigoDef.unitCost : gasolioRef.unitCost,
+        refrigerationHourlyConsumption: initTrlIsFrigo ? (initTrailer?.fridgeHourlyConsumption || initFrigoDef.hourlyConsumption) : gasolioRef.hourlyConsumption,
+        refrigerationHoursDaily: initTrlIsFrigo ? 8 : 0,
         refrigerationCostDaily: 0,
         telematicsEnabled: true,
         telematicsAuto: true,
-        telematicsMonthly: defaultVeh?.category === 'trattore' ? telDef.tractorMonthly : telDef.rigidMonthly,
+        telematicsMonthly: (defaultVeh?.category === 'trattore' ? telDef.tractorMonthly : telDef.rigidMonthly) + (initTrailer ? (telDef.trailerMonthly ?? 13) : 0),
         telematicsCostDaily: 0,
         washingEnabled: defaultVeh?.ownershipType !== 'terzi',
         washingUnitCost: washDef.costPerWash,
@@ -432,7 +453,7 @@ const ProjectsPage = () => {
         partnerMarginDaily: defaultVeh?.ownershipType === 'terzi' ? 600 : 0,
         porterageDaily: 0,
         vehicleLeaseDaily: defaultVeh && defaultVeh.monthlyLease ? +(defaultVeh.monthlyLease / workingDays).toFixed(2) : 208,
-        trailerLeaseDaily: 0,
+        trailerLeaseDaily: initTrailer && initTrailer.monthlyLease ? +(initTrailer.monthlyLease / workingDays).toFixed(2) : 0,
         revenueDaily: 750,
         targetMarginPercent: 21,
         contractStatus: isPot ? 'potential' : 'active',
@@ -441,7 +462,7 @@ const ProjectsPage = () => {
         paymentTermsSuppliers: payDef.suppliersPaymentTermsDays ?? 30,
         paymentTermsLease: defaultVeh?.leasePaymentTerms ?? 0,
         leasePaymentTiming: defaultVeh?.leasePaymentTiming || 'M1_D10',
-        trailerLeasePaymentTiming: defaultVeh?.leasePaymentTiming || 'M1_D30',
+        trailerLeasePaymentTiming: initTrailer ? normalizeLeaseTiming(initTrailer) : (defaultVeh?.leasePaymentTiming || 'M1_D30'),
         paymentTermsDriver: payDef.driverPaymentDayNextMonth ?? 16,
         paymentTermsFuel: payDef.fuelPaymentTermsDays ?? 30,
         paymentTermsTolls: 15,
@@ -484,11 +505,21 @@ const ProjectsPage = () => {
     const selectedTrl = trailers.find(t => t.id === tId);
     const curSettings = settings || storageService.getSettings();
     const refParams = curSettings?.refrigerationParams || {};
-    const isFrigo = isRefrigeratedTrailer(selectedTrl);
-    const tech = (selectedTrl?.category === 'refrigerato_azoto' || (selectedTrl?.tractionType || '').toLowerCase().includes('azoto'))
-      ? 'azoto'
-      : 'gasolio';
-    const techDef = refParams[tech] || (tech === 'azoto' ? { unitCost: 0.13, hourlyConsumption: 30 } : { unitCost: 1.80, hourlyConsumption: 3.0 });
+    const isFrigo = selectedTrl ? (isRefrigeratedTrailer(selectedTrl) && selectedTrl.fridgeTech !== 'nessuno') : false;
+    let tech = 'gasolio';
+    if (selectedTrl?.fridgeTech && selectedTrl.fridgeTech !== 'nessuno') {
+      tech = selectedTrl.fridgeTech;
+    } else if (selectedTrl?.category === 'refrigerato_azoto' || (selectedTrl?.tractionType || '').toLowerCase().includes('azoto')) {
+      tech = 'azoto';
+    } else if (selectedTrl?.fuelTypeId === 'elettrico' || (selectedTrl?.categoryLabel || '').toLowerCase().includes('elettric')) {
+      tech = 'elettrico';
+    }
+    const defaultsMap = {
+      azoto: { unitCost: 0.13, hourlyConsumption: 30 },
+      gasolio: { unitCost: 1.80, hourlyConsumption: 3.0 },
+      elettrico: { unitCost: 0.35, hourlyConsumption: 8.0 }
+    };
+    const techDef = refParams[tech] || defaultsMap[tech];
 
     const partial = {
       trailerId: tId,
@@ -497,7 +528,7 @@ const ProjectsPage = () => {
       refrigerationEnabled: isFrigo,
       refrigerationTech: tech,
       refrigerationUnitCost: techDef.unitCost,
-      refrigerationHourlyConsumption: techDef.hourlyConsumption,
+      refrigerationHourlyConsumption: selectedTrl?.fridgeHourlyConsumption > 0 ? Number(selectedTrl.fridgeHourlyConsumption) : techDef.hourlyConsumption,
       refrigerationHoursDaily: isFrigo ? (formData.refrigerationHoursDaily || 8) : 0
     };
     const updated = applyAutoRecalculation(partial);
@@ -517,7 +548,12 @@ const ProjectsPage = () => {
   const handleRefrigerationTechChange = (tech) => {
     const curSettings = settings || storageService.getSettings();
     const refParams = curSettings?.refrigerationParams || {};
-    const techDef = refParams[tech] || (tech === 'azoto' ? { unitCost: 0.13, hourlyConsumption: 30 } : { unitCost: 1.80, hourlyConsumption: 3.0 });
+    const defaultsMap = {
+      azoto: { unitCost: 0.13, hourlyConsumption: 30 },
+      gasolio: { unitCost: 1.80, hourlyConsumption: 3.0 },
+      elettrico: { unitCost: 0.35, hourlyConsumption: 8.0 }
+    };
+    const techDef = refParams[tech] || defaultsMap[tech] || defaultsMap.gasolio;
     const updated = applyAutoRecalculation({
       refrigerationEnabled: true,
       refrigerationTech: tech,
@@ -649,8 +685,25 @@ const ProjectsPage = () => {
 
   const handleSaveProject = (e) => {
     e.preventDefault();
-    if (!formData.name) return;
-    if (!formData.isMultiClient && !formData.client) return;
+    if (!formData.name || !formData.name.trim()) {
+      setModalTab('general');
+      setModalFormError('Inserisci il Nome / Descrizione della Linea prima di salvare.');
+      return;
+    }
+    if (!formData.isMultiClient && (!formData.client || !formData.client.trim())) {
+      setModalTab('general');
+      setModalFormError('Inserisci il nome del Cliente prima di salvare.');
+      return;
+    }
+    if (formData.isMultiClient && Array.isArray(formData.billingEntities)) {
+      const missingClient = formData.billingEntities.some(be => !be.clientName || !be.clientName.trim());
+      if (missingClient) {
+        setModalTab('general');
+        setModalFormError('Compila la Ragione Sociale di tutti i clienti configurati in Multi-Commessa.');
+        return;
+      }
+    }
+    setModalFormError('');
 
     // Ricalcola totali di competenza (supporta Multi-Commessa 1-4 clienti)
     const metrics = calculateSingleProjectMetrics(formData);
@@ -804,7 +857,11 @@ const ProjectsPage = () => {
     setProjects(updated);
   };
 
-  // Statistiche scadenze contrattuali
+  // Statistiche scadenze contrattuali & elenco contratti scaduti
+  const expiredProjects = useMemo(() => {
+    return projects.filter(p => getContractValidity(p).isExpired);
+  }, [projects]);
+
   const contractStats = useMemo(() => {
     let active = 0;
     let expiring = 0;
@@ -813,7 +870,6 @@ const ProjectsPage = () => {
       const v = getContractValidity(p);
       if (v.isExpired) expired++;
       else {
-        // Una commessa in scadenza è comunque attiva a budget fino a termine contratto
         active++;
         if (v.isExpiringSoon) expiring++;
       }
@@ -990,26 +1046,52 @@ const ProjectsPage = () => {
   }, [statusQuoProjects, simulatedPotentialProjects]);
 
   const calcPortfolioTotals = (projList) => {
-    const count = projList.length;
-    const revenueMonthly = projList.reduce((sum, p) => {
-      const m = calculateSingleProjectMetrics(p);
-      return sum + (Number(m.monthlyRevenue) || 0);
-    }, 0);
-    const costMonthly = projList.reduce((sum, p) => {
-      const m = calculateSingleProjectMetrics(p);
-      return sum + (Number(m.monthlyCost) || 0);
-    }, 0);
-    const molMonthly = revenueMonthly - costMonthly;
-    const molPercent = revenueMonthly > 0 ? (molMonthly / revenueMonthly) * 100 : 0;
-    const workingCapital = projList.reduce((sum, p) => {
-      const m = calculateSingleProjectMetrics(p);
+    const isAnnualHorizon = budgetHorizon === '2026' || budgetHorizon === '2027';
+    const horizonYear = isAnnualHorizon ? Number(budgetHorizon) : 2026;
+    const effectiveList = isAnnualHorizon
+      ? projList.filter(p => Array.from({ length: 12 }, (_, m) => isProjectActiveInMonth(p, horizonYear, m)).some(Boolean))
+      : projList;
+
+    const count = effectiveList.length;
+    let revenueMonthly = 0;
+    let revenueAnnual = 0;
+    let costMonthly = 0;
+    let costAnnual = 0;
+    let molMonthly = 0;
+    let molAnnual = 0;
+    let molPercent = 0;
+
+    if (isAnnualHorizon) {
+      const annualModel = calculateAnnualBudgetAndCashFlow(effectiveList, {
+        year: horizonYear,
+        rolloverPreviousYearBudget: horizonYear === 2027,
+        fleet
+      });
+      revenueAnnual = annualModel.annualRevenue;
+      revenueMonthly = annualModel.annualRevenue / 12;
+      costAnnual = annualModel.annualCost;
+      costMonthly = annualModel.annualCost / 12;
+      molAnnual = annualModel.annualMol;
+      molMonthly = annualModel.annualMol / 12;
+      molPercent = annualModel.annualMolPercent;
+    } else {
+      revenueMonthly = effectiveList.reduce((sum, p) => sum + (Number(calculateSingleProjectMetrics(p).monthlyRevenue) || 0), 0);
+      costMonthly = effectiveList.reduce((sum, p) => sum + (Number(calculateSingleProjectMetrics(p).monthlyCost) || 0), 0);
+      molMonthly = revenueMonthly - costMonthly;
+      molPercent = revenueMonthly > 0 ? (molMonthly / revenueMonthly) * 100 : 0;
+      revenueAnnual = revenueMonthly * 12;
+      costAnnual = costMonthly * 12;
+      molAnnual = molMonthly * 12;
+    }
+
+    const workingCapital = effectiveList.reduce((sum, p) => {
+      const m = calculateSingleProjectMetrics(p, isAnnualHorizon ? { year: horizonYear } : {});
       return sum + (m.estimatedWorkingCapitalGap || 0);
     }, 0);
     const creditLine = workingCapital > 0 ? Math.ceil((workingCapital * 1.15) / 5000) * 5000 : 15000;
 
-    // Metriche operative e di flotta aggregabili
-    const uniqueVehicleIds = new Set(projList.map(p => p.vehicleId).filter(Boolean));
-    const uniqueTrailerIds = new Set(projList.map(p => p.trailerId).filter(Boolean));
+    const uniqueVehicleIds = new Set(effectiveList.map(p => p.vehicleId).filter(Boolean));
+    const uniqueTrailerIds = new Set(effectiveList.map(p => p.trailerId).filter(Boolean));
     let electricVehiclesCount = 0;
     let biolngVehiclesCount = 0;
     uniqueVehicleIds.forEach(vId => {
@@ -1020,13 +1102,13 @@ const ProjectsPage = () => {
       }
     });
 
-    const directCount = projList.filter(p => (p.managementType || 'D') === 'D').length;
-    const thirdPartyCount = projList.filter(p => p.managementType === 'T').length;
-    const multiCommessaCount = projList.filter(p => p.isMultiClient && Array.isArray(p.billingEntities) && p.billingEntities.length > 1).length;
+    const directCount = effectiveList.filter(p => (p.managementType || 'D') === 'D').length;
+    const thirdPartyCount = effectiveList.filter(p => p.managementType === 'T').length;
+    const multiCommessaCount = effectiveList.filter(p => p.isMultiClient && Array.isArray(p.billingEntities) && p.billingEntities.length > 1).length;
 
     const clientEntitiesSet = new Set();
     let totalBillingSlices = 0;
-    projList.forEach(p => {
+    effectiveList.forEach(p => {
       if (p.isMultiClient && Array.isArray(p.billingEntities) && p.billingEntities.length > 1) {
         p.billingEntities.forEach(be => {
           totalBillingSlices++;
@@ -1038,24 +1120,25 @@ const ProjectsPage = () => {
       }
     });
 
-    const totalKmDaily = projList.reduce((sum, p) => sum + (Number(p.kmDaily) || 0), 0);
-    const totalKmMonthly = projList.reduce((sum, p) => sum + ((Number(p.kmDaily) || 0) * (Number(p.workingDaysMonth) || 22)), 0);
+    const totalKmDaily = effectiveList.reduce((sum, p) => sum + (Number(p.kmDaily) || 0), 0);
+    const totalKmMonthly = effectiveList.reduce((sum, p) => sum + ((Number(p.kmDaily) || 0) * (Number(p.workingDaysMonth) || 22)), 0);
     const avgRevenuePerKm = totalKmMonthly > 0 ? revenueMonthly / totalKmMonthly : 0;
     const avgCostPerKm = totalKmMonthly > 0 ? costMonthly / totalKmMonthly : 0;
 
-    const hubsSet = new Set(projList.map(p => {
+    const hubsSet = new Set(effectiveList.map(p => {
       const v = fleet.find(item => item.id === p.vehicleId);
       return getProjectOperatingUnit(p, v);
     }).filter(Boolean));
 
     return {
       count,
+      totalInList: projList.length,
       revenueMonthly,
-      revenueAnnual: revenueMonthly * 12,
+      revenueAnnual,
       costMonthly,
-      costAnnual: costMonthly * 12,
+      costAnnual,
       molMonthly,
-      molAnnual: molMonthly * 12,
+      molAnnual,
       molPercent,
       workingCapital,
       creditLine,
@@ -1090,10 +1173,10 @@ const ProjectsPage = () => {
     return combinedProjects; // consolidated
   }, [projects, selectedScenario, whatIfIncludedIds, statusQuoProjects, allPotentialProjects, combinedProjects]);
 
-  const scenarioTotals = useMemo(() => calcPortfolioTotals(effectiveScenarioProjects), [effectiveScenarioProjects, fleet]);
-  const statusQuoTotals = useMemo(() => calcPortfolioTotals(statusQuoProjects), [statusQuoProjects, fleet]);
-  const potentialTotals = useMemo(() => calcPortfolioTotals(simulatedPotentialProjects), [simulatedPotentialProjects, fleet]);
-  const combinedTotals = useMemo(() => calcPortfolioTotals(combinedProjects), [combinedProjects, fleet]);
+  const scenarioTotals = useMemo(() => calcPortfolioTotals(effectiveScenarioProjects), [effectiveScenarioProjects, fleet, budgetHorizon]);
+  const statusQuoTotals = useMemo(() => calcPortfolioTotals(statusQuoProjects), [statusQuoProjects, fleet, budgetHorizon]);
+  const potentialTotals = useMemo(() => calcPortfolioTotals(simulatedPotentialProjects), [simulatedPotentialProjects, fleet, budgetHorizon]);
+  const combinedTotals = useMemo(() => calcPortfolioTotals(combinedProjects), [combinedProjects, fleet, budgetHorizon]);
 
   // Calcolo differenziali delta
   const deltaRevenueMonthly = potentialTotals.revenueMonthly;
@@ -1255,7 +1338,7 @@ const ProjectsPage = () => {
 
   const activeFilteredTotals = useMemo(
     () => calcPortfolioTotals(activeFilteredScenarioProjects),
-    [activeFilteredScenarioProjects, fleet]
+    [activeFilteredScenarioProjects, fleet, budgetHorizon]
   );
 
   const hasActiveFilters = Boolean(
@@ -1276,106 +1359,159 @@ const ProjectsPage = () => {
     setOperatingUnitFilter('all');
   };
 
-  // Calcoli live per la modal
-  const liveModalMetrics = calculateSingleProjectMetrics(formData);
+  // Calcoli live per la modal (rispettano l'orizzonte temporale selezionato se annuale)
+  const liveModalMetrics = calculateSingleProjectMetrics(
+    formData,
+    budgetHorizon !== 'regime' ? { year: Number(budgetHorizon) } : {}
+  );
   const liveValidity = getContractValidity(formData);
+
+  const horizonLabel = budgetHorizon === '2026' ? 'Budget 2026' : budgetHorizon === '2027' ? 'Budget 2027' : 'Regime 12m';
 
   return (
     <div className="min-h-screen bg-slate-50 py-8 px-4 sm:px-6 lg:px-8">
-      <div className="max-w-7xl mx-auto space-y-6">
-        {/* Header Commesse & Budget con identità FOUR */}
-        <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 flex flex-col xl:flex-row xl:items-center xl:justify-between gap-4">
-          <div className="flex items-center space-x-3.5">
-            <div className="p-3 bg-[#164e87]/10 text-[#164e87] rounded-2xl border border-[#164e87]/20 flex-shrink-0">
-              <Briefcase className="w-7 h-7" />
+      <div className="max-w-7xl mx-auto space-y-5">
+        {/* Header Compatto su 1 Riga */}
+        <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+          <div className="flex items-center space-x-3">
+            <div className="p-2.5 bg-[#164e87]/10 text-[#164e87] rounded-xl border border-[#164e87]/20 flex-shrink-0">
+              <Briefcase className="w-6 h-6" />
             </div>
             <div>
-              <div className="flex items-center space-x-2">
-                <h1 className="text-2xl font-black text-slate-900 tracking-tight">Commesse &amp; Budget Progetti</h1>
-                <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-[#164e87]/10 text-[#164e87] border border-[#164e87]/20">
-                  Esercizio 2026
-                </span>
-              </div>
-              <p className="text-xs text-slate-500 mt-0.5">
-                Controllo economico delle linee operative: ricavi, costi diretti, M.O.L., termini di incasso e fabbisogno cassa
+              <h1 className="text-xl md:text-2xl font-black text-slate-900 tracking-tight whitespace-nowrap">
+                Commesse &amp; Budget Progetti
+              </h1>
+              <p className="text-xs text-slate-500">
+                Controllo economico linee operative, marginalità, termini d&apos;incasso e scenari multi-commessa
               </p>
             </div>
           </div>
 
-          {/* Action Buttons riorganizzati */}
           <div className="flex flex-wrap items-center gap-2">
+            {/* Selettore Orizzonte (Budget 2026 | Budget 2027 | Regime 12m) */}
+            <div className="inline-flex p-1 bg-slate-100 rounded-xl border border-slate-200 text-xs">
+              {[
+                { id: '2026', label: 'Budget 2026' },
+                { id: '2027', label: 'Budget 2027' },
+                { id: 'regime', label: 'Regime 12m' }
+              ].map((h) => (
+                <button
+                  key={h.id}
+                  type="button"
+                  onClick={() => setBudgetHorizon(h.id)}
+                  className={`px-2.5 py-1.5 rounded-lg font-bold transition whitespace-nowrap ${
+                    budgetHorizon === h.id
+                      ? 'bg-[#164e87] text-white shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  {h.label}
+                </button>
+              ))}
+            </div>
+
             <button
               onClick={() => handleOpenModal(null, null, 'active')}
-              className="inline-flex items-center space-x-2 bg-[#164e87] hover:bg-[#0e3a6c] text-white px-4 py-2.5 rounded-xl font-bold text-xs shadow-md shadow-blue-950/20 transition"
-              title="Aggiungi una nuova commessa operativa a budget (Status Quo)"
+              className="inline-flex items-center space-x-1.5 bg-[#164e87] hover:bg-[#0e3a6c] text-white px-3.5 py-2 rounded-xl font-bold text-xs shadow-sm transition whitespace-nowrap"
             >
               <Plus className="w-4 h-4" />
-              <span>Nuova Commessa Attiva</span>
+              <span>Nuova Commessa</span>
             </button>
 
             <button
               onClick={() => handleOpenModal(null, null, 'potential')}
-              className="inline-flex items-center space-x-2 bg-amber-500 hover:bg-amber-600 text-slate-950 px-4 py-2.5 rounded-xl font-black text-xs shadow-md transition"
-              title="Inserisci una trattativa commerciale o simulazione per testarne l'impatto sul progetto globale"
+              className="inline-flex items-center space-x-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 px-3.5 py-2 rounded-xl font-black text-xs shadow-sm transition whitespace-nowrap"
             >
-              <Sparkles className="w-4 h-4 text-slate-950" />
-              <span>+ Nuova Trattativa / Simulazione</span>
+              <Sparkles className="w-4 h-4" />
+              <span>+ Trattativa</span>
             </button>
 
-            <button
-              onClick={() => navigate('/simulation')}
-              className="inline-flex items-center space-x-2 bg-white hover:bg-slate-50 text-[#164e87] px-3.5 py-2.5 rounded-xl font-bold text-xs transition border border-[#164e87]/40 shadow-sm"
-              title="Apri il Simulatore Preventivi per calcolare costi tratta, M.O.L., markup ed esportare il PDF"
-            >
-              <Calculator className="w-4 h-4 text-cyan-600" />
-              <span>Simulatore Preventivi</span>
-            </button>
-
-            <div className="h-6 w-px bg-slate-200 hidden sm:block mx-1"></div>
-
-            <button
-              onClick={() => setShowNextYearModal(true)}
-              className="inline-flex items-center space-x-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 px-3 py-2.5 rounded-xl font-bold text-xs border border-emerald-200 transition"
-              title="Pianifica e attiva il budget per l'anno successivo 2027 dando per buoni i dati 2026"
-            >
-              <Calendar className="w-4 h-4 text-emerald-600" />
-              <span>Budget 2027 (+12m)</span>
-            </button>
-
-            <button
-              onClick={handleRenewAllTo2026}
-              className="inline-flex items-center space-x-1.5 bg-slate-50 hover:bg-slate-100 text-slate-700 px-3 py-2.5 rounded-xl font-bold text-xs border border-slate-200 transition"
-              title="Allinea o estende tutti i contratti al budget 2026 (+12 mesi se scaduti)"
-            >
-              <RotateCw className="w-4 h-4 text-slate-500" />
-              <span>Allinea a 2026</span>
-            </button>
-
-            <button
-              onClick={handleApplyStandardAccessoriesToAll}
-              className="inline-flex items-center space-x-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-800 px-3 py-2.5 rounded-xl font-bold text-xs border border-indigo-200 transition"
-              title="Attiva Telematica (14/13/12 €/m) e Lavaggi (160 €/m) sulle commesse attive"
-            >
-              <Wifi className="w-4 h-4 text-indigo-600" />
-              <span>Telematica &amp; Lavaggi</span>
-            </button>
+            {/* Dropdown Strumenti Batch */}
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setShowToolsMenu(prev => !prev)}
+                className="inline-flex items-center space-x-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 px-3 py-2 rounded-xl font-bold text-xs border border-slate-300 transition whitespace-nowrap"
+              >
+                <Sliders className="w-3.5 h-3.5 text-[#164e87]" />
+                <span>Strumenti</span>
+                <ChevronDown className="w-3.5 h-3.5" />
+              </button>
+              {showToolsMenu && (
+                <div className="absolute right-0 mt-2 w-64 bg-white rounded-2xl shadow-xl border border-slate-200 p-1.5 z-40 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowToolsMenu(false);
+                      navigate('/simulation');
+                    }}
+                    className="w-full text-left px-3 py-2 rounded-xl hover:bg-blue-50 font-bold text-[#164e87] flex items-center gap-2"
+                  >
+                    <FolderOpen className="w-4 h-4" />
+                    <span>Archivio Simulazioni ({simulationsCount})</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowToolsMenu(false);
+                      setShowNextYearModal(true);
+                    }}
+                    className="w-full text-left px-3 py-2 rounded-xl hover:bg-emerald-50 font-bold text-emerald-800 flex items-center gap-2"
+                  >
+                    <Calendar className="w-4 h-4" />
+                    <span>Estendi Contratti al 2027 (+12m)</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowToolsMenu(false);
+                      handleRenewAllTo2026();
+                    }}
+                    className="w-full text-left px-3 py-2 rounded-xl hover:bg-slate-100 font-semibold text-slate-700 flex items-center gap-2"
+                  >
+                    <RotateCw className="w-4 h-4 text-slate-500" />
+                    <span>Allinea scaduti al 2026</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowToolsMenu(false);
+                      handleApplyStandardAccessoriesToAll();
+                    }}
+                    className="w-full text-left px-3 py-2 rounded-xl hover:bg-indigo-50 font-semibold text-indigo-800 flex items-center gap-2"
+                  >
+                    <Wifi className="w-4 h-4 text-indigo-600" />
+                    <span>Applica Telematica &amp; Lavaggi</span>
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
-        {/* Banner Notifica Contratti Scaduti / Pre-2026 */}
-        {contractStats.expired > 0 && (
+        {/* Banner Notifica Contratti Scaduti (con nomi cliccabili) */}
+        {expiredProjects.length > 0 && (
           <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 shadow-sm">
-            <div className="flex items-center space-x-3">
+            <div className="flex items-start space-x-3">
               <div className="p-2 bg-amber-100 text-amber-800 rounded-xl flex-shrink-0">
                 <AlertTriangle className="w-5 h-5" />
               </div>
-              <div>
+              <div className="space-y-1">
                 <p className="text-xs font-bold text-amber-950">
-                  Attenzione: {contractStats.expired} contratti risultano scaduti o limitati all'esercizio 2025
+                  Attenzione: {expiredProjects.length === 1 ? '1 contratto risulta scaduto' : `${expiredProjects.length} contratti risultano scaduti`} rispetto al 2026
                 </p>
-                <p className="text-[11px] text-amber-800 mt-0.5">
-                  I contratti scaduti non generano ricavi nel Budget 2026. Puoi rinnovarli o allinearli tutti in blocco con un clic per visualizzare il budget a regime completo.
-                </p>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {expiredProjects.map(ep => (
+                    <button
+                      key={ep.id}
+                      type="button"
+                      onClick={() => handleOpenModal(ep)}
+                      className="px-2 py-0.5 rounded-lg bg-white hover:bg-amber-100 text-amber-950 border border-amber-300 font-bold text-[11px] transition"
+                    >
+                      {ep.name} ({getContractValidity(ep).formattedEnd}) ✎
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
             <button
@@ -1383,14 +1519,14 @@ const ProjectsPage = () => {
               className="inline-flex items-center space-x-2 bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded-xl font-bold text-xs shadow-sm transition whitespace-nowrap self-start sm:self-center"
             >
               <RotateCw className="w-4 h-4" />
-              <span>Rinnova tutti per il 2026 (+12 Mesi)</span>
+              <span>Rinnova tutti per il 2026</span>
             </button>
           </div>
         )}
 
-        {/* CRUSCOTTO STRATEGICO DI PORTAFOGLIO (SEMPRE VISIBILE COME RICHIESTO) */}
-        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden transition-all">
-          <div className="p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 bg-gradient-to-r from-slate-50 to-blue-50/40 border-b border-slate-200">
+        {/* CRUSCOTTO STRATEGICO DI PORTAFOGLIO UNIFICATO + STRIP KPI SUI FILTRI ATTIVI */}
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+          <div className="p-4 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3 bg-gradient-to-r from-slate-50 to-blue-50/40 border-b border-slate-200">
             <div className="flex items-center space-x-3">
               <span className="p-2 bg-[#164e87]/10 text-[#164e87] rounded-xl border border-[#164e87]/20 flex-shrink-0">
                 <Layers className="w-5 h-5" />
@@ -1398,27 +1534,37 @@ const ProjectsPage = () => {
               <div>
                 <div className="flex items-center space-x-2 flex-wrap">
                   <h3 className="text-sm font-black text-slate-900 tracking-tight">
-                    Visione Strategica di Portafoglio (Sempre Visibile)
+                    Visione Strategica di Portafoglio • {horizonLabel}
                   </h3>
                   <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-cyan-50 text-[#164e87] border border-cyan-200">
-                    Status Quo vs Trattative &amp; Simulazioni
+                    {statusQuoProjects.length} Attivi + {allPotentialProjects.length} Trattative{expiredProjects.length > 0 ? ` (+${expiredProjects.length} scaduto)` : ''} = {projects.length}
                   </span>
                 </div>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  Confronto economico, finanziario e di flotta tra commesse operative ({statusQuoTotals.count}) e pipeline di trattative simulate (+{simulatedPotentialProjects.length}/{allPotentialProjects.length}).
+                  Clicca su una card per filtrare lo scenario • What-If attivo: {simulatedPotentialProjects.length}/{allPotentialProjects.length} trattative incluse
                 </p>
               </div>
             </div>
 
-            <div className="flex items-center space-x-2 self-start sm:self-center flex-wrap gap-y-1">
-              <button
-                type="button"
-                onClick={() => navigate('/simulation')}
-                className="px-3 py-1.5 bg-white hover:bg-blue-50 text-[#164e87] font-bold text-xs rounded-xl transition border border-blue-300 shadow-2xs whitespace-nowrap flex items-center space-x-1.5"
-              >
-                <FolderOpen className="w-3.5 h-3.5 text-[#164e87]" />
-                <span>Archivio Simulazioni ({storageService.getSimulations().length})</span>
-              </button>
+            <div className="flex items-center flex-wrap gap-2">
+              {allPotentialProjects.length > 0 && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setWhatIfIncludedIds(new Set(allPotentialProjects.map(p => p.id)))}
+                    className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 text-[11px] font-bold rounded-xl border border-slate-300 transition whitespace-nowrap"
+                  >
+                    Simula Tutte ({allPotentialProjects.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setWhatIfIncludedIds(new Set())}
+                    className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-bold rounded-xl border border-slate-300 transition whitespace-nowrap"
+                  >
+                    Escludi Trattative
+                  </button>
+                </>
+              )}
               <button
                 type="button"
                 onClick={() => setShowScenarioSaveBox(!showScenarioSaveBox)}
@@ -1430,18 +1576,18 @@ const ProjectsPage = () => {
                 type="button"
                 onClick={() => setShowProjectsDetailList(!showProjectsDetailList)}
                 className={`inline-flex items-center space-x-1.5 px-3.5 py-1.5 rounded-xl text-xs font-black transition border whitespace-nowrap ${
-                  showProjectsDetailList
+                  (showProjectsDetailList || hasActiveFilters)
                     ? 'bg-slate-800 text-white border-slate-900'
                     : 'bg-[#164e87] hover:bg-[#0e3a6c] text-white border-[#164e87]'
                 }`}
               >
                 <Eye className="w-3.5 h-3.5" />
-                <span>{showProjectsDetailList ? 'Chiudi Dettaglio Commesse' : `Apri Dettaglio Commesse (${displayProjects.length})`}</span>
+                <span>{(showProjectsDetailList || hasActiveFilters) ? 'Chiudi Dettaglio Commesse' : `Apri Dettaglio Commesse (${displayProjects.length})`}</span>
+                {(showProjectsDetailList || hasActiveFilters) ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
               </button>
             </div>
           </div>
 
-          {/* Form Salvataggio / Caricamento Scenari se aperto */}
           {showScenarioSaveBox && (
             <div className="p-3 mx-4 mt-3 bg-slate-50 rounded-xl border border-slate-200 flex flex-wrap items-center gap-2 text-xs">
               <input
@@ -1476,11 +1622,18 @@ const ProjectsPage = () => {
             </div>
           )}
 
-          {/* Sezione Sempre Visibile: Le 3 Colonne a Confronto con tutti i dati strategici e di flotta */}
+          {/* 3 Card Strategiche Cliccabili */}
           <div className="p-5 bg-slate-50/60 space-y-4">
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-              {/* 1. STATUS QUO (Contratti Attivi) */}
-              <div className="bg-white rounded-xl p-4 border border-emerald-300 shadow-xs flex flex-col justify-between">
+              {/* 1. STATUS QUO */}
+              <div
+                onClick={() => handleSelectScenario('active2026')}
+                className={`bg-white rounded-xl p-4 border cursor-pointer transition flex flex-col justify-between ${
+                  selectedScenario === 'active2026'
+                    ? 'border-emerald-600 ring-2 ring-emerald-500/30 shadow-md'
+                    : 'border-emerald-300 hover:border-emerald-500 shadow-xs'
+                }`}
+              >
                 <div>
                   <div className="flex items-center justify-between mb-2">
                     <div className="flex items-center space-x-1.5">
@@ -1506,7 +1659,7 @@ const ProjectsPage = () => {
 
                 <div className="mt-3 pt-2.5 border-t border-slate-100 space-y-1.5 text-xs">
                   <div className="flex justify-between items-center">
-                    <span className="text-slate-500">Fatturato (Mese / Anno):</span>
+                    <span className="text-slate-500">Fatturato ({horizonLabel}):</span>
                     <span className="font-bold text-slate-800">{formatEUR(statusQuoTotals.revenueMonthly)}/m • <strong className="text-[#164e87]">{formatEUR(statusQuoTotals.revenueAnnual)}/a</strong></span>
                   </div>
                   <div className="flex justify-between items-center">
@@ -1518,14 +1671,21 @@ const ProjectsPage = () => {
                     <span className="font-black text-emerald-700">{formatEUR(statusQuoTotals.molMonthly)}/m ({formatPercent(statusQuoTotals.molPercent)})</span>
                   </div>
                   <div className="flex justify-between items-center">
-                    <span className="text-slate-500">Circolante Cassa:</span>
+                    <span className="text-slate-500">Circolante (Gap Cassa):</span>
                     <span className="font-bold text-amber-700">{formatEUR(statusQuoTotals.workingCapital)}</span>
                   </div>
                 </div>
               </div>
 
-              {/* 2. PIPELINE TRATTATIVE */}
-              <div className="bg-white rounded-xl p-4 border border-amber-300 shadow-xs flex flex-col justify-between">
+              {/* 2. TRATTATIVE & WHAT-IF */}
+              <div
+                onClick={() => handleSelectScenario('futureOnly')}
+                className={`bg-white rounded-xl p-4 border cursor-pointer transition flex flex-col justify-between ${
+                  selectedScenario === 'futureOnly'
+                    ? 'border-amber-600 ring-2 ring-amber-500/30 shadow-md'
+                    : 'border-amber-300 hover:border-amber-500 shadow-xs'
+                }`}
+              >
                 <div>
                   <div className="flex items-center justify-between mb-2">
                     <div className="flex items-center space-x-1.5">
@@ -1540,8 +1700,8 @@ const ProjectsPage = () => {
                   </div>
                   <div className="flex items-baseline justify-between">
                     <div className="flex items-baseline space-x-2">
-                      <span className="text-2xl font-black text-slate-900">+{simulatedPotentialProjects.length}</span>
-                      <span className="text-xs text-slate-500 font-medium">simulate ({allPotentialProjects.length} in pipeline)</span>
+                      <span className="text-2xl font-black text-slate-900">+{potentialTotals.count}</span>
+                      <span className="text-xs text-slate-500 font-medium">attive in {horizonLabel} ({allPotentialProjects.length} in pipeline)</span>
                     </div>
                     <span className="text-[11px] font-bold text-amber-900 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
                       🚛 {potentialTotals.vehiclesUsedCount} Mezzi
@@ -1551,32 +1711,39 @@ const ProjectsPage = () => {
 
                 <div className="mt-3 pt-2.5 border-t border-slate-100 space-y-1.5 text-xs">
                   <div className="flex justify-between items-center">
-                    <span className="text-slate-500">Delta Fatturato:</span>
-                    <span className="font-bold text-[#164e87]">+{formatEUR(deltaRevenueMonthly)}/m • +{formatEUR(deltaRevenueMonthly * 12)}/a</span>
+                    <span className="text-slate-500">Delta Fatturato ({horizonLabel}):</span>
+                    <span className="font-bold text-[#164e87]">+{formatEUR(potentialTotals.revenueMonthly)}/m • +{formatEUR(potentialTotals.revenueAnnual)}/a</span>
                   </div>
                   <div className="flex justify-between items-center">
                     <span className="text-slate-500">Delta Costi:</span>
-                    <span className="font-medium text-slate-700">+{formatEUR(deltaCostMonthly)}/m • +{formatEUR(deltaCostMonthly * 12)}/a</span>
+                    <span className="font-medium text-slate-700">+{formatEUR(potentialTotals.costMonthly)}/m • +{formatEUR(potentialTotals.costAnnual)}/a</span>
                   </div>
                   <div className="flex justify-between items-center pt-1 border-t border-slate-100">
                     <span className="text-amber-800 font-bold">Delta M.O.L. Atteso:</span>
-                    <span className="font-black text-amber-800">+{formatEUR(deltaMolMonthly)}/m ({formatPercent(potentialTotals.molPercent)})</span>
+                    <span className="font-black text-amber-800">+{formatEUR(potentialTotals.molMonthly)}/m ({formatPercent(potentialTotals.molPercent)})</span>
                   </div>
                   <div className="flex justify-between items-center">
-                    <span className="text-slate-500">Fabbisogno Extra:</span>
-                    <span className="font-bold text-amber-700">+{formatEUR(deltaWorkingCapital)}</span>
+                    <span className="text-slate-500">Circolante Extra (Gap Cassa):</span>
+                    <span className="font-bold text-amber-700">+{formatEUR(potentialTotals.workingCapital)}</span>
                   </div>
                 </div>
               </div>
 
-              {/* 3. SCENARIO A REGIME COMBINATO */}
-              <div className="bg-gradient-to-br from-blue-50/80 to-slate-50 rounded-xl p-4 border border-blue-300 shadow-xs flex flex-col justify-between">
+              {/* 3. SCENARIO GLOBALE CONSOLIDATO */}
+              <div
+                onClick={() => handleSelectScenario('consolidated')}
+                className={`bg-gradient-to-br from-blue-50/80 to-slate-50 rounded-xl p-4 border cursor-pointer transition flex flex-col justify-between ${
+                  selectedScenario === 'consolidated' || selectedScenario === 'whatIf'
+                    ? 'border-[#164e87] ring-2 ring-[#164e87]/30 shadow-md'
+                    : 'border-blue-300 hover:border-[#164e87] shadow-xs'
+                }`}
+              >
                 <div>
                   <div className="flex items-center justify-between mb-2">
                     <div className="flex items-center space-x-1.5">
                       <TrendingUp className="w-3.5 h-3.5 text-[#164e87]" />
                       <h4 className="text-xs font-black text-[#164e87] uppercase tracking-wider">
-                        Scenario Globale a Regime
+                        Scenario Globale Consolidato
                       </h4>
                     </div>
                     <span className="text-[10px] font-black bg-[#164e87]/15 text-[#164e87] px-2 py-0.5 rounded-full border border-blue-300">
@@ -1596,7 +1763,7 @@ const ProjectsPage = () => {
 
                 <div className="mt-3 pt-2.5 border-t border-blue-200/60 space-y-1.5 text-xs">
                   <div className="flex justify-between items-center">
-                    <span className="text-slate-600">Fatturato Complessivo:</span>
+                    <span className="text-slate-600">Fatturato ({horizonLabel}):</span>
                     <span className="font-black text-slate-900">{formatEUR(combinedTotals.revenueMonthly)}/m • <strong className="text-[#164e87]">{formatEUR(combinedTotals.revenueAnnual)}/a</strong></span>
                   </div>
                   <div className="flex justify-between items-center">
@@ -1608,8 +1775,91 @@ const ProjectsPage = () => {
                     <span className="font-black text-emerald-700">{formatEUR(combinedTotals.molMonthly)}/m ({formatPercent(combinedTotals.molPercent)})</span>
                   </div>
                   <div className="flex justify-between items-center">
-                    <span className="text-slate-600">Picco Fabbisogno:</span>
+                    <span className="text-slate-600">Circolante (Gap Cassa):</span>
                     <span className="font-black text-amber-700">{formatEUR(combinedTotals.workingCapital)}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Strip Unica Indicatori Aggregati sullo Scenario & Filtri Attivi */}
+            <div className="pt-3 border-t border-slate-200/80 space-y-2">
+              <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                <span className="font-bold text-slate-600 uppercase tracking-wider">
+                  Sintesi Scenario Attivo ({selectedScenario === 'active2026' ? 'Solo Status Quo' : selectedScenario === 'futureOnly' ? 'Solo Trattative' : 'Consolidato What-If'} • {horizonLabel})
+                </span>
+                {hasActiveFilters && (
+                  <span className="px-2 py-0.5 rounded-full font-black bg-blue-100 text-[#164e87] border border-blue-300 text-[10px]">
+                    ⚡ Filtrato su {activeFilteredTotals.count} commesse
+                  </span>
+                )}
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 text-xs">
+                <div className="bg-white px-3 py-2 rounded-xl border border-blue-200/80">
+                  <div className="flex items-center justify-between text-[10px] font-bold text-slate-500 uppercase">
+                    <span>Fatturato</span>
+                    <span className="text-[#164e87] font-black">{formatEUR(activeFilteredTotals.avgRevenuePerKm)}/km</span>
+                  </div>
+                  <div className="font-black text-[#164e87] text-sm mt-0.5">{formatEUR(activeFilteredTotals.revenueMonthly)}<span className="text-[10px] font-semibold">/m</span></div>
+                  <div className="text-[10px] text-slate-500">Annuo: <strong>{formatEUR(activeFilteredTotals.revenueAnnual)}</strong></div>
+                </div>
+
+                <div className="bg-white px-3 py-2 rounded-xl border border-slate-200">
+                  <div className="flex items-center justify-between text-[10px] font-bold text-slate-500 uppercase">
+                    <span>Costi Totali</span>
+                    <span className="text-slate-700 font-bold">{formatEUR(activeFilteredTotals.avgCostPerKm)}/km</span>
+                  </div>
+                  <div className="font-black text-slate-800 text-sm mt-0.5">{formatEUR(activeFilteredTotals.costMonthly)}<span className="text-[10px] font-semibold">/m</span></div>
+                  <div className="text-[10px] text-slate-500">Annuo: <strong>{formatEUR(activeFilteredTotals.costAnnual)}</strong></div>
+                </div>
+
+                <div className="bg-white px-3 py-2 rounded-xl border border-emerald-200/80">
+                  <div className="flex items-center justify-between text-[10px] font-bold text-emerald-800 uppercase">
+                    <span>M.O.L.</span>
+                    <span className={`px-1.5 rounded font-black ${
+                      activeFilteredTotals.molPercent >= 15 ? 'bg-emerald-100 text-emerald-900' : activeFilteredTotals.molPercent >= 0 ? 'bg-amber-100 text-amber-900' : 'bg-rose-100 text-rose-900'
+                    }`}>{formatPercent(activeFilteredTotals.molPercent)}</span>
+                  </div>
+                  <div className={`font-black text-sm mt-0.5 ${activeFilteredTotals.molMonthly >= 0 ? 'text-emerald-700' : 'text-rose-600'}`}>{formatEUR(activeFilteredTotals.molMonthly)}<span className="text-[10px] font-semibold">/m</span></div>
+                  <div className="text-[10px] text-slate-500">Annuo: <strong>{formatEUR(activeFilteredTotals.molAnnual)}</strong></div>
+                </div>
+
+                <div className="bg-white px-3 py-2 rounded-xl border border-amber-200/80">
+                  <div className="flex items-center justify-between text-[10px] font-bold text-amber-900 uppercase">
+                    <span>Circolante</span>
+                    <Clock className="w-3 h-3 text-amber-700" />
+                  </div>
+                  <div className="font-black text-amber-800 text-sm mt-0.5">{formatEUR(activeFilteredTotals.workingCapital)}</div>
+                  <div className="text-[10px] text-amber-900/80">Fido cons.: <strong>{formatEUR(activeFilteredTotals.creditLine)}</strong></div>
+                </div>
+
+                <div className="bg-white px-3 py-2 rounded-xl border border-indigo-200/80">
+                  <div className="flex items-center justify-between text-[10px] font-bold text-indigo-900 uppercase">
+                    <span>Flotta</span>
+                    <Truck className="w-3 h-3 text-indigo-700" />
+                  </div>
+                  <div className="font-black text-indigo-950 text-sm mt-0.5">
+                    {activeFilteredTotals.vehiclesUsedCount} <span className="text-[10px] font-semibold text-slate-500">/ {fleet.length} Mezzi</span>
+                    {activeFilteredTotals.trailersUsedCount > 0 && <span className="text-[10px] font-bold text-indigo-700"> • {activeFilteredTotals.trailersUsedCount} Rim.</span>}
+                  </div>
+                  <div className="text-[10px] text-slate-600 flex justify-between">
+                    <span>⚡{activeFilteredTotals.electricVehiclesCount} BEV • 🔥{activeFilteredTotals.biolngVehiclesCount} LNG</span>
+                    <span className="font-bold text-indigo-800">{activeFilteredTotals.directCount}D/{activeFilteredTotals.thirdPartyCount}T</span>
+                  </div>
+                </div>
+
+                <div className="bg-white px-3 py-2 rounded-xl border border-slate-200">
+                  <div className="flex items-center justify-between text-[10px] font-bold text-slate-500 uppercase">
+                    <span>Volumi &amp; Poli</span>
+                    <span className="text-[#164e87] font-black">{activeFilteredTotals.activeHubsCount} Poli</span>
+                  </div>
+                  <div className="font-black text-slate-900 text-sm mt-0.5">
+                    {activeFilteredTotals.count} <span className="text-[10px] font-semibold text-slate-500">Linee</span> • {activeFilteredTotals.uniqueClientsCount} <span className="text-[10px] font-semibold text-slate-500">Clienti</span>
+                  </div>
+                  <div className="text-[10px] text-slate-500 flex justify-between">
+                    <span>{activeFilteredTotals.totalKmDaily.toLocaleString('it-IT')} km/gg</span>
+                    {activeFilteredTotals.multiCommessaCount > 0 ? <span className="text-[#164e87] font-bold">{activeFilteredTotals.multiCommessaCount} Multi</span> : <span>{(activeFilteredTotals.totalKmMonthly / 1000).toFixed(1)}k km/m</span>}
                   </div>
                 </div>
               </div>
@@ -1617,322 +1867,107 @@ const ProjectsPage = () => {
           </div>
         </div>
 
-        {/* Filter Controls con design moderno */}
-        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-4">
-          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-            <div className="relative flex-1 max-w-md">
+        {/* Barra Filtri Pulita & Ricerca Largo Respiro */}
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-4 space-y-3">
+          <div className="flex flex-wrap items-center gap-2.5">
+            <div className="relative min-w-[240px] flex-1">
               <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
               <input
                 type="text"
                 placeholder="Cerca per codice, linea, cliente o tratta..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full pl-10 pr-4 py-2 text-xs font-medium rounded-xl border border-slate-300 bg-slate-50/50 focus:bg-white focus:ring-2 focus:ring-[#164e87] focus:border-[#164e87] outline-none transition"
+                className="w-full pl-10 pr-4 py-2 text-xs font-medium rounded-xl border border-slate-300 bg-slate-50/50 focus:bg-white focus:ring-2 focus:ring-[#164e87] outline-none transition"
               />
             </div>
 
-            <div className="flex flex-wrap items-center gap-2">
-              <select
-                value={clientFilter}
-                onChange={(e) => setClientFilter(e.target.value)}
-                className="text-xs font-semibold py-2 px-3 rounded-xl border border-slate-300 bg-white text-slate-700 focus:ring-2 focus:ring-[#164e87] outline-none cursor-pointer"
-              >
-                <option value="all">Tutti i Clienti ({uniqueClients.length})</option>
-                {uniqueClients.map(c => (
-                  <option key={c} value={c}>{c}</option>
-                ))}
-              </select>
+            <select
+              value={clientFilter}
+              onChange={(e) => setClientFilter(e.target.value)}
+              className="text-xs font-semibold py-2 px-3 rounded-xl border border-slate-300 bg-white text-slate-700 outline-none cursor-pointer"
+            >
+              <option value="all">Tutti i Clienti ({uniqueClients.length})</option>
+              {uniqueClients.map(c => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
 
-              <select
-                value={managementFilter}
-                onChange={(e) => setManagementFilter(e.target.value)}
-                className="text-xs font-semibold py-2 px-3 rounded-xl border border-slate-300 bg-white text-slate-700 focus:ring-2 focus:ring-[#164e87] outline-none cursor-pointer"
-              >
-                <option value="all">Tutte le Gestioni (D / T)</option>
-                <option value="D">Gestione Diretta (D)</option>
-                <option value="T">Gestione Terzi (T)</option>
-              </select>
+            <select
+              value={managementFilter}
+              onChange={(e) => setManagementFilter(e.target.value)}
+              className="text-xs font-semibold py-2 px-3 rounded-xl border border-slate-300 bg-white text-slate-700 outline-none cursor-pointer"
+            >
+              <option value="all">Tutte le Gestioni (D / T)</option>
+              <option value="D">Gestione Diretta (D)</option>
+              <option value="T">Gestione Terzi (T)</option>
+            </select>
 
-              <select
-                value={marginFilter}
-                onChange={(e) => setMarginFilter(e.target.value)}
-                className="text-xs font-semibold py-2 px-3 rounded-xl border border-slate-300 bg-white text-slate-700 focus:ring-2 focus:ring-[#164e87] outline-none cursor-pointer"
-              >
-                <option value="all">Tutti i Margini</option>
-                <option value="positive">🟢 Margine Sano (≥ 15%)</option>
-                <option value="low">🟡 Margine Basso (&lt; 15%)</option>
-                <option value="negative">🔴 Margine Negativo (In Perdita)</option>
-              </select>
+            <select
+              value={marginFilter}
+              onChange={(e) => setMarginFilter(e.target.value)}
+              className="text-xs font-semibold py-2 px-3 rounded-xl border border-slate-300 bg-white text-slate-700 outline-none cursor-pointer"
+            >
+              <option value="all">Tutti i Margini</option>
+              <option value="positive">🟢 Margine Sano (≥ 15%)</option>
+              <option value="low">🟡 Margine Basso (&lt; 15%)</option>
+              <option value="negative">🔴 Margine Negativo</option>
+            </select>
 
-              <select
-                value={contractFilter}
-                onChange={(e) => setContractFilter(e.target.value)}
-                className="text-xs font-semibold py-2 px-3 rounded-xl border border-slate-300 bg-white text-slate-700 focus:ring-2 focus:ring-[#164e87] outline-none cursor-pointer"
-              >
-                <option value="all">Tutti i Contratti ({projects.length})</option>
-                <option value="active2026">🟢 Attivi nel 2026 ({contractStats.active})</option>
-                <option value="expiring">🟡 In Scadenza (≤ 60gg) ({contractStats.expiring})</option>
-                <option value="expired">🔴 Scaduti (&lt; 2026) ({contractStats.expired})</option>
-              </select>
+            <select
+              value={contractFilter}
+              onChange={(e) => setContractFilter(e.target.value)}
+              className="text-xs font-semibold py-2 px-3 rounded-xl border border-slate-300 bg-white text-slate-700 outline-none cursor-pointer"
+            >
+              <option value="all">Tutti i Contratti ({projects.length})</option>
+              <option value="active2026">🟢 Attivi nel 2026 ({contractStats.active})</option>
+              <option value="expiring">🟡 In Scadenza (≤ 60gg) ({contractStats.expiring})</option>
+              <option value="expired">🔴 Scaduti (&lt; 2026) ({contractStats.expired})</option>
+            </select>
 
-              <select
-                value={operatingUnitFilter}
-                onChange={(e) => setOperatingUnitFilter(e.target.value)}
-                className="text-xs font-semibold py-2 px-3 rounded-xl border border-slate-300 bg-white text-slate-700 focus:ring-2 focus:ring-[#164e87] outline-none cursor-pointer"
-              >
-                <option value="all">Tutti i Poli / Unità</option>
-                {OPERATING_UNITS.map(hub => (
-                  <option key={hub} value={hub}>📍 Polo {hub}</option>
-                ))}
-              </select>
+            <select
+              value={operatingUnitFilter}
+              onChange={(e) => setOperatingUnitFilter(e.target.value)}
+              className="text-xs font-semibold py-2 px-3 rounded-xl border border-slate-300 bg-white text-slate-700 outline-none cursor-pointer"
+            >
+              <option value="all">Tutti i Poli / Unità</option>
+              {OPERATING_UNITS.map(hub => (
+                <option key={hub} value={hub}>📍 Polo {hub}</option>
+              ))}
+            </select>
 
-              <div className="flex items-center space-x-1">
-                <ArrowUpDown className="w-3.5 h-3.5 text-[#164e87]" />
-                <select
-                  value={sortBy}
-                  onChange={(e) => {
-                    setSortBy(e.target.value);
-                    localStorage.setItem('four_projects_sort_by', e.target.value);
-                  }}
-                  className="text-xs font-bold py-2 px-3 rounded-xl border border-blue-300 bg-blue-50/60 text-[#164e87] focus:ring-2 focus:ring-[#164e87] outline-none cursor-pointer"
-                  title="Ordinamento delle commesse"
-                >
-                  <option value="custom">⇅ Ordine Manuale (Drag &amp; Drop)</option>
-                  <option value="operatingUnit">📍 Raggruppa per Unità Operativa (Arborio, Buccinasco...)</option>
-                  <option value="client">🏢 Ordina per Cliente (A-Z)</option>
-                  <option value="molDesc">💰 M.O.L. Mensile (dal più alto)</option>
-                  <option value="revenueDesc">📈 Fatturato (dal più alto)</option>
-                  <option value="marginDesc">🎯 Margine % (dal più alto)</option>
-                </select>
-              </div>
+            <div className="flex items-center space-x-1">
+              <ArrowUpDown className="w-3.5 h-3.5 text-[#164e87]" />
+              <select
+                value={sortBy}
+                onChange={(e) => {
+                  setSortBy(e.target.value);
+                  localStorage.setItem('four_projects_sort_by', e.target.value);
+                }}
+                className="text-xs font-bold py-2 px-3 rounded-xl border border-blue-300 bg-blue-50/60 text-[#164e87] outline-none cursor-pointer"
+              >
+                <option value="custom">⇅ Ordine Manuale (Drag &amp; Drop)</option>
+                <option value="operatingUnit">📍 Raggruppa per Polo</option>
+                <option value="client">🏢 Cliente (A-Z)</option>
+                <option value="molDesc">💰 M.O.L. Mensile (↓)</option>
+                <option value="revenueDesc">📈 Fatturato (↓)</option>
+                <option value="marginDesc">🎯 Margine % (↓)</option>
+              </select>
             </div>
-          </div>
-        </div>
 
-        {/* Helper di Usabilità per l'utente */}
-        <div className="flex flex-wrap items-center justify-between px-1 text-xs text-slate-500 gap-2">
-          <div className="flex items-center space-x-1.5 font-medium">
-            <span className="text-blue-600 font-bold">💡 Gestione rapida:</span>
-            <span>Clicca su qualsiasi riga o sul pulsante <strong>Modifica</strong> per cambiare mezzo, parametri o configurare una <strong>Multi-Commessa (1-4 Clienti)</strong>.</span>
-          </div>
-          <div className="flex items-center space-x-2">
             {hasActiveFilters && (
               <button
                 type="button"
                 onClick={handleResetFilters}
-                className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100 transition"
+                className="px-3 py-2 rounded-xl text-xs font-bold bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100 transition whitespace-nowrap"
               >
-                ✕ Reset Filtri Attivi
+                ✕ Reset Filtri
               </button>
             )}
-            <span className="font-bold text-slate-700">
-              {displayProjects.length} commesse visualizzate ({activeFilteredTotals.totalBillingSlices} entità fatturate)
-            </span>
           </div>
         </div>
 
-        {/* BARRA STICKY DI CONTROLLO SCENARI & KPI AGGREGATI LEGATI AI FILTRI ATTIVATI */}
-        <div className="sticky top-16 z-30 bg-white/95 backdrop-blur-md shadow-md border border-slate-200/90 rounded-2xl p-3 transition-all text-slate-800 space-y-2.5">
-          {/* Riga Superiore: Selettori Scenario, What-If e Azioni Rapide */}
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            {/* Selettore Vista Scenario */}
-            <div className="flex items-center space-x-1.5 flex-wrap gap-y-1">
-              <span className="text-slate-500 text-xs font-bold mr-1 hidden sm:inline">Scenario:</span>
-              <div className="inline-flex rounded-xl bg-slate-100 p-1 border border-slate-200 text-xs flex-shrink-0">
-                <button
-                  type="button"
-                  onClick={() => setSelectedScenario('consolidated')}
-                  className={`px-3 py-1.5 rounded-lg font-bold text-xs transition ${
-                    selectedScenario === 'consolidated' || selectedScenario === 'whatIf'
-                      ? 'bg-white text-[#164e87] shadow-sm font-black'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  🌐 Tutto ({projects.length})
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSelectedScenario('active2026')}
-                  className={`px-3 py-1.5 rounded-lg font-bold text-xs transition ${
-                    selectedScenario === 'active2026'
-                      ? 'bg-emerald-600 text-white shadow-sm font-black'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  🏢 Status Quo ({statusQuoProjects.length})
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSelectedScenario('futureOnly')}
-                  className={`px-3 py-1.5 rounded-lg font-bold text-xs transition ${
-                    selectedScenario === 'futureOnly'
-                      ? 'bg-amber-500 text-slate-950 font-black shadow-sm'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  ⚡ Trattative ({allPotentialProjects.length})
-                </button>
-              </div>
-
-              {/* Bottoni What-If rapidi */}
-              {allPotentialProjects.length > 0 && (
-                <div className="flex items-center space-x-1 pl-1">
-                  <button
-                    type="button"
-                    onClick={() => setWhatIfIncludedIds(new Set(allPotentialProjects.map(p => p.id)))}
-                    className="px-2.5 py-1.5 bg-[#164e87] hover:bg-[#0e3a6c] text-white text-[11px] font-bold rounded-xl transition shadow-xs"
-                    title="Includi tutte le trattative nella simulazione"
-                  >
-                    Simula Tutte ({allPotentialProjects.length})
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setWhatIfIncludedIds(new Set())}
-                    className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-bold rounded-xl transition border border-slate-300"
-                    title="Escludi le trattative per vedere solo lo Status Quo base"
-                  >
-                    Escludi Trattative
-                  </button>
-                  <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-amber-100 text-amber-900 border border-amber-300 hidden md:inline">
-                    {simulatedPotentialProjects.length}/{allPotentialProjects.length} attive
-                  </span>
-                </div>
-              )}
-
-              {hasActiveFilters && (
-                <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-blue-100 text-[#164e87] border border-blue-300">
-                  ⚡ Valori calcolati sui filtri attivi ({activeFilteredTotals.count} commesse)
-                </span>
-              )}
-            </div>
-
-            {/* Bottoni Creazione Rapida */}
-            <div className="flex items-center space-x-2 text-xs">
-              <button
-                type="button"
-                onClick={() => handleOpenModal(null, null, 'active')}
-                className="bg-[#164e87] hover:bg-[#0e3a6c] text-white px-3 py-1.5 rounded-xl font-bold text-xs shadow-sm transition whitespace-nowrap"
-              >
-                + Nuova Commessa
-              </button>
-              <button
-                type="button"
-                onClick={() => handleOpenModal(null, null, 'potential')}
-                className="bg-amber-500 hover:bg-amber-600 text-slate-950 px-3 py-1.5 rounded-xl font-black text-xs shadow-sm transition whitespace-nowrap"
-              >
-                + Simulazione / Multi
-              </button>
-            </div>
-          </div>
-
-          {/* Riga Inferiore: Griglia Completa Indicatori Aggregati dello Scenario & Filtri Attivi */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 pt-2 border-t border-slate-200/80 text-xs">
-            {/* 1. FATTURATO */}
-            <div className="bg-blue-50/70 px-3 py-2 rounded-xl border border-blue-200/80">
-              <div className="flex items-center justify-between text-[10px] font-bold text-slate-500 uppercase">
-                <span>Fatturato</span>
-                <span className="text-[#164e87] font-black">{formatEUR(activeFilteredTotals.avgRevenuePerKm)}/km</span>
-              </div>
-              <div className="font-black text-[#164e87] text-sm mt-0.5">
-                {formatEUR(activeFilteredTotals.revenueMonthly)}<span className="text-[10px] font-semibold">/m</span>
-              </div>
-              <div className="text-[10px] text-slate-500 font-medium">
-                Annuo: <strong className="text-slate-700">{formatEUR(activeFilteredTotals.revenueAnnual)}</strong>
-              </div>
-            </div>
-
-            {/* 2. COSTI OPERATIVI */}
-            <div className="bg-slate-50 px-3 py-2 rounded-xl border border-slate-200">
-              <div className="flex items-center justify-between text-[10px] font-bold text-slate-500 uppercase">
-                <span>Costi Totali</span>
-                <span className="text-slate-700 font-bold">{formatEUR(activeFilteredTotals.avgCostPerKm)}/km</span>
-              </div>
-              <div className="font-black text-slate-800 text-sm mt-0.5">
-                {formatEUR(activeFilteredTotals.costMonthly)}<span className="text-[10px] font-semibold">/m</span>
-              </div>
-              <div className="text-[10px] text-slate-500 font-medium">
-                Annuo: <strong className="text-slate-700">{formatEUR(activeFilteredTotals.costAnnual)}</strong>
-              </div>
-            </div>
-
-            {/* 3. M.O.L. & MARGINALITÀ % */}
-            <div className="bg-emerald-50/70 px-3 py-2 rounded-xl border border-emerald-200/80">
-              <div className="flex items-center justify-between text-[10px] font-bold text-emerald-800 uppercase">
-                <span>M.O.L. &amp; Margine</span>
-                <span className={`px-1.5 py-0.2 rounded font-black ${
-                  activeFilteredTotals.molPercent >= 15
-                    ? 'bg-emerald-200/80 text-emerald-900'
-                    : activeFilteredTotals.molPercent >= 0
-                      ? 'bg-amber-200 text-amber-900'
-                      : 'bg-rose-200 text-rose-900'
-                }`}>
-                  {formatPercent(activeFilteredTotals.molPercent)}
-                </span>
-              </div>
-              <div className={`font-black text-sm mt-0.5 ${activeFilteredTotals.molMonthly >= 0 ? 'text-emerald-700' : 'text-rose-600'}`}>
-                {formatEUR(activeFilteredTotals.molMonthly)}<span className="text-[10px] font-semibold">/m</span>
-              </div>
-              <div className="text-[10px] text-slate-500 font-medium">
-                Annuo: <strong className="text-emerald-800">{formatEUR(activeFilteredTotals.molAnnual)}</strong>
-              </div>
-            </div>
-
-            {/* 4. CASSA & FABBISOGNO CIRCOLANTE */}
-            <div className="bg-amber-50/70 px-3 py-2 rounded-xl border border-amber-200/80">
-              <div className="flex items-center justify-between text-[10px] font-bold text-amber-900 uppercase">
-                <span>Fabbisogno Cassa</span>
-                <Clock className="w-3 h-3 text-amber-700" />
-              </div>
-              <div className="font-black text-amber-800 text-sm mt-0.5">
-                {formatEUR(activeFilteredTotals.workingCapital)}
-              </div>
-              <div className="text-[10px] text-amber-900/80 font-medium">
-                Fido cons.: <strong>{formatEUR(activeFilteredTotals.creditLine)}</strong>
-              </div>
-            </div>
-
-            {/* 5. MEZZI UTILIZZATI & RISORSE */}
-            <div className="bg-indigo-50/60 px-3 py-2 rounded-xl border border-indigo-200/80">
-              <div className="flex items-center justify-between text-[10px] font-bold text-indigo-900 uppercase">
-                <span>Mezzi Utilizzati</span>
-                <Truck className="w-3 h-3 text-indigo-700" />
-              </div>
-              <div className="font-black text-indigo-950 text-sm mt-0.5 flex items-baseline space-x-1.5">
-                <span>{activeFilteredTotals.vehiclesUsedCount} <span className="text-[10px] font-semibold text-slate-500">/ {fleet.length} Mezzi</span></span>
-                {activeFilteredTotals.trailersUsedCount > 0 && (
-                  <span className="text-[10px] font-bold text-indigo-700">• {activeFilteredTotals.trailersUsedCount} Rim.</span>
-                )}
-              </div>
-              <div className="text-[10px] text-slate-600 font-medium flex items-center justify-between">
-                <span>⚡{activeFilteredTotals.electricVehiclesCount} BEV • 🔥{activeFilteredTotals.biolngVehiclesCount} LNG</span>
-                <span className="font-bold text-indigo-800">{activeFilteredTotals.directCount}D / {activeFilteredTotals.thirdPartyCount}T</span>
-              </div>
-            </div>
-
-            {/* 6. CLIENTI, MULTI-COMMESSE & VOLUMI KM */}
-            <div className="bg-slate-50 px-3 py-2 rounded-xl border border-slate-200">
-              <div className="flex items-center justify-between text-[10px] font-bold text-slate-500 uppercase">
-                <span>Commesse &amp; Km</span>
-                <span className="text-[#164e87] font-black">{activeFilteredTotals.activeHubsCount} Poli</span>
-              </div>
-              <div className="font-black text-slate-900 text-sm mt-0.5">
-                {activeFilteredTotals.count} <span className="text-[10px] font-semibold text-slate-500">Linee</span> • {activeFilteredTotals.uniqueClientsCount} <span className="text-[10px] font-semibold text-slate-500">Clienti</span>
-              </div>
-              <div className="text-[10px] text-slate-500 font-medium flex items-center justify-between">
-                <span>{activeFilteredTotals.totalKmDaily.toLocaleString('it-IT')} km/gg</span>
-                {activeFilteredTotals.multiCommessaCount > 0 ? (
-                  <span className="text-[#164e87] font-bold">{activeFilteredTotals.multiCommessaCount} Multi</span>
-                ) : (
-                  <span>{(activeFilteredTotals.totalKmMonthly / 1000).toFixed(1)}k km/m</span>
-                )}
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* DETTAGLIO DELLE COMMESSE (APRIBILE IN CASO DI BISOGNO COME RICHIESTO) */}
+        {/* DETTAGLIO DELLE COMMESSE (APRIBILE IN CASO DI BISOGNO) */}
         <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-          {/* Barra di Controllo Apertura / Chiusura Dettaglio Elenco Commesse */}
           <div
             onClick={() => setShowProjectsDetailList(!showProjectsDetailList)}
             className="p-4 bg-gradient-to-r from-slate-50 via-white to-blue-50/40 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3 cursor-pointer hover:bg-blue-50/30 transition"
@@ -1944,16 +1979,16 @@ const ProjectsPage = () => {
               <div>
                 <div className="flex items-center space-x-2 flex-wrap">
                   <h3 className="text-sm font-black text-slate-900">
-                    Dettaglio Analitico Singole Commesse ({displayProjects.length} linee nel perimetro)
+                    Dettaglio Analitico Singole Commesse ({displayProjects.length} linee)
                   </h3>
                   <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-blue-100 text-[#164e87] border border-blue-200">
-                    {activeFilteredTotals.totalBillingSlices} Entità di Fatturazione • {activeFilteredTotals.vehiclesUsedCount} Mezzi
+                    {activeFilteredTotals.totalBillingSlices} Entità Fatturate • {activeFilteredTotals.vehiclesUsedCount} Mezzi
                   </span>
                 </div>
                 <p className="text-xs text-slate-500 mt-0.5">
                   {(showProjectsDetailList || hasActiveFilters)
-                    ? 'Clicca su qualsiasi commessa per modificarla, riordinarla con Drag & Drop o aprire il dettaglio voci di costo.'
-                    : 'La Visione Strategica e lo Scenario sopra sono sempre visibili. Clicca qui per aprire ed esplorare il dettaglio delle singole commesse.'}
+                    ? 'Clicca su una riga per modificare mezzo, tariffe, variazioni o configurare Multi-Commessa (1-4 Clienti). Trascina per riordinare.'
+                    : 'Clicca qui per aprire ed esplorare l\'elenco dettagliato di tutte le singole commesse.'}
                 </p>
               </div>
             </div>
@@ -1973,8 +2008,8 @@ const ProjectsPage = () => {
               <Eye className="w-4 h-4" />
               <span>
                 {(showProjectsDetailList || hasActiveFilters)
-                  ? 'Chiudi Dettaglio Commesse'
-                  : `Apri Dettaglio Commesse (${displayProjects.length})`}
+                  ? 'Chiudi Elenco Commesse'
+                  : `Apri Elenco Commesse (${displayProjects.length})`}
               </span>
               {(showProjectsDetailList || hasActiveFilters) ? (
                 <ChevronUp className="w-4 h-4" />
@@ -1985,7 +2020,7 @@ const ProjectsPage = () => {
           </div>
 
           {(showProjectsDetailList || hasActiveFilters) && (
-            <div className="w-full">
+            <div className="w-full overflow-x-auto">
               <table className="w-full divide-y divide-slate-200 text-left text-xs">
                 <thead className="bg-[#f0f4f9] text-[#164e87] font-extrabold uppercase tracking-wider text-[11px] border-b border-slate-200">
                   <tr>
@@ -1999,8 +2034,12 @@ const ProjectsPage = () => {
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {displayProjects.map((project, idx) => {
-                    const metrics = calculateSingleProjectMetrics(project);
+                    const metrics = calculateSingleProjectMetrics(
+                      project,
+                      budgetHorizon !== 'regime' ? { year: Number(budgetHorizon) } : {}
+                    );
                     const validity = getContractValidity(project);
+                    const startYear = project.startDate ? parseInt(String(project.startDate).slice(0, 4), 10) : 2026;
                     const isNegative = metrics.monthlyMol < 0;
                     const isLowMargin = !isNegative && metrics.molPercent < 15;
                     const assignedVeh = fleet.find(v => v.id === project.vehicleId);
@@ -2132,6 +2171,14 @@ const ProjectsPage = () => {
                                   <span>Converti in Attiva</span>
                                 </button>
                               </div>
+                            ) : validity.isExpired ? (
+                              <span
+                                className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 border border-rose-300 flex items-center gap-1"
+                                title={`Contratto scaduto il ${validity.formattedEnd}`}
+                              >
+                                <AlertTriangle className="w-3 h-3 text-rose-600" />
+                                <span>Scaduto ({validity.formattedEnd})</span>
+                              </span>
                             ) : (
                               <button
                                 type="button"
@@ -2139,11 +2186,15 @@ const ProjectsPage = () => {
                                   e.stopPropagation();
                                   handleToggleFutureStatus(project.id);
                                 }}
-                                className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 hover:bg-emerald-200 flex items-center gap-1 cursor-pointer transition"
+                                className={`text-[10px] font-bold px-2 py-0.5 rounded-full border flex items-center gap-1 cursor-pointer transition ${
+                                  startYear > 2026
+                                    ? 'bg-sky-50 text-sky-800 border-sky-300 hover:bg-sky-100'
+                                    : 'bg-emerald-100 text-emerald-800 border-emerald-300 hover:bg-emerald-200'
+                                }`}
                                 title="Commessa operativa a budget. Clicca per retrocederla a simulazione."
                               >
-                                <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                                <span>Attivo 2026</span>
+                                <CheckCircle2 className={`w-3 h-3 ${startYear > 2026 ? 'text-sky-600' : 'text-emerald-600'}`} />
+                                <span>{startYear > 2026 ? `Avvio ${startYear}` : 'Attivo 2026'}</span>
                               </button>
                             )}
 
@@ -2372,11 +2423,12 @@ const ProjectsPage = () => {
           )}
         </div>
 
-        {/* Modal Modifica/Crea Commessa */}
+        {/* Modal Modifica/Crea Commessa a 4 Tab + Footer Live Sticky */}
         {showModal && (
           <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-            <div className="bg-white rounded-2xl shadow-2xl max-w-3xl w-full max-h-[90vh] overflow-y-auto p-6 border border-slate-200">
-              <div className="flex justify-between items-center pb-4 border-b border-slate-100">
+            <div className="bg-white rounded-2xl shadow-2xl max-w-4xl w-full max-h-[92vh] flex flex-col border border-slate-200 overflow-hidden">
+              {/* Top Modal Header */}
+              <div className="flex justify-between items-center px-6 py-4 border-b border-slate-200 bg-slate-50/70">
                 <div className="flex items-center space-x-2">
                   {formData.contractStatus === 'potential' ? (
                     <Sparkles className="w-5 h-5 text-amber-500" />
@@ -2385,11 +2437,12 @@ const ProjectsPage = () => {
                   )}
                   <h3 className="text-lg font-bold text-slate-900">
                     {editingProject
-                      ? (formData.contractStatus === 'potential' ? 'Modifica Trattativa / Simulazione Potenziale' : 'Modifica Commessa di Budget')
-                      : (formData.contractStatus === 'potential' ? 'Nuova Trattativa / Simulazione di Progetto' : 'Crea Nuova Commessa & Budget')}
+                      ? (formData.contractStatus === 'potential' ? 'Modifica Trattativa / Simulazione' : 'Modifica Commessa di Budget')
+                      : (formData.contractStatus === 'potential' ? 'Nuova Trattativa / Simulazione' : 'Crea Nuova Commessa & Budget')}
                   </h3>
                 </div>
                 <button
+                  type="button"
                   onClick={() => setShowModal(false)}
                   className="text-slate-400 hover:text-slate-600 p-1 rounded-lg"
                 >
@@ -2397,7 +2450,43 @@ const ProjectsPage = () => {
                 </button>
               </div>
 
-              <form onSubmit={handleSaveProject} className="space-y-4 mt-4 text-xs">
+              {/* Navigazione 4 Tab */}
+              <div className="px-6 py-2.5 bg-white border-b border-slate-200 flex items-center gap-1.5 overflow-x-auto">
+                {[
+                  { id: 'general', label: '1. Anagrafica & Clienti' },
+                  { id: 'costs', label: '2. Mezzo & Costi' },
+                  {
+                    id: 'variations',
+                    label: `3. Variazioni Prezzi${((formData.costVariations?.length || 0) + (formData.vehicleLeaseVariations?.length || 0) + (formData.trailerLeaseVariations?.length || 0)) > 0 ? ` (${(formData.costVariations?.length || 0) + (formData.vehicleLeaseVariations?.length || 0) + (formData.trailerLeaseVariations?.length || 0)})` : ''}`
+                  },
+                  { id: 'terms', label: '4. Pagamenti & Cassa' }
+                ].map((t) => (
+                  <button
+                    key={t.id}
+                    type="button"
+                    onClick={() => setModalTab(t.id)}
+                    className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition whitespace-nowrap ${
+                      modalTab === t.id
+                        ? 'bg-[#164e87] text-white shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                    }`}
+                  >
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+
+              <form onSubmit={handleSaveProject} className="flex flex-col flex-1 min-h-0">
+                <div className="flex-1 overflow-y-auto p-6 space-y-4 text-xs">
+                  {modalFormError && (
+                    <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 font-bold flex items-center gap-2">
+                      <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                      <span>{modalFormError}</span>
+                    </div>
+                  )}
+
+                  {modalTab === 'general' && (
+                    <div className="space-y-4">
                 {/* Selettore Natura della Commessa: Attivo (Status Quo) vs Trattativa/Simulazione */}
                 <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200">
                   <label className="block font-extrabold text-slate-700 uppercase tracking-wider text-[11px] mb-2">
@@ -2832,6 +2921,11 @@ const ProjectsPage = () => {
                 </div>
 
                 {/* Selezione Mezzo dalla Flotta & Tipologia Gestione */}
+                    </div>
+                  )}
+
+                  {modalTab === 'costs' && (
+                    <div className="space-y-4">
                 <div className="p-4 bg-emerald-50/60 rounded-xl border border-emerald-200/60 space-y-3">
                   <span className="text-[11px] font-extrabold text-emerald-900 uppercase tracking-wider flex items-center">
                     <Truck className="w-4 h-4 mr-1.5 text-emerald-700" />
@@ -3311,13 +3405,14 @@ const ProjectsPage = () => {
                             onChange={(e) => handleRefrigerationTechChange(e.target.value)}
                             className="w-full px-2 py-1.5 border border-cyan-300 rounded-lg bg-white font-bold text-[11px]"
                           >
-                            <option value="azoto">Azoto Liquido (0,13 €/kg • 30 kg/h = 3,90 €/h)</option>
-                            <option value="gasolio">Gasolio Frigo (1,80 €/L • 3 L/h = 5,40 €/h)</option>
+                            <option value="elettrico">Frigo Elettrico (0,35 €/kWh • 8 kWh/h)</option>
+                            <option value="azoto">Azoto Liquido (0,13 €/kg • 30 kg/h)</option>
+                            <option value="gasolio">Gasolio Frigo (1,80 €/L • 3 L/h)</option>
                           </select>
                         </div>
                         <div>
                           <label className="block text-[10px] font-bold text-cyan-900 mb-0.5">
-                            Costo Unitario (€/{formData.refrigerationTech === 'azoto' ? 'kg' : 'L'})
+                            Costo Unitario (€/{formData.refrigerationTech === 'azoto' ? 'kg' : formData.refrigerationTech === 'elettrico' ? 'kWh' : 'L'})
                           </label>
                           <input
                             type="number"
@@ -3329,7 +3424,7 @@ const ProjectsPage = () => {
                         </div>
                         <div>
                           <label className="block text-[10px] font-bold text-cyan-900 mb-0.5">
-                            Consumo Orario ({formData.refrigerationTech === 'azoto' ? 'kg/h' : 'L/h'})
+                            Consumo Orario ({formData.refrigerationTech === 'azoto' ? 'kg/h' : formData.refrigerationTech === 'elettrico' ? 'kWh/h' : 'L/h'})
                           </label>
                           <input
                             type="number"
@@ -3476,8 +3571,111 @@ const ProjectsPage = () => {
                     </div>
                   </div>
 
+                  {/* FINE TAB COSTI -> SPOSTIAMO RICAVO & MARGINALITÀ QUI DENTRO E SEPARIAMO VARIAZIONI PREZZI IN TAB 3 */}
+                  {formData.managementType !== 'T' && (
+                    <div className="pt-2 border-t border-slate-200 space-y-1.5">
+                      {formData.isMultiClient ? (
+                        <div className="p-3 bg-blue-50/80 border border-blue-200 rounded-xl flex flex-wrap items-center justify-between gap-2 text-xs">
+                          <div>
+                            <span className="font-black text-[#164e87] block">
+                              Fatturazione Aggregata Multi-Commessa ({formData.billingEntities?.length || 2} Clienti):
+                            </span>
+                            <span className="text-[10px] text-slate-600">
+                              Le tariffe attive e le marginalità sono gestite separatamente per ciascun cliente nel Tab 1 (Anagrafica &amp; Clienti).
+                            </span>
+                          </div>
+                          <div className="flex items-center space-x-3">
+                            <span className="font-bold text-slate-700">
+                              Costo Comune: <strong>{formatEUR(liveModalMetrics.totalCostDaily)}/gg</strong>
+                            </span>
+                            <span className="font-black text-[#164e87]">
+                              Ricavo Tot.: {formatEUR(liveModalMetrics.revenueDaily)}/gg
+                            </span>
+                            <span className="px-2 py-0.5 rounded-full font-black bg-emerald-100 text-emerald-800 border border-emerald-300">
+                              M.O.L. {formatEUR(liveModalMetrics.molDaily)}/gg ({formatPercent(liveModalMetrics.molPercent)})
+                            </span>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            <div>
+                              <label className="block font-bold text-slate-900 mb-0.5">Ricavo Giornaliero (€/gg) *</label>
+                              <input
+                                type="number"
+                                step="any"
+                                value={formData.revenueDaily}
+                                onChange={(e) => {
+                                  const rev = parseFloat(e.target.value) || 0;
+                                  const cost = liveModalMetrics.totalCostDaily;
+                                  const margin = rev > 0 ? +(((rev - cost) / rev) * 100).toFixed(2) : (rev === 0 ? -100 : 0);
+                                  setFormData({ ...formData, revenueDaily: rev, targetMarginPercent: margin });
+                                }}
+                                className="w-full px-3 py-2 border border-emerald-500 rounded-lg font-black text-emerald-800 bg-emerald-50 text-sm"
+                              />
+                            </div>
+                            <div>
+                              <label className="block font-bold text-slate-900 mb-0.5 flex items-center justify-between">
+                                <span>Margine M.O.L. (%)</span>
+                                <span className={`text-[10px] font-bold ${liveModalMetrics.molPercent < 0 ? 'text-rose-600' : 'text-emerald-700'}`}>
+                                  {liveModalMetrics.molPercent < 0 ? 'In Perdita' : 'sul Ricavo'}
+                                </span>
+                              </label>
+                              <div className="flex items-center space-x-1">
+                                <input
+                                  type="number"
+                                  step="any"
+                                  value={formData.targetMarginPercent !== undefined ? formData.targetMarginPercent : +liveModalMetrics.molPercent.toFixed(2)}
+                                  onChange={(e) => {
+                                    const val = e.target.value;
+                                    const margin = val === '' ? 0 : parseFloat(val);
+                                    const cost = liveModalMetrics.totalCostDaily;
+                                    const rev = !isNaN(margin) && margin < 100 ? +(cost / (1 - (margin / 100))).toFixed(2) : cost * 1.2;
+                                    setFormData({ ...formData, targetMarginPercent: isNaN(margin) ? 0 : margin, revenueDaily: rev });
+                                  }}
+                                  className={`w-full px-3 py-2 border rounded-lg font-black text-sm ${
+                                    (formData.targetMarginPercent || 0) < 0
+                                      ? 'border-rose-400 text-rose-700 bg-rose-50'
+                                      : 'border-emerald-400 text-emerald-800 bg-white'
+                                  }`}
+                                />
+                                <span className={`font-bold text-sm ${
+                                  (formData.targetMarginPercent || 0) < 0 ? 'text-rose-600' : 'text-emerald-800'
+                                }`}>%</span>
+                              </div>
+                              <div className="flex gap-1 mt-1 flex-wrap">
+                                {[15, 18, 21, 25].map(pct => (
+                                  <button
+                                    key={pct}
+                                    type="button"
+                                    onClick={() => {
+                                      const cost = liveModalMetrics.totalCostDaily;
+                                      const rev = +(cost / (1 - (pct / 100))).toFixed(2);
+                                      setFormData({ ...formData, targetMarginPercent: pct, revenueDaily: rev });
+                                    }}
+                                    className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800 hover:bg-emerald-200"
+                                  >
+                                    {pct}%{pct === 21 ? ' (Std)' : ''}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+                          <p className="text-[10px] text-slate-500">
+                            Costo totale calcolato: <strong className="text-slate-800">{formatEUR(liveModalMetrics.totalCostDaily)}/gg</strong> • Ricarico sui costi corrispondente: <strong className="text-slate-800">+{liveModalMetrics.totalCostDaily > 0 ? (((liveModalMetrics.revenueDaily - liveModalMetrics.totalCostDaily) / liveModalMetrics.totalCostDaily) * 100).toFixed(1) : 0}%</strong>
+                          </p>
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
+                    </div>
+                  )}
+
+                  {modalTab === 'variations' && (
+                    <div className="space-y-4">
                   {/* SEZIONE VARIAZIONI PREZZI / COSTI & NOLI A PARTIRE DA UNA DATA (Ricalcolo Dinamico per Decorrenza) */}
-                  <div className="p-3.5 bg-violet-50/70 rounded-xl border border-violet-200 space-y-2.5">
+                  <div className="p-4 bg-violet-50/70 rounded-xl border border-violet-200 space-y-2.5">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <span className="text-[11px] font-extrabold text-violet-950 uppercase tracking-wider flex items-center gap-1.5">
                         <Calendar className="w-3.5 h-3.5 text-violet-700" />
@@ -3679,105 +3877,11 @@ const ProjectsPage = () => {
                       </div>
                     )}
                   </div>
-
-                  {formData.managementType !== 'T' && (
-                    <div className="pt-2 border-t border-slate-200 space-y-1.5">
-                      {formData.isMultiClient ? (
-                        <div className="p-3 bg-blue-50/80 border border-blue-200 rounded-xl flex flex-wrap items-center justify-between gap-2 text-xs">
-                          <div>
-                            <span className="font-black text-[#164e87] block">
-                              Fatturazione Aggregata Multi-Commessa ({formData.billingEntities?.length || 2} Clienti):
-                            </span>
-                            <span className="text-[10px] text-slate-600">
-                              Le tariffe attive e le marginalità sono gestite separatamente per ciascun cliente nel box Multi-Commessa in alto.
-                            </span>
-                          </div>
-                          <div className="flex items-center space-x-3">
-                            <span className="font-bold text-slate-700">
-                              Costo Comune: <strong>{formatEUR(liveModalMetrics.totalCostDaily)}/gg</strong>
-                            </span>
-                            <span className="font-black text-[#164e87]">
-                              Ricavo Tot.: {formatEUR(liveModalMetrics.revenueDaily)}/gg
-                            </span>
-                            <span className="px-2 py-0.5 rounded-full font-black bg-emerald-100 text-emerald-800 border border-emerald-300">
-                              M.O.L. {formatEUR(liveModalMetrics.molDaily)}/gg ({formatPercent(liveModalMetrics.molPercent)})
-                            </span>
-                          </div>
-                        </div>
-                      ) : (
-                        <>
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                            <div>
-                              <label className="block font-bold text-slate-900 mb-0.5">Ricavo Giornaliero (€/gg) *</label>
-                              <input
-                                type="number"
-                                step="any"
-                                value={formData.revenueDaily}
-                                onChange={(e) => {
-                                  const rev = parseFloat(e.target.value) || 0;
-                                  const cost = liveModalMetrics.totalCostDaily;
-                                  const margin = rev > 0 ? +(((rev - cost) / rev) * 100).toFixed(2) : (rev === 0 ? -100 : 0);
-                                  setFormData({ ...formData, revenueDaily: rev, targetMarginPercent: margin });
-                                }}
-                                className="w-full px-3 py-2 border border-emerald-500 rounded-lg font-black text-emerald-800 bg-emerald-50 text-sm"
-                              />
-                            </div>
-                            <div>
-                              <label className="block font-bold text-slate-900 mb-0.5 flex items-center justify-between">
-                                <span>Margine M.O.L. (%)</span>
-                                <span className={`text-[10px] font-bold ${liveModalMetrics.molPercent < 0 ? 'text-rose-600' : 'text-emerald-700'}`}>
-                                  {liveModalMetrics.molPercent < 0 ? 'In Perdita' : 'sul Ricavo'}
-                                </span>
-                              </label>
-                              <div className="flex items-center space-x-1">
-                                <input
-                                  type="number"
-                                  step="any"
-                                  value={formData.targetMarginPercent !== undefined ? formData.targetMarginPercent : +liveModalMetrics.molPercent.toFixed(2)}
-                                  onChange={(e) => {
-                                    const val = e.target.value;
-                                    const margin = val === '' ? 0 : parseFloat(val);
-                                    const cost = liveModalMetrics.totalCostDaily;
-                                    const rev = !isNaN(margin) && margin < 100 ? +(cost / (1 - (margin / 100))).toFixed(2) : cost * 1.2;
-                                    setFormData({ ...formData, targetMarginPercent: isNaN(margin) ? 0 : margin, revenueDaily: rev });
-                                  }}
-                                  className={`w-full px-3 py-2 border rounded-lg font-black text-sm ${
-                                    (formData.targetMarginPercent || 0) < 0
-                                      ? 'border-rose-400 text-rose-700 bg-rose-50'
-                                      : 'border-emerald-400 text-emerald-800 bg-white'
-                                  }`}
-                                />
-                                <span className={`font-bold text-sm ${
-                                  (formData.targetMarginPercent || 0) < 0 ? 'text-rose-600' : 'text-emerald-800'
-                                }`}>%</span>
-                              </div>
-                              <div className="flex gap-1 mt-1 flex-wrap">
-                                {[15, 18, 21, 25].map(pct => (
-                                  <button
-                                    key={pct}
-                                    type="button"
-                                    onClick={() => {
-                                      const cost = liveModalMetrics.totalCostDaily;
-                                      const rev = +(cost / (1 - (pct / 100))).toFixed(2);
-                                      setFormData({ ...formData, targetMarginPercent: pct, revenueDaily: rev });
-                                    }}
-                                    className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800 hover:bg-emerald-200"
-                                  >
-                                    {pct}%{pct === 21 ? ' (Std)' : ''}
-                                  </button>
-                                ))}
-                              </div>
-                            </div>
-                          </div>
-                          <p className="text-[10px] text-slate-500">
-                            Costo totale calcolato: <strong className="text-slate-800">{formatEUR(liveModalMetrics.totalCostDaily)}/gg</strong> • Ricarico sui costi corrispondente: <strong className="text-slate-800">+{liveModalMetrics.totalCostDaily > 0 ? (((liveModalMetrics.revenueDaily - liveModalMetrics.totalCostDaily) / liveModalMetrics.totalCostDaily) * 100).toFixed(1) : 0}%</strong>
-                          </p>
-                        </>
-                      )}
                     </div>
                   )}
-                </div>
 
+                  {modalTab === 'terms' && (
+                    <div className="space-y-4">
                 {/* SEZIONE SPECIALE: TERMINI DI PAGAMENTO (DSO & DPO PONDERATO PER COMPONENTE) */}
                 <div className="p-4 bg-amber-50/70 rounded-xl border border-amber-200/80 space-y-3">
                   <div className="flex flex-wrap items-center justify-between gap-2">
@@ -3986,28 +4090,6 @@ const ProjectsPage = () => {
                   </div>
                 </div>
 
-                {/* Box Sintesi Economica Live */}
-                <div className="p-4 bg-slate-900 text-white rounded-xl flex flex-wrap justify-between items-center gap-4">
-                  <div>
-                    <span className="text-slate-400 text-[10px] uppercase">Ricavo Mensile</span>
-                    <div className="text-base font-extrabold">{formatEUR(liveModalMetrics.monthlyRevenue)}</div>
-                  </div>
-                  <div>
-                    <span className="text-slate-400 text-[10px] uppercase">Costi Mensili</span>
-                    <div className="text-base font-extrabold text-slate-300">{formatEUR(liveModalMetrics.monthlyCost)}</div>
-                  </div>
-                  <div>
-                    <span className="text-slate-400 text-[10px] uppercase">M.O.L. Mensile</span>
-                    <div className={`text-base font-extrabold ${liveModalMetrics.monthlyMol >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                      {formatEUR(liveModalMetrics.monthlyMol)} ({formatPercent(liveModalMetrics.molPercent)})
-                    </div>
-                  </div>
-                  <div>
-                    <span className="text-slate-400 text-[10px] uppercase">Fatturato Intera Commessa</span>
-                    <div className="text-base font-extrabold text-emerald-300">{formatEUR(liveModalMetrics.totalProjectRevenue)}</div>
-                  </div>
-                </div>
-
                 <div>
                   <label className="block font-semibold text-slate-700 mb-1">Note e Accordi Commerciali</label>
                   <textarea
@@ -4018,22 +4100,49 @@ const ProjectsPage = () => {
                     placeholder="Note su clausole carburante, orari di scarico, penali..."
                   ></textarea>
                 </div>
+                    </div>
+                  )}
+                </div>
 
-                <div className="pt-4 border-t border-slate-100 flex items-center justify-end space-x-2">
-                  <button
-                    type="button"
-                    onClick={() => setShowModal(false)}
-                    className="px-4 py-2 border border-slate-300 rounded-xl font-medium text-slate-700 hover:bg-slate-50 transition"
-                  >
-                    Annulla
-                  </button>
-                  <button
-                    type="submit"
-                    className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold shadow-sm transition flex items-center space-x-1.5"
-                  >
-                    <Save className="w-4 h-4" />
-                    <span>Salva Commessa</span>
-                  </button>
+                {/* Footer Live Fissa in Basso */}
+                <div className="px-6 py-3.5 bg-slate-900 text-white border-t border-slate-800 flex flex-wrap items-center justify-between gap-4">
+                  <div className="flex flex-wrap items-center gap-4 text-xs">
+                    <div>
+                      <span className="text-slate-400 text-[10px] uppercase block">Ricavo / m</span>
+                      <span className="text-sm font-black">{formatEUR(liveModalMetrics.monthlyRevenue)}</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-400 text-[10px] uppercase block">Costi / m</span>
+                      <span className="text-sm font-extrabold text-slate-300">{formatEUR(liveModalMetrics.monthlyCost)}</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-400 text-[10px] uppercase block">M.O.L. / m</span>
+                      <span className={`text-sm font-black ${liveModalMetrics.monthlyMol >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                        {formatEUR(liveModalMetrics.monthlyMol)} ({formatPercent(liveModalMetrics.molPercent)})
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-slate-400 text-[10px] uppercase block">Circolante</span>
+                      <span className="text-sm font-black text-amber-300">{formatEUR(liveModalMetrics.estimatedWorkingCapitalGap)}</span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center space-x-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowModal(false)}
+                      className="px-4 py-2 border border-slate-600 rounded-xl font-bold text-xs text-slate-200 hover:bg-slate-800 transition"
+                    >
+                      Annulla
+                    </button>
+                    <button
+                      type="submit"
+                      className="px-5 py-2 bg-emerald-500 hover:bg-emerald-600 text-slate-950 rounded-xl font-black text-xs shadow-sm transition flex items-center space-x-1.5"
+                    >
+                      <Save className="w-4 h-4" />
+                      <span>Salva Commessa</span>
+                    </button>
+                  </div>
                 </div>
               </form>
             </div>

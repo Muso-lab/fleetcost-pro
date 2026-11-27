@@ -26,7 +26,9 @@ import {
   Fuel,
   CreditCard,
   Building2,
-  Zap
+  Zap,
+  ChevronDown,
+  ChevronUp
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -56,6 +58,7 @@ const CashFlowPage = () => {
   const [acciseRate, setAcciseRate] = useState(0);
   const [activeTab, setActiveTab] = useState('cashflow'); // 'cashflow' | 'biweekly' | 'pnl'
   const [showExpenseDetails, setShowExpenseDetails] = useState(false); // Toggle colonne di dettaglio uscite
+  const [showCashSchedule, setShowCashSchedule] = useState(false); // Calendario Scadenze comprimibile
 
   useEffect(() => {
     loadProjects();
@@ -120,10 +123,12 @@ const CashFlowPage = () => {
     return projects;
   }, [projects, portfolioScope]);
 
+  const effectiveInitialCash = portfolioScope === 'potentialOnly' ? 0 : initialCash;
+
   // Calcolo del budget e cash flow con il nuovo motore avanzato
   const financialModel = calculateAnnualBudgetAndCashFlow(effectiveProjects, {
     year: selectedYear,
-    initialCashBalance: initialCash,
+    initialCashBalance: effectiveInitialCash,
     stressTestClientDays: stressTestDays,
     factoringEnabled,
     factoringAdvanceRate: factoringRate,
@@ -158,6 +163,24 @@ const CashFlowPage = () => {
     cashScheduleDeadlines
   } = financialModel;
 
+  const showAcciseCol = annualAcciseCredit > 0;
+
+  const annualColumnTotals = useMemo(() => {
+    return monthlyCashFlow.reduce(
+      (acc, m) => {
+        acc.driversOut += m.outflowBreakdown.drivers || 0;
+        acc.fuelOut += m.outflowBreakdown.lngFuel || 0;
+        acc.tollsOut += m.outflowBreakdown.tollsTelepass || 0;
+        acc.leasesOut += m.outflowBreakdown.leasesTotal || 0;
+        acc.pnlFuelNet += m.costBreakdown.fuelNet || 0;
+        acc.pnlLeases += (m.costBreakdown.vehicleLease || 0) + (m.costBreakdown.trailerLease || 0);
+        acc.pnlAccAndFridge += (m.costBreakdown.refrigeration || 0) + (m.costBreakdown.telematics || 0) + (m.costBreakdown.washing || 0) + (m.costBreakdown.extraCosts || 0);
+        return acc;
+      },
+      { driversOut: 0, fuelOut: 0, tollsOut: 0, leasesOut: 0, pnlFuelNet: 0, pnlLeases: 0, pnlAccAndFridge: 0 }
+    );
+  }, [monthlyCashFlow]);
+
   // Raggruppamento per Trimestri (Q1, Q2, Q3, Q4) con calcolo dei subtotali
   const quartersData = useMemo(() => {
     if (!monthlyCashFlow || monthlyCashFlow.length === 0) return [];
@@ -178,7 +201,7 @@ const CashFlowPage = () => {
         id: 'Q2',
         title: '2° Trimestre (Q2)',
         period: 'Aprile – Giugno',
-        season: 'Primavera • Recupero Accise F24 (T1 a Maggio)',
+        season: 'Primavera • Stabilizzazione Operativa & Canoni',
         badgeClass: 'bg-emerald-100 text-emerald-800 border-emerald-300',
         headerClass: 'bg-gradient-to-r from-emerald-50 via-teal-50/70 to-slate-50 border-l-4 border-emerald-500 text-emerald-950',
         subtotalClass: 'bg-emerald-50/90 text-emerald-950 font-bold border-t border-b border-emerald-200',
@@ -189,7 +212,7 @@ const CashFlowPage = () => {
         id: 'Q3',
         title: '3° Trimestre (Q3)',
         period: 'Luglio – Settembre',
-        season: 'Estate • Picco Volumi & Recupero Accise (T2 ad Agosto)',
+        season: 'Estate • Picco Volumi & Flussi Stagionali',
         badgeClass: 'bg-amber-100 text-amber-800 border-amber-300',
         headerClass: 'bg-gradient-to-r from-amber-50 via-yellow-50/70 to-slate-50 border-l-4 border-amber-500 text-amber-950',
         subtotalClass: 'bg-amber-50/90 text-amber-950 font-bold border-t border-b border-amber-200',
@@ -200,7 +223,7 @@ const CashFlowPage = () => {
         id: 'Q4',
         title: '4° Trimestre (Q4)',
         period: 'Ottobre – Dicembre',
-        season: 'Autunno • Chiusura Esercizio & Accise (T3 a Novembre)',
+        season: 'Autunno • Chiusura Esercizio & Bilancio Cassa',
         badgeClass: 'bg-indigo-100 text-indigo-800 border-indigo-300',
         headerClass: 'bg-gradient-to-r from-indigo-50 via-purple-50/70 to-slate-50 border-l-4 border-indigo-500 text-indigo-950',
         subtotalClass: 'bg-indigo-50/90 text-indigo-950 font-bold border-t border-b border-indigo-200',
@@ -370,7 +393,7 @@ const CashFlowPage = () => {
                   Forecast, Budget &amp; Cash Flow FOUR
                 </h1>
                 <p className="text-xs text-slate-500">
-                  Modellazione di tesoreria con regole reali (Noleggi G10/G30/G20, LNG 30gg quindicinale, Telepass 15gg quindicinale e Recupero Accise)
+                  Modellazione di tesoreria con regole reali (Noleggi G10/G30/G20, Energia/LNG 30gg quindicinale, Telepass 15gg quindicinale e prezzi alla pompa)
                 </p>
               </div>
             </div>
@@ -589,13 +612,13 @@ const CashFlowPage = () => {
           </div>
         </div>
 
-        {/* Simulatore Scenari di Cassa, Stress Test, Factoring & Recupero Accise */}
+        {/* Simulatore Scenari di Cassa, Stress Test & Factoring */}
         <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 space-y-4">
           <div className="flex items-center justify-between pb-3 border-b border-slate-100">
             <div className="flex items-center space-x-2">
               <Sliders className="w-4 h-4 text-emerald-600" />
               <h3 className="text-sm font-bold text-slate-900">
-                Parametri Tesoreria, Scenari & Recupero Accise
+                Parametri Tesoreria &amp; Scenari di Stress Test
               </h3>
             </div>
             <span className="text-xs text-slate-500">
@@ -613,14 +636,23 @@ const CashFlowPage = () => {
                 <input
                   type="number"
                   step="5000"
-                  value={initialCash}
+                  disabled={portfolioScope === 'potentialOnly'}
+                  value={portfolioScope === 'potentialOnly' ? 0 : initialCash}
                   onChange={(e) => handleInitialCashChange(e.target.value)}
                   onBlur={(e) => persistInitialCash(e.target.value)}
-                  className="w-full px-3 py-1.5 border border-slate-300 rounded-xl font-bold text-slate-900"
+                  className={`w-full px-3 py-1.5 border rounded-xl font-bold ${
+                    portfolioScope === 'potentialOnly'
+                      ? 'border-amber-200 bg-amber-50 text-amber-800 cursor-not-allowed'
+                      : 'border-slate-300 bg-white text-slate-900'
+                  }`}
                 />
                 <span className="text-slate-500 font-bold">€</span>
               </div>
-              <p className="text-[10px] text-slate-400">Disponibilità liquida di partenza (condivisa con Dashboard)</p>
+              <p className="text-[10px] text-slate-400">
+                {portfolioScope === 'potentialOnly'
+                  ? 'Azzerata su Solo Trattative per evidenziare il fabbisogno netto'
+                  : 'Disponibilità liquida di partenza (condivisa con Dashboard)'}
+              </p>
             </div>
 
             {/* Stress Test Ritardo Clienti */}
@@ -692,51 +724,60 @@ const CashFlowPage = () => {
           </div>
         </div>
 
-        {/* CALENDARIO SCADENZE DI CASSA DEL MESE OPERATIVO (CASH SCHEDULE) */}
-        <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 space-y-3">
-          <div className="flex items-center justify-between">
+        {/* CALENDARIO SCADENZE DI CASSA DEL MESE OPERATIVO (COMPRIMIBILE) */}
+        <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 space-y-3">
+          <div
+            onClick={() => setShowCashSchedule(prev => !prev)}
+            className="flex items-center justify-between cursor-pointer"
+          >
             <div className="flex items-center space-x-2">
               <Clock className="w-4 h-4 text-blue-600" />
               <h3 className="text-sm font-bold text-slate-900">
-                Calendario Scadenze di Cassa del Mese Operativo (Cash Timeline FOUR)
+                Calendario Scadenze di Cassa del Mese (Giorni 10, 15, 16, 20, 30)
               </h3>
             </div>
-            <span className="text-[11px] font-semibold text-slate-500">
-              Rappresentazione delle uscite nei 5 giorni chiave del mese
-            </span>
+            <button
+              type="button"
+              className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition"
+            >
+              <span>{showCashSchedule ? 'Comprimi calendario' : 'Mostra scadenze mese'}</span>
+              {showCashSchedule ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+            </button>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 text-xs">
-            {cashScheduleDeadlines.map((dl, idx) => (
-              <div
-                key={idx}
-                className={`p-3.5 rounded-xl border flex flex-col justify-between ${
-                  dl.day === 10
-                    ? 'bg-rose-50/70 border-rose-200'
-                    : dl.day === 15
-                    ? 'bg-amber-50/70 border-amber-200'
-                    : dl.day === 16
-                    ? 'bg-purple-50/70 border-purple-200'
-                    : dl.day === 20
-                    ? 'bg-blue-50/70 border-blue-200'
-                    : 'bg-emerald-50/70 border-emerald-200'
-                }`}
-              >
-                <div>
-                  <div className="flex items-center justify-between mb-1.5">
-                    <span className="text-lg font-black text-slate-900">Giorno {dl.day}</span>
-                    <span className={`px-2 py-0.5 rounded text-[9px] font-extrabold uppercase ${
-                      dl.type === 'outflow' ? 'bg-rose-100 text-rose-800' : 'bg-emerald-100 text-emerald-800'
-                    }`}>
-                      {dl.type === 'outflow' ? 'Uscita Cassa' : 'Misto / Incassi'}
-                    </span>
+          {showCashSchedule && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 text-xs pt-2 border-t border-slate-100">
+              {cashScheduleDeadlines.map((dl, idx) => (
+                <div
+                  key={idx}
+                  className={`p-3.5 rounded-xl border flex flex-col justify-between ${
+                    dl.day === 10
+                      ? 'bg-rose-50/70 border-rose-200'
+                      : dl.day === 15
+                      ? 'bg-amber-50/70 border-amber-200'
+                      : dl.day === 16
+                      ? 'bg-purple-50/70 border-purple-200'
+                      : dl.day === 20
+                      ? 'bg-blue-50/70 border-blue-200'
+                      : 'bg-emerald-50/70 border-emerald-200'
+                  }`}
+                >
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span className="text-lg font-black text-slate-900">Giorno {dl.day}</span>
+                      <span className={`px-2 py-0.5 rounded text-[9px] font-extrabold uppercase ${
+                        dl.type === 'outflow' ? 'bg-rose-100 text-rose-800' : 'bg-emerald-100 text-emerald-800'
+                      }`}>
+                        {dl.type === 'outflow' ? 'Uscita Cassa' : 'Misto / Incassi'}
+                      </span>
+                    </div>
+                    <h4 className="font-bold text-slate-900 text-xs mb-1">{dl.title}</h4>
+                    <p className="text-[11px] text-slate-600 leading-snug">{dl.description}</p>
                   </div>
-                  <h4 className="font-bold text-slate-900 text-xs mb-1">{dl.title}</h4>
-                  <p className="text-[11px] text-slate-600 leading-snug">{dl.description}</p>
                 </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Grafico Andamento Cassa & Fabbisogno */}
@@ -796,45 +837,19 @@ const CashFlowPage = () => {
           </div>
         </div>
 
-        {/* Tabella Dati con Switch: Mensile / Quindicinale / P&L */}
+        {/* Tabella Dati (controllata dalla barra Tab sticky in alto) */}
         <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-          <div className="p-5 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-            <div className="flex p-1 bg-slate-100 rounded-xl max-w-fit">
-              <button
-                onClick={() => setActiveTab('cashflow')}
-                className={`px-4 py-2 rounded-lg text-xs font-bold transition ${
-                  activeTab === 'cashflow'
-                    ? 'bg-white text-slate-900 shadow-sm'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                Cash Flow Mensile (12 Mesi)
-              </button>
-              <button
-                onClick={() => setActiveTab('biweekly')}
-                className={`px-4 py-2 rounded-lg text-xs font-bold transition ${
-                  activeTab === 'biweekly'
-                    ? 'bg-white text-slate-900 shadow-sm'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                Dettaglio Quindicinale (24 Periodi)
-              </button>
-              <button
-                onClick={() => setActiveTab('pnl')}
-                className={`px-4 py-2 rounded-lg text-xs font-bold transition ${
-                  activeTab === 'pnl'
-                    ? 'bg-white text-slate-900 shadow-sm'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                Budget Economico P&L
-              </button>
-            </div>
-
+          <div className="px-5 py-3.5 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2 bg-slate-50/60">
+            <h3 className="text-sm font-black text-slate-900">
+              {activeTab === 'cashflow'
+                ? `Prospetto Cash Flow Mensile (${selectedYear})`
+                : activeTab === 'biweekly'
+                ? `Dettaglio Tesoreria Quindicinale • 24 Periodi (${selectedYear})`
+                : `Conto Economico Previsionale P&L (${selectedYear})`}
+            </h3>
             <span className="text-xs text-slate-500 font-medium">
               {activeTab === 'cashflow'
-                ? 'Flussi mensili con termini contrattuali'
+                ? 'Flussi mensili suddivisi per trimestre con termini contrattuali reali'
                 : activeTab === 'biweekly'
                 ? 'Evidenzia i picchi intra-mensili (1ª e 2ª quindicina)'
                 : 'Ricavi e costi imputati al periodo di maturazione economica'}
@@ -850,12 +865,12 @@ const CashFlowPage = () => {
                     <th className="py-3 px-4 w-[20%]">Mese &amp; Periodo</th>
                     <th className="py-3 px-3 text-right">Saldo Iniz.</th>
                     <th className="py-3 px-3 text-right text-cyan-300">(+) Incassi</th>
-                    <th className="py-3 px-3 text-right text-emerald-300">(+) Accise F24</th>
+                    {showAcciseCol && <th className="py-3 px-3 text-right text-emerald-300">(+) Accise F24</th>}
                     <th className="py-3 px-3 text-right text-rose-300">(-) Uscite</th>
                     {showExpenseDetails && (
                       <>
                         <th className="py-3 px-3 text-right text-slate-300 bg-slate-800/80">Autisti</th>
-                        <th className="py-3 px-3 text-right text-slate-300 bg-slate-800/80">LNG Carb.</th>
+                        <th className="py-3 px-3 text-right text-slate-300 bg-slate-800/80">Energia &amp; Carb.</th>
                         <th className="py-3 px-3 text-right text-slate-300 bg-slate-800/80">Telepass</th>
                         <th className="py-3 px-3 text-right text-slate-300 bg-slate-800/80">Noleggi</th>
                       </>
@@ -870,7 +885,7 @@ const CashFlowPage = () => {
                     {/* Header del Trimestre */}
                     <tr className={q.headerClass}>
                       <td
-                        colSpan={showExpenseDetails ? 12 : 8}
+                        colSpan={(showExpenseDetails ? 11 : 7) + (showAcciseCol ? 1 : 0)}
                         className="py-2 px-4 font-black text-xs uppercase tracking-wider"
                       >
                         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -919,9 +934,11 @@ const CashFlowPage = () => {
                           <td className="py-2.5 px-3 text-right font-bold text-blue-700 bg-blue-50/20">
                             {formatEUR(m.inflowBreakdown.clientsRegular + m.inflowBreakdown.factoringAdvance)}
                           </td>
-                          <td className="py-2.5 px-3 text-right font-bold text-emerald-700 bg-emerald-50/20">
-                            {m.inflowBreakdown.acciseRefunds > 0 ? `+${formatEUR(m.inflowBreakdown.acciseRefunds)}` : '-'}
-                          </td>
+                          {showAcciseCol && (
+                            <td className="py-2.5 px-3 text-right font-bold text-emerald-700 bg-emerald-50/20">
+                              {m.inflowBreakdown.acciseRefunds > 0 ? `+${formatEUR(m.inflowBreakdown.acciseRefunds)}` : '-'}
+                            </td>
+                          )}
                           <td className="py-2.5 px-3 text-right font-bold text-rose-700 bg-rose-50/20">
                             {formatEUR(m.cashOut)}
                           </td>
@@ -967,9 +984,11 @@ const CashFlowPage = () => {
                       </td>
                       <td className="py-2 px-3 text-right text-slate-700 font-semibold">{formatEUR(q.openingCash)}</td>
                       <td className="py-2 px-3 text-right text-blue-800 font-black">{formatEUR(q.cashIn)}</td>
-                      <td className="py-2 px-3 text-right text-emerald-800 font-black">
-                        {q.acciseRefunds > 0 ? `+${formatEUR(q.acciseRefunds)}` : '-'}
-                      </td>
+                      {showAcciseCol && (
+                        <td className="py-2 px-3 text-right text-emerald-800 font-black">
+                          {q.acciseRefunds > 0 ? `+${formatEUR(q.acciseRefunds)}` : '-'}
+                        </td>
+                      )}
                       <td className="py-2 px-3 text-right text-rose-800 font-black">{formatEUR(q.cashOut)}</td>
 
                       {showExpenseDetails && (
@@ -1008,14 +1027,17 @@ const CashFlowPage = () => {
                 <tfoot className="bg-[#0b2440] text-white font-bold border-t-2 border-cyan-400">
                   <tr>
                     <td className="py-3 px-4 font-black">TOTALE ANNUO ({selectedYear})</td>
-                    <td className="py-3 px-3 text-right text-slate-300">{formatEUR(initialCash)}</td>
+                    <td className="py-3 px-3 text-right text-slate-300">{formatEUR(effectiveInitialCash)}</td>
                     <td className="py-3 px-3 text-right text-cyan-300 font-black">{formatEUR(totalCashIn - annualAcciseCredit)}</td>
-                    <td className="py-3 px-3 text-right text-emerald-300 font-black">{formatEUR(annualAcciseCredit)}</td>
+                    {showAcciseCol && <td className="py-3 px-3 text-right text-emerald-300 font-black">{formatEUR(annualAcciseCredit)}</td>}
                     <td className="py-3 px-3 text-right text-rose-300 font-black">{formatEUR(totalCashOut)}</td>
                     {showExpenseDetails && (
-                      <td colSpan="4" className="py-3 px-3 text-center text-slate-300 text-[11px]">
-                        Dettaglio uscite operative consolidate
-                      </td>
+                      <>
+                        <td className="py-3 px-3 text-right text-slate-200 font-bold">{formatEUR(annualColumnTotals.driversOut)}</td>
+                        <td className="py-3 px-3 text-right text-slate-200 font-bold">{formatEUR(annualColumnTotals.fuelOut)}</td>
+                        <td className="py-3 px-3 text-right text-slate-200 font-bold">{formatEUR(annualColumnTotals.tollsOut)}</td>
+                        <td className="py-3 px-3 text-right text-slate-200 font-bold">{formatEUR(annualColumnTotals.leasesOut)}</td>
+                      </>
                     )}
                     <td className="py-3 px-3 text-right text-emerald-300 font-black">
                       {netAnnualCash >= 0 ? '+' : ''}{formatEUR(netAnnualCash)}
@@ -1037,11 +1059,11 @@ const CashFlowPage = () => {
                     <th className="py-3 px-4">Periodo</th>
                     <th className="py-3 px-4 text-right">Saldo Iniziale</th>
                     <th className="py-3 px-4 text-right text-blue-700">(+) Incassi</th>
-                    <th className="py-3 px-4 text-right text-emerald-700">(+) Accise</th>
+                    {showAcciseCol && <th className="py-3 px-4 text-right text-emerald-700">(+) Accise</th>}
                     <th className="py-3 px-4 text-right text-rose-700">(-) Uscite</th>
                     <th className="py-3 px-4 text-right">Autisti Netto (G10)</th>
                     <th className="py-3 px-4 text-right">Autisti INPS (G16)</th>
-                    <th className="py-3 px-4 text-right">LNG (G15/30)</th>
+                    <th className="py-3 px-4 text-right">Energia/LNG (G15/30)</th>
                     <th className="py-3 px-4 text-right">Telepass</th>
                     <th className="py-3 px-4 text-right">Noleggi</th>
                     <th className="py-3 px-4 text-right font-black">Saldo Cassa</th>
@@ -1063,9 +1085,11 @@ const CashFlowPage = () => {
                             ? formatEUR(p.inflowBreakdown.clients + p.inflowBreakdown.factoring)
                             : '-'}
                         </td>
-                        <td className="py-2.5 px-4 text-right font-bold text-emerald-600">
-                          {p.inflowBreakdown.accise > 0 ? `+${formatEUR(p.inflowBreakdown.accise)}` : '-'}
-                        </td>
+                        {showAcciseCol && (
+                          <td className="py-2.5 px-4 text-right font-bold text-emerald-600">
+                            {p.inflowBreakdown.accise > 0 ? `+${formatEUR(p.inflowBreakdown.accise)}` : '-'}
+                          </td>
+                        )}
                         <td className="py-2.5 px-4 text-right font-bold text-rose-600">{formatEUR(p.cashOut)}</td>
                         <td className="py-2.5 px-4 text-right text-slate-600">
                           {p.outflowBreakdown.driversNet > 0 ? formatEUR(p.outflowBreakdown.driversNet) : '-'}
@@ -1111,8 +1135,8 @@ const CashFlowPage = () => {
                     <th className="py-3 px-4">Mese</th>
                     <th className="py-3 px-4 text-center">Commesse</th>
                     <th className="py-3 px-4 text-right">Ricavi Budget</th>
-                    <th className="py-3 px-4 text-right">Carburante Netto</th>
-                    <th className="py-3 px-4 text-right">Credito Accise</th>
+                    <th className="py-3 px-4 text-right">Energia / Carb.</th>
+                    {showAcciseCol && <th className="py-3 px-4 text-right">Credito Accise</th>}
                     <th className="py-3 px-4 text-right">Canoni Noleggio</th>
                     <th className="py-3 px-4 text-right">Frigo &amp; Accessori</th>
                     <th className="py-3 px-4 text-right">Costi Totali</th>
@@ -1136,9 +1160,11 @@ const CashFlowPage = () => {
                         </td>
                         <td className="py-3 px-4 text-right font-bold text-slate-900">{formatEUR(m.revenue)}</td>
                         <td className="py-3 px-4 text-right text-slate-600">{formatEUR(m.costBreakdown.fuelNet)}</td>
-                        <td className="py-3 px-4 text-right text-emerald-600 font-bold">
-                          {m.acciseCredit > 0 ? `-${formatEUR(m.acciseCredit)}` : '-'}
-                        </td>
+                        {showAcciseCol && (
+                          <td className="py-3 px-4 text-right text-emerald-600 font-bold">
+                            {m.acciseCredit > 0 ? `-${formatEUR(m.acciseCredit)}` : '-'}
+                          </td>
+                        )}
                         <td className="py-3 px-4 text-right text-slate-600">{formatEUR(leaseTotal)}</td>
                         <td className="py-3 px-4 text-right text-slate-600">{accessoriesAndFridge > 0 ? formatEUR(accessoriesAndFridge) : '-'}</td>
                         <td className="py-3 px-4 text-right font-semibold text-slate-800">{formatEUR(m.cost)}</td>
@@ -1160,10 +1186,15 @@ const CashFlowPage = () => {
                 </tbody>
                 <tfoot className="bg-slate-900 text-white font-bold">
                   <tr>
-                    <td className="py-3.5 px-4">TOTALE ANNUO P&L</td>
+                    <td className="py-3.5 px-4">TOTALE ANNUO P&amp;L</td>
                     <td className="py-3.5 px-4 text-center">-</td>
                     <td className="py-3.5 px-4 text-right text-emerald-400">{formatEUR(annualRevenue)}</td>
-                    <td colSpan="4" className="py-3.5 px-4 text-center text-slate-400">Costi Totali di Esercizio</td>
+                    <td className="py-3.5 px-4 text-right text-slate-200">{formatEUR(annualColumnTotals.pnlFuelNet)}</td>
+                    {showAcciseCol && (
+                      <td className="py-3.5 px-4 text-right text-emerald-300">-{formatEUR(annualAcciseCredit)}</td>
+                    )}
+                    <td className="py-3.5 px-4 text-right text-slate-200">{formatEUR(annualColumnTotals.pnlLeases)}</td>
+                    <td className="py-3.5 px-4 text-right text-slate-200">{formatEUR(annualColumnTotals.pnlAccAndFridge)}</td>
                     <td className="py-3.5 px-4 text-right text-rose-300">{formatEUR(annualCost)}</td>
                     <td className="py-3.5 px-4 text-right text-emerald-300 text-sm font-black">{formatEUR(annualMol)}</td>
                     <td className="py-3.5 px-4 text-right text-white font-black">{formatPercent(annualMolPercent)}</td>

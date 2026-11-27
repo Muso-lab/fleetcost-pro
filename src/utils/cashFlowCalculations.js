@@ -756,15 +756,15 @@ export const calculateAnnualBudgetAndCashFlow = (projects, options = {}) => {
     },
     {
       day: 15,
-      title: 'Giorno 15: 1ª Quindicina LNG & 2ª Quindicina Telepass',
+      title: 'Giorno 15: 1ª Quindicina Energia/LNG & 2ª Quindicina Telepass',
       type: 'outflow',
-      description: 'Saldo prima metà LNG mese precedente + saldo seconda metà Telepass mese precedente.'
+      description: 'Saldo prima metà rifornimenti Energia/LNG mese precedente + saldo seconda metà Telepass mese precedente.'
     },
     {
       day: 16,
-      title: 'Giorno 16: Oneri F24 INPS/IRPEF & Compensazione Accise',
-      type: 'mixed',
-      description: 'Versamento contributi e ritenute dipendenti, compensabile con crediti tributari e Accise Q+1.'
+      title: 'Giorno 16: Oneri F24 INPS / IRPEF Dipendenti',
+      type: 'outflow',
+      description: 'Versamento contributi previdenziali e ritenute fiscali dipendenti CCNL tramite modello F24.'
     },
     {
       day: 20,
@@ -774,9 +774,9 @@ export const calculateAnnualBudgetAndCashFlow = (projects, options = {}) => {
     },
     {
       day: 30,
-      title: 'Giorno 30/31: 1ª Quindicina Telepass, 2ª Quindicina LNG & Incassi Clienti',
+      title: 'Giorno 30/31: 1ª Quindicina Telepass, 2ª Quindicina Energia/LNG & Incassi Clienti',
       type: 'mixed',
-      description: 'Saldo prima metà pedaggi mese corrente, saldo seconda metà LNG mese precedente e incasso fatture clienti a 60/90 gg.'
+      description: 'Saldo prima metà pedaggi mese corrente, saldo seconda metà Energia/LNG mese precedente e incasso fatture clienti a 60/90 gg.'
     }
   ];
 
@@ -867,31 +867,44 @@ export const calculateDriverDailyCost = (vehicle, driverShiftType = '1_diurno', 
 };
 
 /**
- * Calcola il costo giornaliero del gruppo frigorifero (Azoto Liquido vs Gasolio)
+ * Calcola il costo giornaliero del gruppo frigorifero (Azoto Liquido vs Gasolio vs Elettrico)
  */
 export const calculateRefrigerationDailyCost = (project = {}, trailer = null, settings = {}) => {
   const refParams = settings?.refrigerationParams || {};
   const azotoDef = refParams.azoto || { unitCost: 0.13, hourlyConsumption: 30 };
   const gasolioDef = refParams.gasolio || { unitCost: 1.80, hourlyConsumption: 3.0 };
+  const elettricoDef = refParams.elettrico || { unitCost: 0.35, hourlyConsumption: 8.0 };
 
-  const isFrigoTrailer = isRefrigeratedTrailer(trailer);
+  const trailerHasNoFridge = trailer?.fridgeTech === 'nessuno' || trailer?.fuelTypeId === 'nessuno';
+  const isFrigoTrailer = !trailerHasNoFridge && isRefrigeratedTrailer(trailer);
   const enabled = project.refrigerationEnabled !== undefined
     ? Boolean(project.refrigerationEnabled)
     : isFrigoTrailer;
 
-  const defaultTech = trailer?.category === 'refrigerato_azoto' || (trailer?.tractionType || '').toLowerCase().includes('azoto')
-    ? 'azoto'
-    : 'gasolio';
+  const trailerLabel = (trailer?.categoryLabel || '').toLowerCase();
+  const trailerTraction = (trailer?.tractionType || '').toLowerCase();
+  let defaultTech = 'gasolio';
+  if (trailer?.fridgeTech && trailer.fridgeTech !== 'nessuno') {
+    defaultTech = trailer.fridgeTech;
+  } else if (trailer?.category === 'refrigerato_azoto' || trailer?.fuelTypeId === 'azoto' || trailerTraction.includes('azoto')) {
+    defaultTech = 'azoto';
+  } else if (
+    (trailer?.category === 'refrigerato' && (trailer?.fuelTypeId === 'elettrico' || trailerLabel.includes('elettric'))) ||
+    trailer?.fuelTypeId === 'elettrico'
+  ) {
+    defaultTech = 'elettrico';
+  }
+
   const tech = project.refrigerationTech || defaultTech;
-  const techDefaults = tech === 'azoto' ? azotoDef : gasolioDef;
+  const techDefaults = tech === 'azoto' ? azotoDef : tech === 'elettrico' ? elettricoDef : gasolioDef;
 
   if (!enabled) {
     return {
       enabled: false,
       tech,
       unitCost: Number(techDefaults.unitCost),
-      hourlyConsumption: Number(techDefaults.hourlyConsumption),
-      hourlyCost: +(Number(techDefaults.unitCost) * Number(techDefaults.hourlyConsumption)).toFixed(2),
+      hourlyConsumption: Number(trailer?.fridgeHourlyConsumption > 0 ? trailer.fridgeHourlyConsumption : techDefaults.hourlyConsumption),
+      hourlyCost: +(Number(techDefaults.unitCost) * Number(trailer?.fridgeHourlyConsumption > 0 ? trailer.fridgeHourlyConsumption : techDefaults.hourlyConsumption)).toFixed(2),
       hoursPerDay: Number(project.refrigerationHoursDaily) || 0,
       dailyCost: 0
     };
@@ -902,7 +915,7 @@ export const calculateRefrigerationDailyCost = (project = {}, trailer = null, se
     : Number(techDefaults.unitCost);
   const hourlyConsumption = project.refrigerationHourlyConsumption !== undefined && project.refrigerationHourlyConsumption !== ''
     ? Number(project.refrigerationHourlyConsumption)
-    : Number(techDefaults.hourlyConsumption);
+    : (trailer?.fridgeHourlyConsumption > 0 ? Number(trailer.fridgeHourlyConsumption) : Number(techDefaults.hourlyConsumption));
   const hoursPerDay = project.refrigerationHoursDaily !== undefined && project.refrigerationHoursDaily !== ''
     ? Number(project.refrigerationHoursDaily)
     : 8;
@@ -1774,7 +1787,8 @@ export const formatEUR = (value) => {
     style: 'currency',
     currency: 'EUR',
     minimumFractionDigits: 2,
-    maximumFractionDigits: 2
+    maximumFractionDigits: 2,
+    useGrouping: 'always'
   }).format(num);
 };
 

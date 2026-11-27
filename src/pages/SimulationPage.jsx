@@ -174,7 +174,7 @@ const SimulationPage = () => {
   const [savedSimulations, setSavedSimulations] = useState([]);
   const [activeSimulationId, setActiveSimulationId] = useState(null);
   const [activeSimulationCode, setActiveSimulationCode] = useState('');
-  const [showSavedRegistry, setShowSavedRegistry] = useState(true);
+  const [showSavedRegistry, setShowSavedRegistry] = useState(false);
   const [regSaveBanner, setRegSaveBanner] = useState('');
 
   // Calcolatore Automatico Km, Autostrada & Orografia da Indirizzi Tappe (API Pubbliche OSM/OSRM/Open-Meteo)
@@ -351,16 +351,26 @@ const SimulationPage = () => {
       updateTelematicsForCombo(vehicle, trailer, settings, true);
       setTrailerLeasePaymentTiming(trailer ? normalizeLeaseTiming(trailer) : leasePaymentTiming);
 
-      const isFrigo = isRefrigeratedTrailer(trailer);
+      const isFrigo = Boolean(trailer && trailer.fridgeTech !== 'nessuno' && isRefrigeratedTrailer(trailer));
       setRefrigerationEnabled(isFrigo);
       if (isFrigo) {
-        const tech = (trailer?.category === 'refrigerato_azoto' || (trailer?.tractionType || '').toLowerCase().includes('azoto'))
-          ? 'azoto'
-          : 'gasolio';
-        const techDef = settings?.refrigerationParams?.[tech] || (tech === 'azoto' ? { unitCost: 0.13, hourlyConsumption: 30 } : { unitCost: 1.80, hourlyConsumption: 3.0 });
+        let tech = 'gasolio';
+        if (trailer?.fridgeTech && trailer.fridgeTech !== 'nessuno') {
+          tech = trailer.fridgeTech;
+        } else if (trailer?.category === 'refrigerato_azoto' || (trailer?.tractionType || '').toLowerCase().includes('azoto')) {
+          tech = 'azoto';
+        } else if (trailer?.fuelTypeId === 'elettrico' || (trailer?.categoryLabel || '').toLowerCase().includes('elettric')) {
+          tech = 'elettrico';
+        }
+        const defaultsMap = {
+          azoto: { unitCost: 0.13, hourlyConsumption: 30 },
+          gasolio: { unitCost: 1.80, hourlyConsumption: 3.0 },
+          elettrico: { unitCost: 0.35, hourlyConsumption: 8.0 }
+        };
+        const techDef = settings?.refrigerationParams?.[tech] || defaultsMap[tech];
         setRefrigerationTech(tech);
         setRefrigerationUnitCost(techDef.unitCost);
-        setRefrigerationHourlyConsumption(techDef.hourlyConsumption);
+        setRefrigerationHourlyConsumption(trailer?.fridgeHourlyConsumption > 0 ? Number(trailer.fridgeHourlyConsumption) : techDef.hourlyConsumption);
         if (!refrigerationHoursDaily) setRefrigerationHoursDaily(8);
       }
     }
@@ -368,56 +378,66 @@ const SimulationPage = () => {
 
   const handleRefrigerationTechSwitch = (tech) => {
     setRefrigerationTech(tech);
-    const techDef = settings?.refrigerationParams?.[tech] || (tech === 'azoto' ? { unitCost: 0.13, hourlyConsumption: 30 } : { unitCost: 1.80, hourlyConsumption: 3.0 });
+    const defaultsMap = {
+      azoto: { unitCost: 0.13, hourlyConsumption: 30 },
+      gasolio: { unitCost: 1.80, hourlyConsumption: 3.0 },
+      elettrico: { unitCost: 0.35, hourlyConsumption: 8.0 }
+    };
+    const techDef = settings?.refrigerationParams?.[tech] || defaultsMap[tech] || defaultsMap.gasolio;
     setRefrigerationUnitCost(techDef.unitCost);
     setRefrigerationHourlyConsumption(techDef.hourlyConsumption);
   };
 
   const currentShiftType = doubleDrivers ? '2_turni' : (isNightShift ? '1_notturno' : '1_diurno');
 
-  // Calcolo Simulazione
-  const handleCalculate = (e) => {
-    if (e) e.preventDefault();
-    const vehicle = fleet.find(v => v.id === selectedVehicleId);
-    const trailer = trailers.find(t => t.id === selectedTrailerId);
+  // Helper puro per calcolare i risultati da parametri correnti o ricaricati
+  const buildSimulationResult = (params = {}) => {
+    const curFleet = params.fleetList || fleet;
+    const curTrailers = params.trailersList || trailers;
+    const curSettings = params.settingsObj || settings || {};
 
-    if (!vehicle) return;
+    const vehId = params.vehicleId ?? selectedVehicleId;
+    const trlId = params.trailerId ?? selectedTrailerId;
+    const vehicle = curFleet.find(v => v.id === vehId);
+    const trailer = curTrailers.find(t => t.id === trlId) || null;
+    if (!vehicle) return null;
 
-    const km = Number(kmTotal) || 0;
-    const highwayKm = (km * (Number(kmHighwayPercent) || 0)) / 100;
+    const km = Number(params.kmTotal ?? kmTotal) || 0;
+    const hPct = Number(params.kmHighwayPercent ?? kmHighwayPercent) || 0;
+    const highwayKm = (km * hPct) / 100;
     const urbanKm = km - highwayKm;
-    const workingDays = Number(workingDaysMonth) || 22;
+    const workingDays = Number(params.workingDaysMonth ?? workingDaysMonth) || 22;
+    const opMonths = Number(params.operatingMonths ?? operatingMonths) || 36;
+    const dblDrivers = params.doubleDrivers !== undefined ? params.doubleDrivers : doubleDrivers;
+    const nightShift = params.isNightShift !== undefined ? params.isNightShift : isNightShift;
+    const shiftType = dblDrivers ? '2_turni' : (nightShift ? '1_notturno' : '1_diurno');
+    const ePayer = params.energyPayer ?? energyPayer;
+    const fPrice = Number(params.fuelPrice ?? fuelPrice) || 0.38;
+    const tRate = Number(params.tollRate ?? tollRate) || 0.12;
+    const tiRate = Number(params.tireRate ?? tireRate) || 0.04;
+    const oroMult = Number(params.orographicMultiplier ?? orographicMultiplier);
+    const safeOroMultiplier = oroMult > 0 ? oroMult : 1.0;
 
-    // 1. Carburante / Energia (NOTA 1.2: 0 € se a carico del cliente) + Correzione Orografica Consumi
     let baseFuelDaily = 0;
-    const safeOroMultiplier = Number(orographicMultiplier) > 0 ? Number(orographicMultiplier) : 1.0;
-    if (energyPayer !== 'client') {
+    if (ePayer !== 'client') {
       if (vehicle.fuelTypeId === 'elettrico') {
-        baseFuelDaily = (vehicle.avgConsumption || 1.2) * km * fuelPrice;
+        baseFuelDaily = (vehicle.avgConsumption || 1.2) * km * fPrice;
       } else if (vehicle.fuelTypeId === 'biolng') {
         if (vehicle.yieldKmPerUnit && vehicle.yieldKmPerUnit > 0) {
-          baseFuelDaily = (km / vehicle.yieldKmPerUnit) * fuelPrice;
+          baseFuelDaily = (km / vehicle.yieldKmPerUnit) * fPrice;
         } else {
-          baseFuelDaily = ((vehicle.avgConsumption || 30) / 100) * km * fuelPrice;
+          baseFuelDaily = ((vehicle.avgConsumption || 30) / 100) * km * fPrice;
         }
       } else {
-        baseFuelDaily = ((vehicle.avgConsumption || 32) / 100) * km * fuelPrice;
+        baseFuelDaily = ((vehicle.avgConsumption || 32) / 100) * km * fPrice;
       }
     }
     const fuelDaily = +(baseFuelDaily * safeOroMultiplier).toFixed(2);
+    const tollsDaily = highwayKm * tRate;
+    const tiresDaily = km * tiRate;
+    const driverDaily = calculateDriverDailyCost(vehicle, shiftType, curSettings);
 
-    // 2. Autostrada
-    const tollsDaily = highwayKm * (Number(tollRate) || 0.12);
-
-    // 3. Gomme
-    const tiresDaily = km * (Number(tireRate) || 0.04);
-
-    // 4. Autista (NOTA 1.3 & NOTA 3.2.D: dinamico per mezzo + doppio turno sempre Diurno + Notturno)
-    const driverDaily = calculateDriverDailyCost(vehicle, currentShiftType, settings || {});
-
-    // 5. Noleggio Mezzo e Semirimorchio + Assicurazione Specifica sul singolo mezzo/rimorchio
-    // (I mezzi a nolo hanno assicurazione integrata, i semirimorchi hanno un proprio valore specifico)
-    const insCalc = calculateSpecificInsuranceCost(vehicle, trailer, workingDays, settings || {});
+    const insCalc = calculateSpecificInsuranceCost(vehicle, trailer, workingDays, curSettings);
     const vehicleLeaseDaily = workingDays > 0
       ? ((Number(vehicle.monthlyLease) || 0) + insCalc.vehicleInsuranceMonthly) / workingDays
       : 0;
@@ -425,67 +445,95 @@ const SimulationPage = () => {
       ? ((Number(trailer.monthlyLease) || 0) + insCalc.trailerInsuranceMonthly) / workingDays
       : 0;
 
-    // 6. Refrigerazione Gruppo Frigo (NOTA 3.1)
+    const refEn = params.refrigerationEnabled !== undefined ? params.refrigerationEnabled : refrigerationEnabled;
+    const refT = params.refrigerationTech ?? refrigerationTech;
+    const refUnit = params.refrigerationUnitCost ?? refrigerationUnitCost;
+    const refHourly = params.refrigerationHourlyConsumption ?? refrigerationHourlyConsumption;
+    const refHoursD = params.refrigerationHoursDaily ?? refrigerationHoursDaily;
+
     const refCalc = calculateRefrigerationDailyCost({
-      refrigerationEnabled,
-      refrigerationTech,
-      refrigerationUnitCost,
-      refrigerationHourlyConsumption,
-      refrigerationHoursDaily
-    }, trailer, settings || {});
+      refrigerationEnabled: refEn,
+      refrigerationTech: refT,
+      refrigerationUnitCost: refUnit,
+      refrigerationHourlyConsumption: refHourly,
+      refrigerationHoursDaily: refHoursD
+    }, trailer, curSettings);
     const refrigerationCostDaily = refCalc.dailyCost;
 
-    // 7. Costi Accessori (NOTA 3.2: Telematica, Lavaggio, Extra)
+    const telEn = params.telematicsEnabled !== undefined ? params.telematicsEnabled : telematicsEnabled;
+    const telAu = params.telematicsAuto !== undefined ? params.telematicsAuto : telematicsAuto;
+    const telMo = params.telematicsMonthly ?? telematicsMonthly;
+    const washEn = params.washingEnabled !== undefined ? params.washingEnabled : washingEnabled;
+    const washUnit = params.washingUnitCost ?? washingUnitCost;
+    const washCount = params.washingCountPerMonth ?? washingCountPerMonth;
+    const exDesc = params.extraCostDescription ?? extraCostDescription;
+    const exAmt = params.extraCostAmount ?? extraCostAmount;
+    const exFreq = params.extraCostFrequency ?? extraCostFrequency;
+
     const accCalc = calculateAccessoriesDailyCost({
       workingDaysMonth: workingDays,
-      operatingMonths: 12,
+      operatingMonths: opMonths,
       managementType: 'D',
-      telematicsEnabled,
-      telematicsAuto,
-      telematicsMonthly,
-      washingEnabled,
-      washingUnitCost,
-      washingCountPerMonth,
-      extraCostDescription,
-      extraCostAmount,
-      extraCostFrequency
-    }, vehicle, trailer, settings || {});
+      telematicsEnabled: telEn,
+      telematicsAuto: telAu,
+      telematicsMonthly: telMo,
+      washingEnabled: washEn,
+      washingUnitCost: washUnit,
+      washingCountPerMonth: washCount,
+      extraCostDescription: exDesc,
+      extraCostAmount: exAmt,
+      extraCostFrequency: exFreq
+    }, vehicle, trailer, curSettings);
 
     const telematicsCostDaily = accCalc.telematicsDaily;
     const washingCostDaily = accCalc.washingDaily;
     const extraCostDaily = accCalc.extraDaily;
 
-    // Compenso Partner Coordinamento (€/viaggio * viaggi/giorno)
-    const partnerFeeDaily = (Number(partnerFeePerTrip) || 0) * (Number(tripsPerDay) || 1);
+    const pFee = Number(params.partnerFeePerTrip ?? partnerFeePerTrip) || 0;
+    const tPerDay = Number(params.tripsPerDay ?? tripsPerDay) || 1;
+    const partnerFeeDaily = pFee * tPerDay;
 
-    // Totale Costi Giornalieri Diretti + Noleggi + Refrigerazione + Accessori + Compenso Partner
     const totalCostDaily = fuelDaily + tollsDaily + tiresDaily + driverDaily +
       vehicleLeaseDaily + trailerLeaseDaily +
       refrigerationCostDaily + telematicsCostDaily + washingCostDaily + extraCostDaily +
       partnerFeeDaily;
 
-    // Gestione Singolo Cliente vs Multi-Commessa (da 1 a 4 Clienti con costi a fattor comune)
-    const isMulti = clientCount > 1;
-    const activeBillingEntities = billingEntities.slice(0, clientCount);
+    const cCount = params.clientCount ?? clientCount;
+    const allocMode = params.costAllocationMode ?? costAllocationMode;
+    const bEntities = params.billingEntities ?? billingEntities;
+    const tMargin = params.targetMarginPercent ?? targetMarginPercent;
+    const isMulti = cCount > 1;
+    const activeBillingEntities = bEntities.slice(0, cCount);
     const multiAlloc = isMulti
-      ? computeMultiClientAllocation(totalCostDaily, workingDays, activeBillingEntities, costAllocationMode)
+      ? computeMultiClientAllocation(totalCostDaily, workingDays, activeBillingEntities, allocMode)
       : null;
 
-    // Prezzo con margine target (o somma tariffe attive delle entità di fatturazione)
     const marginPct = isMulti
       ? multiAlloc.totalMolPercent
-      : (targetMarginPercent !== '' && targetMarginPercent !== undefined ? Number(targetMarginPercent) : 20);
+      : (tMargin !== '' && tMargin !== undefined ? Number(tMargin) : 20);
     const revenueDailyTarget = isMulti
       ? multiAlloc.totalRevenueDaily
       : (marginPct < 100 ? totalCostDaily / (1 - (marginPct / 100)) : totalCostDaily * 1.2);
     const molDailyTarget = revenueDailyTarget - totalCostDaily;
 
-    // Metriche finanziarie ponderate coerenti al 100% con ProjectsPage
+    const pClient = params.paymentTermsClient ?? paymentTermsClient;
+    const pSuppliers = params.paymentTermsSuppliers ?? paymentTermsSuppliers;
+    const lTiming = params.leasePaymentTiming ?? leasePaymentTiming;
+    const tTiming = params.trailerLeasePaymentTiming ?? trailerLeasePaymentTiming;
+    const pDriver = params.paymentTermsDriver ?? paymentTermsDriver;
+    const pFuel = params.paymentTermsFuel ?? paymentTermsFuel;
+    const pTolls = params.paymentTermsTolls ?? paymentTermsTolls;
+    const pTires = params.paymentTermsTires ?? paymentTermsTires;
+    const pRef = params.paymentTermsRefrigeration ?? paymentTermsRefrigeration;
+    const pTel = params.paymentTermsTelematics ?? paymentTermsTelematics;
+    const pWash = params.paymentTermsWashing ?? paymentTermsWashing;
+    const pExtra = params.paymentTermsExtra ?? paymentTermsExtra;
+
     const simulatedProjectObj = {
       workingDaysMonth: workingDays,
-      operatingMonths: Number(operatingMonths) || 36,
+      operatingMonths: opMonths,
       driverCostDaily: driverDaily,
-      energyPayer,
+      energyPayer: ePayer,
       fuelCostDaily: fuelDaily,
       tollsDaily,
       tiresDaily,
@@ -498,69 +546,69 @@ const SimulationPage = () => {
       trailerLeaseDaily,
       revenueDaily: revenueDailyTarget,
       isMultiClient: isMulti,
-      costAllocationMode,
+      costAllocationMode: allocMode,
       billingEntities: isMulti ? multiAlloc.entities : [],
-      leasePaymentTiming,
-      trailerLeasePaymentTiming,
-      paymentTermsClient: isMulti ? multiAlloc.weightedClientDso : paymentTermsClient,
-      paymentTermsSuppliers,
-      paymentTermsDriver,
-      paymentTermsFuel,
-      paymentTermsTolls,
-      paymentTermsTires,
-      paymentTermsRefrigeration,
-      paymentTermsTelematics,
-      paymentTermsWashing,
-      paymentTermsExtra,
+      leasePaymentTiming: lTiming,
+      trailerLeasePaymentTiming: tTiming,
+      paymentTermsClient: isMulti ? multiAlloc.weightedClientDso : pClient,
+      paymentTermsSuppliers: pSuppliers,
+      paymentTermsDriver: pDriver,
+      paymentTermsFuel: pFuel,
+      paymentTermsTolls: pTolls,
+      paymentTermsTires: pTires,
+      paymentTermsRefrigeration: pRef,
+      paymentTermsTelematics: pTel,
+      paymentTermsWashing: pWash,
+      paymentTermsExtra: pExtra,
       depositAmount: 0
     };
     const financialMetrics = calculateSingleProjectMetrics(simulatedProjectObj);
 
-    const computedResult = {
+    return {
       vehicle,
       trailer,
       kmTotal: km,
       highwayKm,
       urbanKm,
       workingDays,
-      operatingMonths: Number(operatingMonths) || 36,
-      driverShiftType: currentShiftType,
-      energyPayer,
+      operatingMonths: opMonths,
+      driverShiftType: shiftType,
+      energyPayer: ePayer,
       baseFuelDaily: +baseFuelDaily.toFixed(2),
       orographicMultiplier: safeOroMultiplier,
-      routeStops,
-      isRoundTrip,
-      routeAnalysis,
-      tollRate: Number(tollRate) || 0.12,
-      tireRate: Number(tireRate) || 0.04,
-      fuelPrice: Number(fuelPrice) || 0.38,
+      routeStops: params.routeStops ?? routeStops,
+      isRoundTrip: params.isRoundTrip !== undefined ? params.isRoundTrip : isRoundTrip,
+      routeAnalysis: params.routeAnalysis ?? routeAnalysis,
+      tollRate: tRate,
+      tireRate: tiRate,
+      fuelPrice: fPrice,
       fuelDaily,
       tollsDaily,
       tiresDaily,
       driverDaily,
       vehicleLeaseDaily,
       trailerLeaseDaily,
-      refrigerationEnabled,
-      refrigerationTech,
+      refrigerationEnabled: refEn,
+      refrigerationTech: refT,
       refrigerationHourlyCost: refCalc.hourlyCost,
-      refrigerationHoursDaily,
+      refrigerationHoursDaily: refHoursD,
       refrigerationCostDaily,
-      telematicsEnabled,
+      telematicsEnabled: telEn,
       telematicsMonthly: accCalc.telematicsMonthly,
       telematicsCostDaily,
-      washingEnabled,
+      washingEnabled: washEn,
       washingMonthly: accCalc.washingMonthly,
       washingCostDaily,
-      extraCostDescription,
-      extraCostAmount,
-      extraCostFrequency,
+      extraCostDescription: exDesc,
+      extraCostAmount: exAmt,
+      extraCostFrequency: exFreq,
       extraCostDaily,
-      partnerFeePerTrip: Number(partnerFeePerTrip) || 0,
-      tripsPerDay: Number(tripsPerDay) || 1,
+      partnerFeePerTrip: pFee,
+      tripsPerDay: tPerDay,
       partnerMarginDaily: partnerFeeDaily,
       isMultiClient: isMulti,
-      clientCount,
-      costAllocationMode,
+      clientCount: cCount,
+      costAllocationMode: allocMode,
       multiAllocation: multiAlloc,
       billingEntities: isMulti ? multiAlloc.entities : [],
       totalCostDaily: financialMetrics.totalCostDaily,
@@ -577,15 +625,28 @@ const SimulationPage = () => {
       workingCapitalNeed: financialMetrics.estimatedWorkingCapitalGap,
       workingCapitalBreakdown: financialMetrics.workingCapitalBreakdown
     };
+  };
 
-    setSimulationResult(computedResult);
+  // Calcola Anteprima Preventivo (NON sovrascrive l'archivio finché l'utente non clicca Salva in Archivio)
+  const handleCalculate = (e) => {
+    if (e) e.preventDefault();
+    const computedResult = buildSimulationResult();
+    if (computedResult) {
+      setSimulationResult(computedResult);
+    }
+  };
 
-    // Registrazione automatica della simulazione nell'Archivio Preventivi per poterla ricaricare o convertire se accettata dal cliente
+  // Registra o aggiorna esplicitamente la simulazione nell'Archivio Preventivi
+  const handleSaveToRegistry = () => {
+    const computed = simulationResult || buildSimulationResult();
+    if (!computed) return;
+    if (!simulationResult) setSimulationResult(computed);
+
     const simCode = activeSimulationCode || ('PREV-' + Math.floor(100 + Math.random() * 900));
-    const displayClient = isMulti
-      ? multiAlloc.combinedClientLabel
+    const displayClient = computed.isMultiClient
+      ? computed.multiAllocation.combinedClientLabel
       : (clientName || 'Trattativa Commerciale');
-    const displayRoute = routeName || (routeAnalysis?.generatedRouteName) || `${km} km/gg`;
+    const displayRoute = routeName || (routeAnalysis?.generatedRouteName) || `${computed.kmTotal} km/gg`;
 
     const savedSim = storageService.saveSimulation({
       id: activeSimulationId || undefined,
@@ -594,37 +655,37 @@ const SimulationPage = () => {
       clientName: displayClient,
       rawClientName: clientName,
       routeName: displayRoute,
-      vehicleId: vehicle.id,
-      vehicleName: vehicle.name,
-      trailerId: trailer ? trailer.id : '',
-      trailerName: trailer ? trailer.name : '',
-      kmTotal: km,
+      vehicleId: computed.vehicle.id,
+      vehicleName: computed.vehicle.name,
+      trailerId: computed.trailer ? computed.trailer.id : '',
+      trailerName: computed.trailer ? computed.trailer.name : '',
+      kmTotal: computed.kmTotal,
       kmHighwayPercent: Number(kmHighwayPercent) || 0,
-      workingDaysMonth: workingDays,
-      operatingMonths: Number(operatingMonths) || 36,
+      workingDaysMonth: computed.workingDays,
+      operatingMonths: computed.operatingMonths,
       doubleDrivers,
       isNightShift,
-      energyPayer,
-      fuelPrice: Number(fuelPrice) || 0.38,
-      tollRate: Number(tollRate) || 0.12,
-      tireRate: Number(tireRate) || 0.04,
-      targetMarginPercent: +marginPct.toFixed(2),
-      refrigerationEnabled,
-      refrigerationTech,
+      energyPayer: computed.energyPayer,
+      fuelPrice: computed.fuelPrice,
+      tollRate: computed.tollRate,
+      tireRate: computed.tireRate,
+      targetMarginPercent: computed.molPercent,
+      refrigerationEnabled: computed.refrigerationEnabled,
+      refrigerationTech: computed.refrigerationTech,
       refrigerationUnitCost,
       refrigerationHourlyConsumption,
-      refrigerationHoursDaily,
-      telematicsEnabled,
+      refrigerationHoursDaily: computed.refrigerationHoursDaily,
+      telematicsEnabled: computed.telematicsEnabled,
       telematicsAuto,
-      telematicsMonthly,
-      washingEnabled,
+      telematicsMonthly: computed.telematicsMonthly,
+      washingEnabled: computed.washingEnabled,
       washingUnitCost,
       washingCountPerMonth,
       extraCostDescription,
       extraCostAmount,
       extraCostFrequency,
-      partnerFeePerTrip: Number(partnerFeePerTrip) || 0,
-      tripsPerDay: Number(tripsPerDay) || 1,
+      partnerFeePerTrip: computed.partnerFeePerTrip,
+      tripsPerDay: computed.tripsPerDay,
       paymentTermsClient,
       paymentTermsSuppliers,
       leasePaymentTiming,
@@ -637,30 +698,30 @@ const SimulationPage = () => {
       paymentTermsTelematics,
       paymentTermsWashing,
       paymentTermsExtra,
-      isMultiClient: isMulti,
-      clientCount,
-      costAllocationMode,
-      billingEntities: isMulti ? multiAlloc.entities : billingEntities,
+      isMultiClient: computed.isMultiClient,
+      clientCount: computed.clientCount,
+      costAllocationMode: computed.costAllocationMode,
+      billingEntities: computed.isMultiClient ? computed.multiAllocation.entities : billingEntities,
       routeStops,
       isRoundTrip,
-      orographicMultiplier: safeOroMultiplier,
+      orographicMultiplier: computed.orographicMultiplier,
       orographyProfile: routeAnalysis?.orography || null,
       resultSnapshot: {
-        totalCostDaily: financialMetrics.totalCostDaily,
-        revenueDailyTarget,
-        molDailyTarget,
-        molPercent: +marginPct.toFixed(2),
-        monthlyCost: financialMetrics.monthlyCost,
-        monthlyRevenue: financialMetrics.monthlyRevenue,
-        monthlyMol: financialMetrics.monthlyMol,
-        workingCapitalNeed: financialMetrics.estimatedWorkingCapitalGap
+        totalCostDaily: computed.totalCostDaily,
+        revenueDailyTarget: computed.revenueDailyTarget,
+        molDailyTarget: computed.molDailyTarget,
+        molPercent: computed.molPercent,
+        monthlyCost: computed.monthlyCost,
+        monthlyRevenue: computed.monthlyRevenue,
+        monthlyMol: computed.monthlyMol,
+        workingCapitalNeed: computed.workingCapitalNeed
       }
     });
 
     setActiveSimulationId(savedSim.id);
     setActiveSimulationCode(savedSim.code);
     setSavedSimulations(storageService.getSimulations());
-    setRegSaveBanner(`Simulazione ${savedSim.code} registrata automaticamente nell'archivio preventivi.`);
+    setRegSaveBanner(`Preventivo ${savedSim.code} salvato nell'Archivio Simulazioni.`);
     setTimeout(() => setRegSaveBanner(''), 4000);
   };
 
@@ -673,7 +734,7 @@ const SimulationPage = () => {
     setTimeout(() => setRegSaveBanner(''), 3000);
   };
 
-  // Ricarica una simulazione salvata nel form del Simulatore
+  // Ricarica una simulazione salvata nel configuratore e calcola subito i risultati
   const handleLoadSavedSimulation = (sim) => {
     if (!sim) return;
     setActiveSimulationId(sim.id);
@@ -715,8 +776,11 @@ const SimulationPage = () => {
     if (sim.trailerLeasePaymentTiming) setTrailerLeasePaymentTiming(sim.trailerLeasePaymentTiming);
     setClientCount(sim.clientCount || 1);
     setCostAllocationMode(sim.costAllocationMode || 'equal');
+    const mergedEntities = Array.isArray(sim.billingEntities) && sim.billingEntities.length > 0
+      ? billingEntities.map((def, i) => sim.billingEntities[i] || def)
+      : billingEntities;
     if (Array.isArray(sim.billingEntities) && sim.billingEntities.length > 0) {
-      setBillingEntities(prev => prev.map((def, i) => sim.billingEntities[i] || def));
+      setBillingEntities(mergedEntities);
     }
     if (Array.isArray(sim.routeStops) && sim.routeStops.length >= 2) {
       setRouteStops(sim.routeStops);
@@ -730,7 +794,50 @@ const SimulationPage = () => {
         generatedRouteName: sim.routeName
       }));
     }
-    setRegSaveBanner(`Simulazione ${sim.code} caricata nel configuratore. Clicca "Calcola Preventivo" per aggiornare.`);
+
+    const immediateResult = buildSimulationResult({
+      vehicleId: sim.vehicleId,
+      trailerId: sim.trailerId || '',
+      kmTotal: sim.kmTotal ?? 250,
+      kmHighwayPercent: sim.kmHighwayPercent ?? 60,
+      workingDaysMonth: sim.workingDaysMonth ?? 22,
+      operatingMonths: sim.operatingMonths ?? 36,
+      doubleDrivers: Boolean(sim.doubleDrivers),
+      isNightShift: Boolean(sim.isNightShift),
+      energyPayer: sim.energyPayer || 'four',
+      fuelPrice: sim.fuelPrice,
+      tollRate: sim.tollRate,
+      tireRate: sim.tireRate,
+      targetMarginPercent: sim.targetMarginPercent,
+      refrigerationEnabled: Boolean(sim.refrigerationEnabled),
+      refrigerationTech: sim.refrigerationTech,
+      refrigerationUnitCost: sim.refrigerationUnitCost,
+      refrigerationHourlyConsumption: sim.refrigerationHourlyConsumption,
+      refrigerationHoursDaily: sim.refrigerationHoursDaily,
+      telematicsEnabled: sim.telematicsEnabled,
+      telematicsAuto: sim.telematicsAuto,
+      telematicsMonthly: sim.telematicsMonthly,
+      washingEnabled: sim.washingEnabled,
+      washingUnitCost: sim.washingUnitCost,
+      washingCountPerMonth: sim.washingCountPerMonth,
+      extraCostDescription: sim.extraCostDescription || '',
+      extraCostAmount: sim.extraCostAmount || 0,
+      extraCostFrequency: sim.extraCostFrequency || 'monthly',
+      partnerFeePerTrip: sim.partnerFeePerTrip || 0,
+      tripsPerDay: sim.tripsPerDay || 1,
+      paymentTermsClient: sim.paymentTermsClient ?? 60,
+      paymentTermsSuppliers: sim.paymentTermsSuppliers ?? 30,
+      leasePaymentTiming: sim.leasePaymentTiming,
+      trailerLeasePaymentTiming: sim.trailerLeasePaymentTiming,
+      clientCount: sim.clientCount || 1,
+      costAllocationMode: sim.costAllocationMode || 'equal',
+      billingEntities: mergedEntities,
+      routeStops: sim.routeStops,
+      isRoundTrip: sim.isRoundTrip,
+      orographicMultiplier: sim.orographicMultiplier || 1.0
+    });
+    if (immediateResult) setSimulationResult(immediateResult);
+    setRegSaveBanner(`Simulazione ${sim.code} ricaricata con anteprima aggiornata.`);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -749,15 +856,26 @@ const SimulationPage = () => {
     const isPotential = statusType === 'potential';
     const veh = fleet.find(v => v.id === sim.vehicleId) || fleet[0];
     const trl = trailers.find(t => t.id === sim.trailerId) || null;
+    const curSettings = settings || {};
     const snap = sim.resultSnapshot || {};
     const workingDays = sim.workingDaysMonth || 22;
+    const opMonths = Number(sim.operatingMonths) || 36;
     const leaseTiming = sim.leasePaymentTiming || 'M1_D10';
     const leaseTerms = leaseTiming === 'M1_D10' ? 0 : leaseTiming === 'M1_D30' ? 30 : 60;
     const isMulti = Boolean(sim.isMultiClient) && Array.isArray(sim.billingEntities) && sim.billingEntities.length > 1;
     const shiftType = sim.doubleDrivers ? '2_turni' : (sim.isNightShift ? '1_notturno' : '1_diurno');
-    const driverDaily = calculateDriverDailyCost(veh, shiftType, settings || {});
-    const vLeaseDaily = workingDays > 0 ? (Number(veh?.monthlyLease) || 0) / workingDays : 0;
-    const tLeaseDaily = (trl && workingDays > 0) ? (Number(trl.monthlyLease) || 0) / workingDays : 0;
+    const mgmtType = veh?.ownershipType === 'terzi' ? 'T' : 'D';
+    const driverDaily = calculateDriverDailyCost(veh, shiftType, curSettings);
+
+    // Fix Bug 1: include assicurazione specifica su mezzo e semirimorchio
+    const insCalc = calculateSpecificInsuranceCost(veh, trl, workingDays, curSettings);
+    const vLeaseDaily = workingDays > 0
+      ? ((Number(veh?.monthlyLease) || 0) + insCalc.vehicleInsuranceMonthly) / workingDays
+      : 0;
+    const tLeaseDaily = (trl && workingDays > 0)
+      ? ((Number(trl.monthlyLease) || 0) + insCalc.trailerInsuranceMonthly) / workingDays
+      : 0;
+
     const highwayKm = ((Number(sim.kmTotal) || 0) * (Number(sim.kmHighwayPercent) || 60)) / 100;
     const tollsDaily = +(highwayKm * (Number(sim.tollRate) || 0.12)).toFixed(2);
     const tiresDaily = +((Number(sim.kmTotal) || 0) * (Number(sim.tireRate) || 0.04)).toFixed(2);
@@ -777,7 +895,31 @@ const SimulationPage = () => {
       }
     }
 
-    const newProject = {
+    // Fix Bug 2: calcola realmente gruppo frigo ed accessori/extra
+    const refCalc = calculateRefrigerationDailyCost({
+      refrigerationEnabled: Boolean(sim.refrigerationEnabled),
+      refrigerationTech: sim.refrigerationTech || 'gasolio',
+      refrigerationUnitCost: sim.refrigerationUnitCost,
+      refrigerationHourlyConsumption: sim.refrigerationHourlyConsumption,
+      refrigerationHoursDaily: sim.refrigerationHoursDaily
+    }, trl, curSettings);
+
+    const accCalc = calculateAccessoriesDailyCost({
+      workingDaysMonth: workingDays,
+      operatingMonths: opMonths,
+      managementType: mgmtType,
+      telematicsEnabled: sim.telematicsEnabled !== false,
+      telematicsAuto: sim.telematicsAuto !== false,
+      telematicsMonthly: sim.telematicsMonthly,
+      washingEnabled: sim.washingEnabled !== false,
+      washingUnitCost: sim.washingUnitCost,
+      washingCountPerMonth: sim.washingCountPerMonth,
+      extraCostDescription: sim.extraCostDescription,
+      extraCostAmount: sim.extraCostAmount,
+      extraCostFrequency: sim.extraCostFrequency
+    }, veh, trl, curSettings);
+
+    const draftProject = {
       code: (isPotential ? 'SIM-' : 'PRJ-') + Math.floor(100 + Math.random() * 900),
       sourceSimulationId: sim.id,
       sourceSimulationCode: sim.code,
@@ -795,11 +937,11 @@ const SimulationPage = () => {
       costAllocationMode: sim.costAllocationMode || 'equal',
       billingEntities: isMulti ? sim.billingEntities : [],
       startDate: new Date().toISOString().slice(0, 10),
-      operatingMonths: Number(sim.operatingMonths) || 36,
+      operatingMonths: opMonths,
       workingDaysMonth: workingDays,
       kmDaily: Number(sim.kmTotal) || 250,
       highwayPercent: Number(sim.kmHighwayPercent) || 65,
-      managementType: veh?.ownershipType === 'terzi' ? 'T' : 'D',
+      managementType: mgmtType,
       vehicleId: veh?.id || '',
       trailerId: trl ? trl.id : '',
       driverShiftType: shiftType,
@@ -810,36 +952,29 @@ const SimulationPage = () => {
       tollsDaily,
       tiresDaily,
       refrigerationEnabled: Boolean(sim.refrigerationEnabled),
-      refrigerationTech: sim.refrigerationTech || 'gasolio',
-      refrigerationUnitCost: Number(sim.refrigerationUnitCost) || 1.80,
-      refrigerationHourlyConsumption: Number(sim.refrigerationHourlyConsumption) || 3.0,
-      refrigerationHoursDaily: Number(sim.refrigerationHoursDaily) || 8,
-      refrigerationCostDaily: 0,
-      telematicsEnabled: sim.telematicsEnabled !== false,
+      refrigerationTech: refCalc.tech,
+      refrigerationUnitCost: refCalc.unitCost,
+      refrigerationHourlyConsumption: refCalc.hourlyConsumption,
+      refrigerationHoursDaily: refCalc.hoursPerDay,
+      refrigerationCostDaily: refCalc.dailyCost,
+      telematicsEnabled: accCalc.telematicsEnabled,
       telematicsAuto: sim.telematicsAuto !== false,
-      telematicsMonthly: Number(sim.telematicsMonthly) || 14,
-      telematicsCostDaily: +((Number(sim.telematicsMonthly) || 14) / workingDays).toFixed(2),
-      washingEnabled: sim.washingEnabled !== false,
-      washingUnitCost: Number(sim.washingUnitCost) || 80,
-      washingCountPerMonth: Number(sim.washingCountPerMonth) || 2,
-      washingCostDaily: +(((Number(sim.washingUnitCost) || 80) * (Number(sim.washingCountPerMonth) || 2)) / workingDays).toFixed(2),
+      telematicsMonthly: accCalc.telematicsMonthly,
+      telematicsCostDaily: accCalc.telematicsDaily,
+      washingEnabled: accCalc.washingEnabled,
+      washingUnitCost: accCalc.washUnitCost,
+      washingCountPerMonth: accCalc.washesPerMonth,
+      washingCostDaily: accCalc.washingDaily,
       extraCostDescription: sim.extraCostDescription || '',
       extraCostAmount: Number(sim.extraCostAmount) || 0,
       extraCostFrequency: sim.extraCostFrequency || 'monthly',
-      extraCostDaily: 0,
+      extraCostDaily: accCalc.extraDaily,
       otherCostsDaily: 0,
       partnerMarginDaily: partnerDaily,
       porterageDaily: 0,
       vehicleLeaseDaily: +vLeaseDaily.toFixed(2),
       trailerLeaseDaily: +tLeaseDaily.toFixed(2),
       revenueDaily: +(snap.revenueDailyTarget || 750).toFixed(2),
-      totalCostDaily: +(snap.totalCostDaily || 600).toFixed(2),
-      molDaily: +(snap.molDailyTarget || 150).toFixed(2),
-      monthlyCost: +(snap.monthlyCost || 13200).toFixed(2),
-      monthlyRevenue: +(snap.monthlyRevenue || 16500).toFixed(2),
-      monthlyMol: +(snap.monthlyMol || 3300).toFixed(2),
-      molPercent: snap.molPercent ?? 21,
-      targetMarginPercent: snap.molPercent ?? 21,
       contractStatus: isPotential ? 'potential' : 'active',
       isPipelineFuture: isPotential,
       paymentTermsClient: sim.paymentTermsClient ?? 60,
@@ -855,10 +990,23 @@ const SimulationPage = () => {
       paymentTermsTelematics: sim.paymentTermsTelematics ?? 30,
       paymentTermsWashing: sim.paymentTermsWashing ?? 30,
       paymentTermsExtra: sim.paymentTermsExtra ?? 30,
-      acciseRecoveryEligible: sim.energyPayer !== 'client',
+      acciseRecoveryEligible: false,
       depositAmount: 0,
-      cashAdvanceRequired: +(snap.workingCapitalNeed || 15000).toFixed(2),
       notes: `Convertita da Simulazione registrata ${sim.code}${sim.orographyProfile ? ` | Orografia: ${sim.orographyProfile.terrainLabel} (D+ ${sim.orographyProfile.elevationGainM}m, fattore consumi ${sim.orographicMultiplier}x)` : ''}`
+    };
+
+    const calcMetrics = calculateSingleProjectMetrics(draftProject);
+    const newProject = {
+      ...draftProject,
+      revenueDaily: +calcMetrics.revenueDaily.toFixed(2),
+      totalCostDaily: +calcMetrics.totalCostDaily.toFixed(2),
+      molDaily: +calcMetrics.molDaily.toFixed(2),
+      monthlyCost: +calcMetrics.monthlyCost.toFixed(2),
+      monthlyRevenue: +calcMetrics.monthlyRevenue.toFixed(2),
+      monthlyMol: +calcMetrics.monthlyMol.toFixed(2),
+      molPercent: +calcMetrics.molPercent.toFixed(2),
+      targetMarginPercent: +calcMetrics.molPercent.toFixed(2),
+      cashAdvanceRequired: +calcMetrics.estimatedWorkingCapitalGap.toFixed(2)
     };
 
     const createdProj = storageService.addProject(newProject);
@@ -869,7 +1017,7 @@ const SimulationPage = () => {
       convertedAt: new Date().toISOString()
     });
     setSavedSimulations(storageService.getSimulations());
-    navigate('/projects');
+    navigate(`/projects?edit=${createdProj.id}`);
   };
 
   // Salva direttamente nel Budget Commesse FOUR passando TUTTI i parametri e le nuove voci
@@ -1048,7 +1196,7 @@ const SimulationPage = () => {
       paymentTermsTelematics,
       paymentTermsWashing,
       paymentTermsExtra,
-      acciseRecoveryEligible: energyPayer !== 'client',
+      acciseRecoveryEligible: false,
       depositAmount: 0,
       sourceSimulationId: activeSimulationId || null,
       sourceSimulationCode: activeSimulationCode || null,
@@ -1134,7 +1282,7 @@ const SimulationPage = () => {
       ['Pneumatici e Manutenzione Programmata', formatEUR(simulationResult.tiresDaily)],
       ['Quota Noleggio Trattore / Motrice', formatEUR(simulationResult.vehicleLeaseDaily)],
       ['Quota Noleggio Semirimorchio FOUR', formatEUR(simulationResult.trailerLeaseDaily)],
-      ...(simulationResult.refrigerationCostDaily > 0 ? [[`Gruppo Frigo (${simulationResult.refrigerationTech === 'azoto' ? 'Azoto Liquido' : 'Gasolio'} • ${simulationResult.refrigerationHoursDaily}h/gg)`, formatEUR(simulationResult.refrigerationCostDaily)]] : []),
+      ...(simulationResult.refrigerationCostDaily > 0 ? [[`Gruppo Frigo (${simulationResult.refrigerationTech === 'azoto' ? 'Azoto Liquido' : simulationResult.refrigerationTech === 'elettrico' ? 'Frigo Elettrico' : 'Gasolio'} • ${simulationResult.refrigerationHoursDaily}h/gg)`, formatEUR(simulationResult.refrigerationCostDaily)]] : []),
       ...(simulationResult.telematicsCostDaily > 0 ? [[`Telematica GPS & Controllo Flotta (${formatEUR(simulationResult.telematicsMonthly)}/m)`, formatEUR(simulationResult.telematicsCostDaily)]] : []),
       ...(simulationResult.washingCostDaily > 0 ? [[`Lavaggi Automezzi (${formatEUR(simulationResult.washingMonthly)}/m)`, formatEUR(simulationResult.washingCostDaily)]] : []),
       ...(simulationResult.extraCostDaily > 0 ? [[`Costi Accessori Extra (${simulationResult.extraCostDescription || simulationResult.extraCostFrequency})`, formatEUR(simulationResult.extraCostDaily)]] : []),
@@ -1199,6 +1347,60 @@ const SimulationPage = () => {
       ? `_MultiCommessa_${simulationResult.clientCount}Clienti`
       : (clientName ? `_${clientName.replace(/\s+/g, '_')}` : '');
     doc.save(`FOUR_Preventivo${clientPart}_${simulationResult.vehicle.id}.pdf`);
+  };
+
+  // Esporta Preventivo completo in Excel (.xlsx)
+  const handleExportExcel = () => {
+    if (!simulationResult) return;
+    const summaryRows = [
+      { Voce: 'Veicolo Assegnato', Valore: simulationResult.vehicle.name },
+      { Voce: 'Semirimorchio', Valore: simulationResult.trailer?.name || 'Nessuno' },
+      { Voce: 'Distanza Giornaliera (km)', Valore: simulationResult.kmTotal },
+      { Voce: 'Giorni Lavorativi / Mese', Valore: simulationResult.workingDays },
+      { Voce: 'Durata Contratto (Mesi)', Valore: simulationResult.operatingMonths },
+      { Voce: 'Autista (€/gg)', Valore: +simulationResult.driverDaily.toFixed(2) },
+      { Voce: 'Energia / Carburante (€/gg)', Valore: +simulationResult.fuelDaily.toFixed(2) },
+      { Voce: 'Pedaggi Telepass (€/gg)', Valore: +simulationResult.tollsDaily.toFixed(2) },
+      { Voce: 'Pneumatici (€/gg)', Valore: +simulationResult.tiresDaily.toFixed(2) },
+      { Voce: 'Noleggio Mezzo (€/gg)', Valore: +simulationResult.vehicleLeaseDaily.toFixed(2) },
+      { Voce: 'Noleggio Semirimorchio (€/gg)', Valore: +simulationResult.trailerLeaseDaily.toFixed(2) },
+      { Voce: 'Refrigerazione Frigo (€/gg)', Valore: +simulationResult.refrigerationCostDaily.toFixed(2) },
+      { Voce: 'Accessori / Telematica / Lavaggi / Extra (€/gg)', Valore: +(simulationResult.telematicsCostDaily + simulationResult.washingCostDaily + simulationResult.extraCostDaily).toFixed(2) },
+      { Voce: 'Compenso Partner (€/gg)', Valore: +simulationResult.partnerMarginDaily.toFixed(2) },
+      { Voce: 'TOTALE COSTO GIORNALIERO (€/gg)', Valore: +simulationResult.totalCostDaily.toFixed(2) },
+      { Voce: 'TARIFFA GIORNALIERA PROPOSTA (€/gg)', Valore: +simulationResult.revenueDailyTarget.toFixed(2) },
+      { Voce: 'M.O.L. GIORNALIERO (€/gg)', Valore: +simulationResult.molDailyTarget.toFixed(2) },
+      { Voce: 'M.O.L. % SU RICAVO', Valore: `${simulationResult.molPercent.toFixed(1)}%` },
+      { Voce: 'COSTO MENSILE (€/m)', Valore: +simulationResult.monthlyCost.toFixed(2) },
+      { Voce: 'RICAVO MENSILE (€/m)', Valore: +simulationResult.monthlyRevenue.toFixed(2) },
+      { Voce: 'M.O.L. MENSILE (€/m)', Valore: +simulationResult.monthlyMol.toFixed(2) },
+      { Voce: 'FABBISOGNO CIRCOLANTE (€)', Valore: +simulationResult.workingCapitalNeed.toFixed(2) }
+    ];
+
+    const wb = XLSX.utils.book_new();
+    const wsMain = XLSX.utils.json_to_sheet(summaryRows);
+    XLSX.utils.book_append_sheet(wb, wsMain, 'Preventivo Tratta');
+
+    if (simulationResult.isMultiClient && Array.isArray(simulationResult.billingEntities)) {
+      const multiRows = simulationResult.billingEntities.map((be, idx) => ({
+        Cliente: be.clientName || `Cliente ${idx + 1}`,
+        Tratta: be.route || '',
+        'Quota % Costo': `${be.costSharePercent}%`,
+        'Costo Ribaltato (€/gg)': +be.allocatedCostDaily.toFixed(2),
+        'Tariffa Attiva (€/gg)': +be.revenueDaily.toFixed(2),
+        'Ricavo Mensile (€/m)': +be.revenueMonthly.toFixed(2),
+        'M.O.L. (€/m)': +be.molMonthly.toFixed(2),
+        'M.O.L. %': `${be.molPercent}%`,
+        'Incasso DSO (gg)': be.paymentTermsClient
+      }));
+      const wsMulti = XLSX.utils.json_to_sheet(multiRows);
+      XLSX.utils.book_append_sheet(wb, wsMulti, 'Riparto Multi-Commessa');
+    }
+
+    const clientPart = simulationResult.isMultiClient
+      ? `_MultiCommessa_${simulationResult.clientCount}Clienti`
+      : (clientName ? `_${clientName.replace(/\s+/g, '_')}` : '');
+    XLSX.writeFile(wb, `FOUR_Preventivo${clientPart}_${new Date().toISOString().slice(0, 10)}.xlsx`);
   };
 
   return (
@@ -1328,15 +1530,25 @@ const SimulationPage = () => {
                             </div>
                             <div className="mt-1">
                               {isAccepted ? (
-                                <span className="inline-flex items-center gap-1 text-[10px] font-black px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300">
+                                <button
+                                  type="button"
+                                  onClick={() => sim.convertedProjectId && navigate(`/projects?edit=${sim.convertedProjectId}`)}
+                                  className="inline-flex items-center gap-1 text-[10px] font-black px-2 py-0.5 rounded-full bg-emerald-100 hover:bg-emerald-200 text-emerald-800 border border-emerald-300 transition"
+                                  title="Apri la commessa generata in Commesse & Budget"
+                                >
                                   <CheckCircle2 className="w-3 h-3 text-emerald-600" />
                                   Accettata ({sim.convertedProjectCode || 'Attiva'})
-                                </span>
+                                </button>
                               ) : isNegotiation ? (
-                                <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300">
+                                <button
+                                  type="button"
+                                  onClick={() => sim.convertedProjectId && navigate(`/projects?edit=${sim.convertedProjectId}`)}
+                                  className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-300 transition"
+                                  title="Apri la trattativa in Commesse & Budget"
+                                >
                                   <Sparkles className="w-3 h-3 text-amber-600" />
                                   In Trattativa ({sim.convertedProjectCode || 'What-If'})
-                                </span>
+                                </button>
                               ) : (
                                 <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200">
                                   <Clock className="w-2.5 h-2.5" />
@@ -2062,13 +2274,14 @@ const SimulationPage = () => {
                         onChange={(e) => handleRefrigerationTechSwitch(e.target.value)}
                         className="w-full px-2.5 py-1.5 border border-cyan-300 rounded-lg bg-white font-bold text-xs"
                       >
-                        <option value="azoto">Azoto Liquido (0,13 €/kg • 30 kg/h = 3,90 €/h)</option>
-                        <option value="gasolio">Gasolio Gruppo Frigo (1,80 €/L • 3 L/h = 5,40 €/h)</option>
+                        <option value="elettrico">Frigo Elettrico (0,35 €/kWh • 8 kWh/h)</option>
+                        <option value="azoto">Azoto Liquido (0,13 €/kg • 30 kg/h)</option>
+                        <option value="gasolio">Gasolio Gruppo Frigo (1,80 €/L • 3 L/h)</option>
                       </select>
                     </div>
                     <div>
                       <label className="block text-[10px] font-bold text-cyan-900 mb-0.5">
-                        Costo Unitario (€/{refrigerationTech === 'azoto' ? 'kg' : 'L'})
+                        Costo Unitario (€/{refrigerationTech === 'azoto' ? 'kg' : refrigerationTech === 'elettrico' ? 'kWh' : 'L'})
                       </label>
                       <input
                         type="number"
@@ -2080,7 +2293,7 @@ const SimulationPage = () => {
                     </div>
                     <div>
                       <label className="block text-[10px] font-bold text-cyan-900 mb-0.5">
-                        Consumo ({refrigerationTech === 'azoto' ? 'kg/h' : 'L/h'})
+                        Consumo ({refrigerationTech === 'azoto' ? 'kg/h' : refrigerationTech === 'elettrico' ? 'kWh/h' : 'L/h'})
                       </label>
                       <input
                         type="number"
@@ -2522,13 +2735,23 @@ const SimulationPage = () => {
                 )}
               </div>
 
-              <button
-                type="submit"
-                className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold shadow-sm transition flex items-center justify-center space-x-2 text-sm"
-              >
-                <Calculator className="w-4 h-4" />
-                <span>Calcola Preventivo & Margine</span>
-              </button>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <button
+                  type="submit"
+                  className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold shadow-sm transition flex items-center justify-center space-x-2 text-xs"
+                >
+                  <Calculator className="w-4 h-4" />
+                  <span>Calcola Anteprima</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveToRegistry}
+                  className="w-full py-2.5 bg-[#164e87] hover:bg-[#0e3a6c] text-white rounded-xl font-bold shadow-sm transition flex items-center justify-center space-x-2 text-xs"
+                >
+                  <Save className="w-4 h-4 text-cyan-300" />
+                  <span>{activeSimulationId ? 'Aggiorna in Archivio' : 'Salva in Archivio'}</span>
+                </button>
+              </div>
             </form>
           </div>
 
@@ -2545,12 +2768,29 @@ const SimulationPage = () => {
                       </span>
                       <h3 className="text-xl font-black text-white">{simulationResult.vehicle.name}</h3>
                     </div>
-                    <div className="flex items-center space-x-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       <button
+                        type="button"
+                        onClick={handleSaveToRegistry}
+                        className="px-3 py-1.5 bg-[#164e87] hover:bg-[#1e60a3] text-white rounded-lg text-xs font-bold flex items-center space-x-1 border border-cyan-400/40 transition"
+                      >
+                        <Save className="w-3.5 h-3.5 text-cyan-300" />
+                        <span>{activeSimulationId ? 'Aggiorna Archivio' : 'Salva in Archivio'}</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleExportExcel}
+                        className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 rounded-lg text-xs font-semibold flex items-center space-x-1"
+                      >
+                        <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-400" />
+                        <span>Excel</span>
+                      </button>
+                      <button
+                        type="button"
                         onClick={handleExportPDF}
                         className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 rounded-lg text-xs font-semibold flex items-center space-x-1"
                       >
-                        <FileText className="w-3.5 h-3.5 text-emerald-400" />
+                        <FileText className="w-3.5 h-3.5 text-cyan-300" />
                         <span>PDF</span>
                       </button>
                     </div>
@@ -2778,7 +3018,7 @@ const SimulationPage = () => {
                     {simulationResult.refrigerationCostDaily > 0 && (
                       <div className="flex justify-between items-center py-1 border-b border-slate-100">
                         <span className="text-cyan-800 font-medium">
-                          Refrigerazione Frigo ({simulationResult.refrigerationTech === 'azoto' ? 'Azoto Liquido' : 'Gasolio'} • {simulationResult.refrigerationHoursDaily}h × {formatEUR(simulationResult.refrigerationHourlyCost)}/h):
+                          Refrigerazione Frigo ({simulationResult.refrigerationTech === 'azoto' ? 'Azoto Liquido' : simulationResult.refrigerationTech === 'elettrico' ? 'Frigo Elettrico' : 'Gasolio'} • {simulationResult.refrigerationHoursDaily}h × {formatEUR(simulationResult.refrigerationHourlyCost)}/h):
                         </span>
                         <span className="font-bold text-cyan-800">{formatEUR(simulationResult.refrigerationCostDaily)}</span>
                       </div>

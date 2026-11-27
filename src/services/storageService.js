@@ -938,7 +938,37 @@ class StorageService {
     return JSON.stringify(backup, null, 2);
   }
 
-  importBackupJson(jsonString) {
+  parseBackupPreview(jsonString) {
+    try {
+      const data = JSON.parse(jsonString);
+      if (!data || typeof data !== 'object') {
+        return { valid: false, error: 'Il file non contiene un oggetto JSON valido.' };
+      }
+      const hasKnownSection =
+        Array.isArray(data.fleet) ||
+        Array.isArray(data.trailers) ||
+        Array.isArray(data.projects) ||
+        (data.settings && typeof data.settings === 'object');
+      if (!hasKnownSection) {
+        return { valid: false, error: 'Il file JSON non corrisponde a un backup FOUR riconosciuto.' };
+      }
+      return {
+        valid: true,
+        exportedAt: data.exportedAt || null,
+        company: data.company || 'FOUR Trasporti Sostenibili',
+        counts: {
+          fleet: Array.isArray(data.fleet) ? data.fleet.length : 0,
+          trailers: Array.isArray(data.trailers) ? data.trailers.length : 0,
+          projects: Array.isArray(data.projects) ? data.projects.length : 0,
+          simulations: Array.isArray(data.simulations) ? data.simulations.length : 0
+        }
+      };
+    } catch (e) {
+      return { valid: false, error: e?.message || 'Errore nella lettura del file JSON.' };
+    }
+  }
+
+  async importBackupJson(jsonString) {
     try {
       const data = JSON.parse(jsonString);
       const nextFleet = Array.isArray(data.fleet) ? data.fleet : this.getFleet();
@@ -954,14 +984,22 @@ class StorageService {
       localStorage.setItem(STORAGE_KEYS.SIMULATIONS, JSON.stringify(nextSims));
 
       this.notifyListeners({ type: 'data', source: 'local', scopes: ['fleet', 'trailers', 'projects', 'settings', 'simulations'] });
-      this.pushFullStateToCloud({
+      await this.pushFullStateToCloud({
         fleet: nextFleet,
         trailers: nextTrailers,
         projects: nextProjects,
         settings: nextSettings,
         simulations: nextSims
       });
-      return { success: true };
+      return {
+        success: true,
+        counts: {
+          fleet: nextFleet.length,
+          trailers: nextTrailers.length,
+          projects: nextProjects.length,
+          simulations: nextSims.length
+        }
+      };
     } catch (e) {
       console.error('Errore import backup:', e);
       return { success: false, error: e.message };

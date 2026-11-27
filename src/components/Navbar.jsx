@@ -9,7 +9,6 @@ import {
   Settings,
   Menu,
   X,
-  Download,
   LogOut,
   ShieldCheck,
   Cloud,
@@ -40,17 +39,6 @@ const Navbar = () => {
       await logout();
       navigate('/login');
     }
-  };
-
-  const handleExportBackup = () => {
-    const json = storageService.exportBackupJson();
-    const blob = new Blob([json], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `FOUR_Backup_${new Date().toISOString().slice(0, 10)}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
   };
 
   const navLinks = [
@@ -140,15 +128,6 @@ const Navbar = () => {
               </span>
             </button>
 
-            <button
-              onClick={handleExportBackup}
-              title="Esporta Backup di Sicurezza dei Dati (JSON)"
-              className="px-2.5 py-1.5 text-xs font-semibold text-slate-200 hover:text-white bg-white/10 hover:bg-white/15 border border-white/20 rounded-xl transition flex items-center space-x-1.5 shadow-sm whitespace-nowrap flex-shrink-0"
-            >
-              <Download className="w-3.5 h-3.5 text-cyan-300 flex-shrink-0" />
-              <span>Backup</span>
-            </button>
-
             {currentUser && (
               <div className="flex items-center space-x-1.5 pl-1.5 border-l border-white/15 flex-shrink-0">
                 <div className="hidden xl:flex items-center space-x-1.5 bg-white/5 border border-white/10 px-2.5 py-1 rounded-xl whitespace-nowrap flex-shrink-0">
@@ -208,16 +187,14 @@ const Navbar = () => {
             );
           })}
           <div className="pt-3 border-t border-slate-800 flex justify-between items-center text-xs text-slate-400">
-            <button
-              onClick={() => {
-                handleExportBackup();
-                setIsMenuOpen(false);
-              }}
+            <Link
+              to="/settings"
+              onClick={() => setIsMenuOpen(false)}
               className="text-cyan-400 hover:underline flex items-center space-x-1 font-semibold"
             >
-              <Download className="w-4 h-4" />
-              <span>Backup Dati</span>
-            </button>
+              <Settings className="w-4 h-4" />
+              <span>Backup in Impostazioni</span>
+            </Link>
             {currentUser && (
               <button
                 onClick={() => {
