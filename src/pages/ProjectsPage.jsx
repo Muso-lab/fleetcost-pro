@@ -175,8 +175,17 @@ const ProjectsPage = () => {
   useEffect(() => {
     loadData();
     const newFromVehicle = searchParams.get('newFromVehicle');
+    const openNew = searchParams.get('new');
+    const editId = searchParams.get('edit');
     if (newFromVehicle) {
       handleOpenCreateWithVehicle(newFromVehicle);
+    } else if (openNew === 'true') {
+      handleOpenModal(null);
+    } else if (editId) {
+      const targetProject = storageService.getProjects().find(pr => pr.id === editId);
+      if (targetProject) {
+        handleOpenModal(targetProject);
+      }
     }
     const unsubscribe = storageService.subscribe((event) => {
       if (event.type === 'data') {
@@ -245,10 +254,12 @@ const ProjectsPage = () => {
 
   const handleOpenModal = (project = null, preselectedVehicle = null, defaultContractStatus = 'active') => {
     const curSettings = settings || storageService.getSettings();
+    const curFleet = fleet.length > 0 ? fleet : storageService.getFleet();
+    const curTrailers = trailers.length > 0 ? trailers : storageService.getTrailers();
     if (project) {
       setEditingProject(project);
-      const projVeh = fleet.find(v => v.id === project.vehicleId);
-      const projTrl = trailers.find(t => t.id === project.trailerId);
+      const projVeh = curFleet.find(v => v.id === project.vehicleId);
+      const projTrl = curTrailers.find(t => t.id === project.trailerId);
       const refDef = curSettings?.refrigerationParams || {};
       const defaultTech = projTrl?.category === 'refrigerato_azoto' ? 'azoto' : 'gasolio';
       const tech = project.refrigerationTech || defaultTech;
@@ -364,7 +375,7 @@ const ProjectsPage = () => {
       });
     } else {
       setEditingProject(null);
-      const defaultVeh = preselectedVehicle || fleet[0];
+      const defaultVeh = preselectedVehicle || curFleet[0];
       const workingDays = 22;
       const defaultShift = (defaultVeh?.licenseTypeId || '').includes('doppio') ? '2_turni'
         : (defaultVeh?.licenseTypeId || '').includes('notturno') ? '1_notturno' : '1_diurno';
@@ -443,7 +454,7 @@ const ProjectsPage = () => {
         depositAmount: 0,
         notes: isPot ? 'Trattativa commerciale / simulazione di fattibilità' : ''
       };
-      const recalculated = recalculateProjectCost(initialProject, fleet, trailers, curSettings);
+      const recalculated = recalculateProjectCost(initialProject, curFleet, curTrailers, curSettings);
       setFormData({
         ...initialProject,
         ...recalculated

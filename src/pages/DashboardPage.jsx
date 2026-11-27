@@ -4,6 +4,7 @@ import storageService from '../services/storageService';
 import {
   calculateAnnualBudgetAndCashFlow,
   calculateSingleProjectMetrics,
+  isProjectActiveInMonth,
   formatEUR,
   formatPercent,
   OPERATING_UNITS,
@@ -35,7 +36,10 @@ import {
   Activity,
   ArrowUpDown,
   GripVertical,
-  MapPin
+  MapPin,
+  ChevronDown,
+  ChevronUp,
+  AlertCircle
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -54,17 +58,22 @@ import {
 const DashboardPage = () => {
   const navigate = useNavigate();
   const [fleet, setFleet] = useState([]);
+  const [trailers, setTrailers] = useState([]);
   const [projects, setProjects] = useState([]);
+  const [settings, setSettings] = useState(null);
   const [selectedYear, setSelectedYear] = useState(2026);
   const [portfolioScope, setPortfolioScope] = useState('consolidated'); // 'consolidated' | 'activeOnly' | 'potentialOnly'
   const [dashboardSortBy, setDashboardSortBy] = useState(() => localStorage.getItem('four_dashboard_sort_by') || 'custom');
   const [dashboardHubFilter, setDashboardHubFilter] = useState('all');
   const [draggedProjectId, setDraggedProjectId] = useState(null);
+  const [showProjectsTable, setShowProjectsTable] = useState(false);
 
   useEffect(() => {
     const refreshDashboardData = () => {
       setFleet(storageService.getFleet());
+      setTrailers(storageService.getTrailers());
       setProjects(storageService.getProjects());
+      setSettings(storageService.getSettings());
     };
     refreshDashboardData();
 
@@ -143,20 +152,38 @@ const DashboardPage = () => {
     return projects; // 'consolidated' = tutto il portfolio
   }, [projects, statusQuoProjects, potentialProjects, portfolioScope]);
 
+  // Commesse effettivamente attive in almeno un mese dell'esercizio selezionato
+  const activeProjectsInYear = useMemo(() => {
+    return effectiveProjects.filter(p =>
+      Array.from({ length: 12 }, (_, m) => isProjectActiveInMonth(p, selectedYear, m)).some(Boolean)
+    );
+  }, [effectiveProjects, selectedYear]);
+  const notActiveInYearCount = effectiveProjects.length - activeProjectsInYear.length;
+
+  // Metriche unitarie per singola commessa ricalcolate sull'anno selezionato (recepisce effectiveDate)
+  const metricsById = useMemo(() => {
+    const map = {};
+    projects.forEach(p => {
+      map[p.id] = calculateSingleProjectMetrics(p, { year: selectedYear });
+    });
+    return map;
+  }, [projects, selectedYear]);
+
   // Modello Finanziario & Cash Flow dinamico sul perimetro e anno selezionati
   const financialModel = useMemo(() => {
     // Per le sole trattative isolate, calcola il fabbisogno senza il saldo cassa iniziale aziendale per visualizzare il fabbisogno netto
-    const initialCash = portfolioScope === 'potentialOnly' ? 0 : 30000;
+    const configuredInitialCash = Number(settings?.financialDefaults?.initialCashBalance ?? 50000);
+    const initialCash = portfolioScope === 'potentialOnly' ? 0 : configuredInitialCash;
     return calculateAnnualBudgetAndCashFlow(effectiveProjects, {
       year: selectedYear,
-      initialCashBalance: initialCash
+      initialCashBalance: initialCash,
+      fleet
     });
-  }, [effectiveProjects, selectedYear, portfolioScope]);
+  }, [effectiveProjects, selectedYear, portfolioScope, settings, fleet]);
 
-  // Modelli pluriennali per confronto strategico (anch'essi dinamici sul perimetro selezionato)
-  const model2025 = useMemo(() => calculateAnnualBudgetAndCashFlow(effectiveProjects, { year: 2025, rolloverPreviousYearBudget: false }), [effectiveProjects]);
-  const model2026 = useMemo(() => calculateAnnualBudgetAndCashFlow(effectiveProjects, { year: 2026, rolloverPreviousYearBudget: false }), [effectiveProjects]);
-  const model2027 = useMemo(() => calculateAnnualBudgetAndCashFlow(effectiveProjects, { year: 2027, rolloverPreviousYearBudget: true }), [effectiveProjects]);
+  // Modelli pluriennali per confronto strategico (dinamici sul perimetro selezionato)
+  const model2026 = useMemo(() => calculateAnnualBudgetAndCashFlow(effectiveProjects, { year: 2026, rolloverPreviousYearBudget: false, fleet }), [effectiveProjects, fleet]);
+  const model2027 = useMemo(() => calculateAnnualBudgetAndCashFlow(effectiveProjects, { year: 2027, rolloverPreviousYearBudget: true, fleet }), [effectiveProjects, fleet]);
 
   const {
     annualRevenue,
@@ -166,6 +193,7 @@ const DashboardPage = () => {
     peakFinancingRequired,
     peakDeficitMonth,
     co2SavedKg,
+    activeKmInYear,
     monthlyCashFlow
   } = financialModel;
 
@@ -174,28 +202,34 @@ const DashboardPage = () => {
   const monthlyCostAvg = annualCost > 0 ? annualCost / 12 : 0;
   const monthlyMolAvg = annualMol !== 0 ? annualMol / 12 : 0;
 
-  // Valori contrattuali a regime mensile per le commesse visualizzate
-  const regimeRevenueMonth = useMemo(() => effectiveProjects.reduce((sum, p) => sum + (Number(p.monthlyRevenue) || 0), 0), [effectiveProjects]);
-  const regimeCostMonth = useMemo(() => effectiveProjects.reduce((sum, p) => sum + (Number(p.monthlyCost) || 0), 0), [effectiveProjects]);
+  // Valori contrattuali a regime mensile per le commesse attive nell'anno selezionato
+  const regimeRevenueMonth = useMemo(() => activeProjectsInYear.reduce((sum, p) => sum + (Number(metricsById[p.id]?.monthlyRevenue ?? p.monthlyRevenue) || 0), 0), [activeProjectsInYear, metricsById]);
+  const regimeCostMonth = useMemo(() => activeProjectsInYear.reduce((sum, p) => sum + (Number(metricsById[p.id]?.monthlyCost ?? p.monthlyCost) || 0), 0), [activeProjectsInYear, metricsById]);
   const regimeMolMonth = regimeRevenueMonth - regimeCostMonth;
   const regimeMolPercent = regimeRevenueMonth > 0 ? (regimeMolMonth / regimeRevenueMonth) * 100 : 0;
 
-  // Fabbisogno Capitale Circolante / Gap cassa a regime (coerente con Commesse e Cash Flow)
+  // Fabbisogno Capitale Circolante / Gap cassa a regime (allineato alle commesse attive nell'anno)
   const workingCapitalGap = useMemo(() => {
-    return effectiveProjects.reduce((sum, p) => {
-      const m = calculateSingleProjectMetrics(p);
-      return sum + (m.estimatedWorkingCapitalGap || 0);
+    return activeProjectsInYear.reduce((sum, p) => {
+      return sum + (metricsById[p.id]?.estimatedWorkingCapitalGap || 0);
     }, 0);
-  }, [effectiveProjects]);
+  }, [activeProjectsInYear, metricsById]);
 
-  // Statistiche di confronto per la Visione Strategica di Portafoglio
-  const statusQuoRevenueMonth = useMemo(() => statusQuoProjects.reduce((sum, p) => sum + (Number(p.monthlyRevenue) || 0), 0), [statusQuoProjects]);
-  const statusQuoCostMonth = useMemo(() => statusQuoProjects.reduce((sum, p) => sum + (Number(p.monthlyCost) || 0), 0), [statusQuoProjects]);
+  // Statistiche di confronto per la Visione Strategica di Portafoglio (allineate a selectedYear)
+  const statusQuoProjectsInYear = useMemo(() => statusQuoProjects.filter(p =>
+    Array.from({ length: 12 }, (_, m) => isProjectActiveInMonth(p, selectedYear, m)).some(Boolean)
+  ), [statusQuoProjects, selectedYear]);
+  const potentialProjectsInYear = useMemo(() => potentialProjects.filter(p =>
+    Array.from({ length: 12 }, (_, m) => isProjectActiveInMonth(p, selectedYear, m)).some(Boolean)
+  ), [potentialProjects, selectedYear]);
+
+  const statusQuoRevenueMonth = useMemo(() => statusQuoProjectsInYear.reduce((sum, p) => sum + (Number(metricsById[p.id]?.monthlyRevenue ?? p.monthlyRevenue) || 0), 0), [statusQuoProjectsInYear, metricsById]);
+  const statusQuoCostMonth = useMemo(() => statusQuoProjectsInYear.reduce((sum, p) => sum + (Number(metricsById[p.id]?.monthlyCost ?? p.monthlyCost) || 0), 0), [statusQuoProjectsInYear, metricsById]);
   const statusQuoMolMonth = statusQuoRevenueMonth - statusQuoCostMonth;
   const statusQuoMolPct = statusQuoRevenueMonth > 0 ? (statusQuoMolMonth / statusQuoRevenueMonth) * 100 : 0;
 
-  const potentialRevenueMonth = useMemo(() => potentialProjects.reduce((sum, p) => sum + (Number(p.monthlyRevenue) || 0), 0), [potentialProjects]);
-  const potentialCostMonth = useMemo(() => potentialProjects.reduce((sum, p) => sum + (Number(p.monthlyCost) || 0), 0), [potentialProjects]);
+  const potentialRevenueMonth = useMemo(() => potentialProjectsInYear.reduce((sum, p) => sum + (Number(metricsById[p.id]?.monthlyRevenue ?? p.monthlyRevenue) || 0), 0), [potentialProjectsInYear, metricsById]);
+  const potentialCostMonth = useMemo(() => potentialProjectsInYear.reduce((sum, p) => sum + (Number(metricsById[p.id]?.monthlyCost ?? p.monthlyCost) || 0), 0), [potentialProjectsInYear, metricsById]);
   const potentialMolMonth = potentialRevenueMonth - potentialCostMonth;
   const potentialMolPct = potentialRevenueMonth > 0 ? (potentialMolMonth / potentialRevenueMonth) * 100 : 0;
 
@@ -203,33 +237,64 @@ const DashboardPage = () => {
   const combinedCostMonth = statusQuoCostMonth + potentialCostMonth;
   const combinedMolMonth = combinedRevenueMonth - combinedCostMonth;
   const combinedMolPct = combinedRevenueMonth > 0 ? (combinedMolMonth / combinedRevenueMonth) * 100 : 0;
+  const totalActiveProjectsAllScopesInYear = statusQuoProjectsInYear.length + potentialProjectsInYear.length;
 
-  // Statistiche Flotta dinamiche sul perimetro selezionato
+  // Statistiche Flotta, Rimorchi e Sovrapposizioni dinamiche sull'anno e perimetro selezionati
   const totalVehicles = fleet.length;
   const assignedVehicleIdsInScope = useMemo(() => {
-    return new Set(effectiveProjects.map(p => p.vehicleId).filter(Boolean));
-  }, [effectiveProjects]);
+    return new Set(activeProjectsInYear.map(p => p.vehicleId).filter(Boolean));
+  }, [activeProjectsInYear]);
   const assignedVehiclesCount = assignedVehicleIdsInScope.size;
+  const freeVehiclesCount = Math.max(0, totalVehicles - assignedVehiclesCount);
   const utilizationRate = totalVehicles > 0 ? ((assignedVehiclesCount / totalVehicles) * 100).toFixed(0) : 0;
 
-  // Commesse con alert (margine < 10% o negativo) nel perimetro selezionato
-  const alertProjects = useMemo(() => {
-    return effectiveProjects.filter(p => (p.molPercent || 0) < 10);
-  }, [effectiveProjects]);
+  const totalTrailers = trailers.length;
+  const assignedTrailersCount = useMemo(() => {
+    return new Set(activeProjectsInYear.map(p => p.trailerId).filter(Boolean)).size;
+  }, [activeProjectsInYear]);
 
-  // Dati per Grafico Top Commesse per M.O.L. Mensile
+  const overlappingVehicles = useMemo(() => {
+    const overlapIds = new Set();
+    for (let m = 0; m < 12; m++) {
+      const countsByVehicle = {};
+      activeProjectsInYear.forEach(p => {
+        if (!p.vehicleId) return;
+        if (isProjectActiveInMonth(p, selectedYear, m)) {
+          countsByVehicle[p.vehicleId] = (countsByVehicle[p.vehicleId] || 0) + 1;
+          if (countsByVehicle[p.vehicleId] >= 2) {
+            overlapIds.add(p.vehicleId);
+          }
+        }
+      });
+    }
+    return Array.from(overlapIds);
+  }, [activeProjectsInYear, selectedYear]);
+
+  // Commesse con alert (margine < 15% o negativo) attive nell'anno e perimetro selezionato
+  const alertProjects = useMemo(() => {
+    return activeProjectsInYear
+      .filter(p => ((metricsById[p.id]?.molPercent ?? p.molPercent) || 0) < 15)
+      .sort((a, b) => ((metricsById[a.id]?.molPercent ?? a.molPercent) || 0) - ((metricsById[b.id]?.molPercent ?? b.molPercent) || 0));
+  }, [activeProjectsInYear, metricsById]);
+  const lowOrNegativeCount = alertProjects.length;
+  const avgMolPerProject = activeProjectsInYear.length > 0 ? (annualMol / activeProjectsInYear.length) : 0;
+
+  // Dati per Grafico Top Commesse per M.O.L. Mensile (solo attive nell'anno)
   const topProjectsData = useMemo(() => {
-    return [...effectiveProjects]
-      .sort((a, b) => (b.monthlyMol || 0) - (a.monthlyMol || 0))
+    return [...activeProjectsInYear]
+      .sort((a, b) => ((metricsById[b.id]?.monthlyMol ?? b.monthlyMol) || 0) - ((metricsById[a.id]?.monthlyMol ?? a.monthlyMol) || 0))
       .slice(0, 6)
-      .map(p => ({
-        name: p.name.length > 22 ? p.name.substring(0, 20) + '...' : p.name,
-        fullName: p.name,
-        Ricavo: Math.round(p.monthlyRevenue || 0),
-        Costo: Math.round(p.monthlyCost || 0),
-        MOL: Math.round(p.monthlyMol || 0)
-      }));
-  }, [effectiveProjects]);
+      .map(p => {
+        const m = metricsById[p.id];
+        return {
+          name: p.name.length > 22 ? p.name.substring(0, 20) + '...' : p.name,
+          fullName: p.name,
+          Ricavo: Math.round(m?.monthlyRevenue ?? p.monthlyRevenue ?? 0),
+          Costo: Math.round(m?.monthlyCost ?? p.monthlyCost ?? 0),
+          MOL: Math.round(m?.monthlyMol ?? p.monthlyMol ?? 0)
+        };
+      });
+  }, [activeProjectsInYear, metricsById]);
 
   // Dati per Grafico Breakdown Costi Annuali
   const annualCostBreakdown = useMemo(() => {
@@ -285,13 +350,13 @@ const DashboardPage = () => {
     } else if (dashboardSortBy === 'client') {
       list.sort((a, b) => (a.client || '').localeCompare(b.client || ''));
     } else if (dashboardSortBy === 'molDesc') {
-      list.sort((a, b) => (b.monthlyMol || 0) - (a.monthlyMol || 0));
+      list.sort((a, b) => ((metricsById[b.id]?.monthlyMol ?? b.monthlyMol) || 0) - ((metricsById[a.id]?.monthlyMol ?? a.monthlyMol) || 0));
     } else if (dashboardSortBy === 'revenueDesc') {
-      list.sort((a, b) => (b.monthlyRevenue || 0) - (a.monthlyRevenue || 0));
+      list.sort((a, b) => ((metricsById[b.id]?.monthlyRevenue ?? b.monthlyRevenue) || 0) - ((metricsById[a.id]?.monthlyRevenue ?? a.monthlyRevenue) || 0));
     }
 
     return list;
-  }, [effectiveProjects, dashboardHubFilter, dashboardSortBy, fleet]);
+  }, [effectiveProjects, dashboardHubFilter, dashboardSortBy, fleet, metricsById]);
 
   const getScopeBadge = () => {
     if (portfolioScope === 'activeOnly') {
@@ -320,37 +385,33 @@ const DashboardPage = () => {
   return (
     <div className="min-h-screen bg-slate-50 py-8 px-4 sm:px-6 lg:px-8">
       <div className="max-w-7xl mx-auto space-y-6">
-        {/* Welcome Banner FOUR */}
-        <div className="relative overflow-hidden bg-gradient-to-r from-slate-900 via-emerald-950 to-slate-900 rounded-3xl p-6 md:p-8 text-white shadow-xl border border-emerald-900/60">
-          <div className="relative z-10 flex flex-col md:flex-row md:items-center md:justify-between gap-6">
-            <div className="space-y-2 max-w-2xl">
-              <div className="inline-flex items-center space-x-2 bg-emerald-500/20 border border-emerald-400/30 px-3 py-1 rounded-full text-emerald-300 text-xs font-bold">
-                <Leaf className="w-3.5 h-3.5" />
-                <span>Piattaforma Trasporti Sostenibili • FOUR</span>
+        {/* Welcome Banner FOUR compatto */}
+        <div className="relative overflow-hidden bg-gradient-to-r from-slate-900 via-emerald-950 to-slate-900 rounded-2xl px-5 py-4 text-white shadow-lg border border-emerald-900/60">
+          <div className="relative z-10 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="inline-flex items-center space-x-1.5 bg-emerald-500/20 border border-emerald-400/30 px-2.5 py-0.5 rounded-full text-emerald-300 text-[11px] font-bold">
+                <Leaf className="w-3 h-3" />
+                <span>FOUR • Trasporti Sostenibili</span>
               </div>
-              <h1 className="text-2xl md:text-3xl font-black tracking-tight text-white">
+              <h1 className="text-lg md:text-xl font-black tracking-tight text-white">
                 Controllo Costi, Flotta &amp; Forecast Tesoreria
               </h1>
-              <p className="text-xs md:text-sm text-slate-300 leading-relaxed">
-                Gestione completa per budget, forecast e cash flow integrando il parametro dei termini di pagamento
-                (incasso 60-90 gg vs fornitori 15-30 gg) e l'anagrafica flotta veicoli elettrici e Bio-LNG.
-              </p>
             </div>
 
-            <div className="flex flex-wrap items-center gap-3">
+            <div className="flex flex-wrap items-center gap-2.5">
               <button
-                onClick={() => navigate('/projects')}
-                className="inline-flex items-center space-x-2 bg-emerald-500 hover:bg-emerald-600 text-slate-950 px-4 py-2.5 rounded-xl font-bold text-xs transition shadow-lg shadow-emerald-950/40"
+                onClick={() => navigate('/projects?new=true')}
+                className="inline-flex items-center space-x-1.5 bg-emerald-500 hover:bg-emerald-600 text-slate-950 px-3.5 py-2 rounded-xl font-bold text-xs transition shadow-md"
               >
-                <Plus className="w-4 h-4" />
+                <Plus className="w-3.5 h-3.5" />
                 <span>Nuova Commessa</span>
               </button>
 
               <button
                 onClick={() => navigate('/simulation')}
-                className="inline-flex items-center space-x-2 bg-[#164e87] hover:bg-[#0f3b75] text-white px-4 py-2.5 rounded-xl font-bold text-xs transition shadow-lg border border-cyan-400/40"
+                className="inline-flex items-center space-x-1.5 bg-[#164e87] hover:bg-[#0f3b75] text-white px-3.5 py-2 rounded-xl font-bold text-xs transition shadow-md border border-cyan-400/40"
               >
-                <Calculator className="w-4 h-4 text-cyan-300" />
+                <Calculator className="w-3.5 h-3.5 text-cyan-300" />
                 <span>Simulatore Preventivi</span>
               </button>
             </div>
@@ -439,14 +500,6 @@ const DashboardPage = () => {
               </span>
               <div className="inline-flex p-1 bg-slate-100 rounded-xl border border-slate-200">
                 <button
-                  onClick={() => setSelectedYear(2025)}
-                  className={`px-3 py-1.5 rounded-lg font-bold text-xs transition ${
-                    selectedYear === 2025 ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-900'
-                  }`}
-                >
-                  2025 Storico
-                </button>
-                <button
                   onClick={() => setSelectedYear(2026)}
                   className={`px-3 py-1.5 rounded-lg font-bold text-xs transition ${
                     selectedYear === 2026 ? 'bg-emerald-600 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'
@@ -468,10 +521,10 @@ const DashboardPage = () => {
 
           {/* Banner di stato informativo sul perimetro attivo */}
           <div className="mt-3 pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between text-xs text-slate-500 gap-2">
-            <div className="flex items-center space-x-2">
+            <div className="flex flex-wrap items-center gap-2">
               <span className="font-semibold text-slate-700">Perimetro selezionato:</span>
               <span className={`px-2.5 py-0.5 rounded-md font-bold text-xs border ${scopeBadge.color}`}>
-                {scopeBadge.label} ({scopeBadge.count} commesse)
+                {scopeBadge.label} ({activeProjectsInYear.length} attive in {selectedYear}{notActiveInYearCount > 0 ? ` • +${notActiveInYearCount} avvio ${selectedYear + 1}+` : ''})
               </span>
               <span className="text-slate-400">|</span>
               <span className="text-slate-600">
@@ -479,7 +532,7 @@ const DashboardPage = () => {
               </span>
             </div>
             <span className="text-[11px] text-slate-400">
-              Tutti gli indicatori sotto sono ricalcolati dinamicamente sul perimetro selezionato.
+              Indicatori allineati al perimetro ed esercizio selezionati.
             </span>
           </div>
         </div>
@@ -500,7 +553,7 @@ const DashboardPage = () => {
                 {formatEUR(annualRevenue)}
               </div>
               <p className="text-[11px] text-slate-500 mt-0.5">
-                Valore a budget annuo per {effectiveProjects.length} commesse
+                Budget annuo su {activeProjectsInYear.length} commesse attive{notActiveInYearCount > 0 ? ` (+${notActiveInYearCount} avvio ${selectedYear + 1}+)` : ''}
               </p>
             </div>
 
@@ -614,16 +667,18 @@ const DashboardPage = () => {
               </p>
             </div>
 
-            {/* Riquadro Evidente: Marginalità a Regime e Dettagli */}
+            {/* Riquadro Evidente: Commesse sotto soglia & MOL Medio */}
             <div className="mt-4 p-2.5 bg-teal-50/70 border border-teal-200/80 rounded-xl space-y-0.5">
               <div className="flex items-baseline justify-between">
-                <span className="text-[11px] font-bold text-teal-800">Margine a Regime:</span>
-                <span className="text-sm font-black text-teal-800">{formatPercent(regimeMolPercent)}</span>
+                <span className="text-[11px] font-bold text-teal-800">Commesse &lt; 15% MOL:</span>
+                <span className={`text-sm font-black ${lowOrNegativeCount > 0 ? 'text-amber-700' : 'text-emerald-700'}`}>
+                  {lowOrNegativeCount} / {activeProjectsInYear.length}
+                </span>
               </div>
               <div className="text-[10px] text-slate-500 flex justify-between pt-0.5 border-t border-teal-100">
-                <span>Rapporto MOL / Ricavi:</span>
+                <span>M.O.L. medio/commessa ({selectedYear}):</span>
                 <span className="font-semibold text-slate-700">
-                  {annualRevenue > 0 ? (annualMol / annualRevenue * 100).toFixed(1) : 0}%
+                  {formatEUR(avgMolPerProject)}
                 </span>
               </div>
             </div>
@@ -632,53 +687,74 @@ const DashboardPage = () => {
 
         {/* RIGA SECONDARIA: FABBISOGNO CASSA, FLOTTA E SOSTENIBILITÀ (RICALCOLATI SUL PERIMETRO) */}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          {/* Card A: Fabbisogno Cassa Circolante */}
-          <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 flex items-center justify-between">
+          {/* Card A: Fabbisogno Cassa Circolante -> link a /cashflow */}
+          <Link
+            to="/cashflow"
+            className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 hover:border-amber-400 hover:shadow-md transition flex items-center justify-between group"
+          >
             <div className="space-y-1">
-              <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                Capitale Circolante (Gap Cassa)
+              <span className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1">
+                <span>Capitale Circolante (Gap Cassa)</span>
+                <ArrowRight className="w-3 h-3 text-amber-600 opacity-0 group-hover:opacity-100 transition" />
               </span>
               <div className="text-xl font-black text-amber-700">
                 {formatEUR(workingCapitalGap)}
               </div>
               <p className="text-[11px] text-slate-500">
-                Picco tesoreria: <strong className="text-slate-800">{formatEUR(peakFinancingRequired)}</strong> ({peakDeficitMonth})
+                Picco tesoreria {selectedYear}: <strong className="text-slate-800">{formatEUR(peakFinancingRequired)}</strong> ({peakDeficitMonth})
               </p>
             </div>
             <div className="p-3 bg-amber-50 rounded-xl border border-amber-200 text-amber-600">
               <Clock className="w-5 h-5" />
             </div>
-          </div>
+          </Link>
 
-          {/* Card B: Flotta Mezzi Impegnata */}
-          <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 flex items-center justify-between">
+          {/* Card B: Flotta Mezzi, Rimorchi & Alert Sovrapposizioni -> link a /fleet */}
+          <Link
+            to="/fleet"
+            className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 hover:border-blue-400 hover:shadow-md transition flex items-center justify-between group"
+          >
             <div className="space-y-1">
-              <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                Flotta Mezzi Impegnata
+              <span className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1">
+                <span>Flotta Mezzi Impegnata</span>
+                <ArrowRight className="w-3 h-3 text-blue-600 opacity-0 group-hover:opacity-100 transition" />
               </span>
-              <div className="text-xl font-black text-blue-600">
-                {assignedVehiclesCount} / {totalVehicles} Mezzi
+              <div className="flex flex-wrap items-baseline gap-2">
+                <span className="text-xl font-black text-blue-600">
+                  {assignedVehiclesCount} / {totalVehicles} Mezzi
+                </span>
+                <span className="text-xs font-bold text-slate-500">
+                  • {assignedTrailersCount} / {totalTrailers} Rimorchi
+                </span>
               </div>
-              <p className="text-[11px] text-slate-500">
-                Tasso di impiego nel perimetro: <strong className="text-slate-800">{utilizationRate}%</strong>
-              </p>
+              <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
+                <span>
+                  Impiego: <strong className="text-slate-800">{utilizationRate}%</strong> ({freeVehiclesCount} liberi)
+                </span>
+                {overlappingVehicles.length > 0 && (
+                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-300 font-bold text-[10px]">
+                    <AlertCircle className="w-3 h-3" />
+                    <span>{overlappingVehicles.length} {overlappingVehicles.length === 1 ? 'mezzo su più linee' : 'mezzi su più linee'}</span>
+                  </span>
+                )}
+              </div>
             </div>
             <div className="p-3 bg-blue-50 rounded-xl border border-blue-200 text-blue-600">
               <Truck className="w-5 h-5" />
             </div>
-          </div>
+          </Link>
 
           {/* Card C: Sostenibilità Green & CO2 */}
           <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 flex items-center justify-between">
             <div className="space-y-1">
               <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                CO2 Risparmiata Stimata
+                CO2 Risparmiata ({selectedYear})
               </span>
               <div className="text-xl font-black text-emerald-700">
                 {(co2SavedKg / 1000).toFixed(1)} t
               </div>
               <p className="text-[11px] text-slate-500">
-                Rispetto a motorizzazioni diesel standard
+                Su {(activeKmInYear || 0).toLocaleString('it-IT')} km/anno effettivi vs diesel
               </p>
             </div>
             <div className="p-3 bg-emerald-50 rounded-xl border border-emerald-200 text-emerald-600">
@@ -687,14 +763,14 @@ const DashboardPage = () => {
           </div>
         </div>
 
-        {/* SEZIONE CONFRONTO PLURIENNALE DI BUDGET (2025 - 2026 - 2027) */}
+        {/* SEZIONE CONFRONTO PLURIENNALE DI BUDGET (2026 - 2027) */}
         <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pb-4 border-b border-slate-100">
             <div>
               <div className="flex items-center space-x-2">
                 <TrendingUp className="w-5 h-5 text-emerald-600" />
                 <h3 className="text-base font-black text-slate-900 tracking-tight">
-                  Proiezione Strategica Pluriennale (2025 Storico • 2026 Corrente • 2027 Anno Successivo)
+                  Proiezione Strategica Pluriennale (2026 Corrente vs 2027 Anno Successivo)
                 </h3>
               </div>
               <p className="text-xs text-slate-500 mt-0.5">
@@ -709,42 +785,7 @@ const DashboardPage = () => {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
-            {/* 2025 Storico */}
-            <div
-              onClick={() => setSelectedYear(2025)}
-              className={`p-4 rounded-xl border cursor-pointer transition ${
-                selectedYear === 2025
-                  ? 'bg-slate-50 border-slate-900 ring-2 ring-slate-900 shadow-sm'
-                  : 'bg-white border-slate-200 hover:border-slate-300'
-              }`}
-            >
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-black uppercase text-slate-500 tracking-wider">2025 Storico</span>
-                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">
-                  Consuntivo
-                </span>
-              </div>
-              <div className="mt-3 space-y-1.5 text-xs">
-                <div className="flex justify-between">
-                  <span className="text-slate-500">Ricavi Totali:</span>
-                  <span className="font-bold text-slate-800">{formatEUR(model2025.annualRevenue)}</span>
-                </div>
-                <div className="flex justify-between text-[11px] text-slate-400">
-                  <span>Media Mensile:</span>
-                  <span>{formatEUR(model2025.annualRevenue / 12)}/m</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-500">Costi Operativi:</span>
-                  <span className="font-medium text-slate-600">{formatEUR(model2025.annualCost)}</span>
-                </div>
-                <div className="flex justify-between pt-1 border-t border-slate-100 font-black">
-                  <span className="text-slate-700">M.O.L. Annuo:</span>
-                  <span className="text-slate-800">{formatEUR(model2025.annualMol)} ({formatPercent(model2025.annualMolPercent)})</span>
-                </div>
-              </div>
-            </div>
-
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
             {/* 2026 Budget Corrente */}
             <div
               onClick={() => setSelectedYear(2026)}
@@ -791,9 +832,17 @@ const DashboardPage = () => {
             >
               <div className="flex items-center justify-between">
                 <span className="text-xs font-black uppercase text-teal-800 tracking-wider">2027 Proiezione</span>
-                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-teal-100 text-teal-800">
-                  Anno Successivo
-                </span>
+                <div className="flex items-center gap-1.5">
+                  {model2026.annualRevenue > 0 && (
+                    <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-blue-100 text-[#164e87]">
+                      Delta {model2027.annualRevenue - model2026.annualRevenue >= 0 ? '+' : ''}
+                      {formatEUR(model2027.annualRevenue - model2026.annualRevenue)} ({((model2027.annualRevenue - model2026.annualRevenue) / model2026.annualRevenue * 100).toFixed(1)}%)
+                    </span>
+                  )}
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-teal-100 text-teal-800">
+                    Anno Successivo
+                  </span>
+                </div>
               </div>
               <div className="mt-3 space-y-1.5 text-xs">
                 <div className="flex justify-between">
@@ -865,7 +914,7 @@ const DashboardPage = () => {
                       </span>
                     )}
                     <span className="text-[10px] font-black bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full border border-emerald-200">
-                      {statusQuoProjects.length} Commesse
+                      {statusQuoProjectsInYear.length} Attive ({selectedYear})
                     </span>
                   </div>
                 </div>
@@ -873,7 +922,7 @@ const DashboardPage = () => {
                   {formatEUR(statusQuoRevenueMonth)}/m
                 </div>
                 <p className="text-[11px] text-slate-500 mt-0.5">
-                  Fatturato mensile contratti attivi ({formatEUR(statusQuoRevenueMonth * 12)}/anno)
+                  Fatturato mensile contratti attivi {selectedYear} ({formatEUR(statusQuoRevenueMonth * 12)}/anno)
                 </p>
               </div>
 
@@ -911,7 +960,7 @@ const DashboardPage = () => {
                       </span>
                     )}
                     <span className="text-[10px] font-black bg-amber-100 text-amber-900 px-2 py-0.5 rounded-full border border-amber-200">
-                      +{potentialProjects.length} Pipeline
+                      +{potentialProjectsInYear.length} in {selectedYear}{potentialProjects.length > potentialProjectsInYear.length ? ` (+${potentialProjects.length - potentialProjectsInYear.length} dal ${selectedYear + 1})` : ''}
                     </span>
                   </div>
                 </div>
@@ -919,7 +968,7 @@ const DashboardPage = () => {
                   +{formatEUR(potentialRevenueMonth)}/m
                 </div>
                 <p className="text-[11px] text-slate-500 mt-0.5">
-                  Potenziale incremento fatturato mensile (+{formatEUR(potentialRevenueMonth * 12)}/anno)
+                  Potenziale incremento mensile {selectedYear} (+{formatEUR(potentialRevenueMonth * 12)}/anno)
                 </p>
               </div>
 
@@ -957,7 +1006,7 @@ const DashboardPage = () => {
                       </span>
                     )}
                     <span className="text-[10px] font-black bg-[#164e87]/15 text-[#164e87] px-2 py-0.5 rounded-full border border-blue-300">
-                      {projects.length} Totali
+                      {totalActiveProjectsAllScopesInYear} Attive ({selectedYear})
                     </span>
                   </div>
                 </div>
@@ -965,7 +1014,7 @@ const DashboardPage = () => {
                   {formatEUR(combinedRevenueMonth)}/m
                 </div>
                 <p className="text-[11px] text-slate-500 mt-0.5">
-                  Fatturato a regime consolidato ({formatEUR(combinedRevenueMonth * 12)}/anno)
+                  Regime consolidato {selectedYear} ({formatEUR(combinedRevenueMonth * 12)}/anno)
                 </p>
               </div>
 
@@ -983,97 +1032,51 @@ const DashboardPage = () => {
           </div>
         </div>
 
-        {/* SEZIONE ALERT & CASH FLOW QUICK WIDGET (RICALCOLATI SUL PERIMETRO) */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Fabbisogno Cassa Spotlight */}
-          <div className="bg-gradient-to-br from-amber-50 to-orange-50 border border-amber-200 rounded-2xl p-6 shadow-sm flex flex-col justify-between">
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold bg-amber-200 text-amber-900">
-                  <Clock className="w-3.5 h-3.5 mr-1" />
-                  Termini di Pagamento &amp; Circolante
-                </span>
-                <span className="text-xs font-bold text-amber-800">
-                  {portfolioScope === 'potentialOnly' ? 'Fabbisogno Trattative' : 'DSO 60 gg / DPO 30 gg'}
-                </span>
+        {/* SEZIONE ALERT COMMESSE DA MONITORARE (FULL-WIDTH, CLICKABLE) */}
+        <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center space-x-2">
+                <ShieldAlert className="w-5 h-5 text-rose-600" />
+                <h3 className="text-sm font-bold text-slate-900">
+                  Commesse da Monitorare ({alertProjects.length} Linee sotto target &lt; 15% MOL in {selectedYear})
+                </h3>
               </div>
-
-              <div>
-                <span className="text-xs font-bold text-amber-950 uppercase tracking-wider">
-                  Fabbisogno Cassa Circolante Stimato
-                </span>
-                <div className="text-3xl font-black text-amber-900 mt-1">
-                  {formatEUR(workingCapitalGap)}
-                </div>
-                <p className="text-xs text-amber-800 mt-1">
-                  Picco di tesoreria da flussi: <strong>{formatEUR(peakFinancingRequired)}</strong> (mese di <strong>{peakDeficitMonth}</strong>).
-                </p>
-              </div>
-
-              <div className="p-3 bg-white/80 rounded-xl border border-amber-200 text-xs text-amber-950 space-y-1">
-                <p className="font-semibold">
-                  {portfolioScope === 'potentialOnly'
-                    ? 'Liquidità necessaria per le nuove trattative:'
-                    : 'Perché serve questa anticipazione?'}
-                </p>
-                <p className="text-slate-600 text-[11px]">
-                  {portfolioScope === 'potentialOnly'
-                    ? `L'avvio delle ${potentialProjects.length} commesse simulate richiederà un'anticipazione di cassa per stipendi e fornitori pari a ${formatEUR(workingCapitalGap)} prima dei primi incassi a 60 gg.`
-                    : 'FOUR deve anticipare 2 mensilità di salari, energia e noleggi prima che i committenti saldino a 60 gg d.f.f.m.'}
-                </p>
-              </div>
-            </div>
-
-            <div className="mt-4 pt-3 border-t border-amber-200/60">
-              <Link
-                to="/cashflow"
-                className="w-full flex items-center justify-center space-x-2 bg-amber-600 hover:bg-amber-700 text-white py-2.5 rounded-xl text-xs font-bold transition shadow-sm"
-              >
-                <span>Apri Piano di Cassa Completo</span>
-                <ArrowRight className="w-4 h-4" />
+              <Link to="/projects" className="text-xs text-emerald-700 font-semibold hover:underline flex items-center gap-1">
+                <span>Vedi tutte le commesse</span>
+                <ArrowRight className="w-3.5 h-3.5" />
               </Link>
             </div>
-          </div>
 
-          {/* Alert Commesse a Rischio / Margine Basso nello Scope Attivo */}
-          <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm lg:col-span-2 flex flex-col justify-between">
-            <div>
-              <div className="flex items-center justify-between mb-3">
-                <div className="flex items-center space-x-2">
-                  <ShieldAlert className="w-5 h-5 text-rose-600" />
-                  <h3 className="text-sm font-bold text-slate-900">
-                    Commesse da Monitorare ({alertProjects.length} Linee sotto target nello scenario)
-                  </h3>
-                </div>
-                <Link to="/projects" className="text-xs text-emerald-700 font-semibold hover:underline">
-                  Vedi tutte le commesse
-                </Link>
+            {alertProjects.length === 0 ? (
+              <div className="p-6 text-center text-xs text-slate-500 bg-slate-50 rounded-xl border border-slate-100">
+                <CheckCircle2 className="w-8 h-8 text-emerald-500 mx-auto mb-2" />
+                <p className="font-bold text-slate-700">Tutte le commesse attive nel {selectedYear} sono sopra il 15% di MOL!</p>
+                <p className="text-[11px] text-slate-400 mt-0.5">Nessuna linea segnala criticità nel perimetro selezionato.</p>
               </div>
-
-              {alertProjects.length === 0 ? (
-                <div className="p-6 text-center text-xs text-slate-500 bg-slate-50 rounded-xl border border-slate-100">
-                  <CheckCircle2 className="w-8 h-8 text-emerald-500 mx-auto mb-2" />
-                  <p className="font-bold text-slate-700">Tutte le commesse nel perimetro selezionato sono sopra target!</p>
-                  <p className="text-[11px] text-slate-400 mt-0.5">Nessuna commessa registra un M.O.L. inferiore al 10%.</p>
-                </div>
-              ) : (
-                <div className="space-y-2.5">
-                  {alertProjects.slice(0, 3).map(p => (
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                {alertProjects.slice(0, 6).map(p => {
+                  const m = metricsById[p.id];
+                  const mMol = m?.monthlyMol ?? p.monthlyMol ?? 0;
+                  const mPct = m?.molPercent ?? p.molPercent ?? 0;
+                  return (
                     <div
                       key={p.id}
-                      className={`p-3 rounded-xl border flex items-center justify-between text-xs ${
-                        p.monthlyMol < 0
-                          ? 'bg-rose-50/70 border-rose-200 text-rose-950'
-                          : 'bg-amber-50/70 border-amber-200 text-amber-950'
+                      onClick={() => navigate(`/projects?edit=${p.id}`)}
+                      className={`p-3 rounded-xl border flex items-center justify-between text-xs cursor-pointer transition hover:shadow-sm ${
+                        mMol < 0
+                          ? 'bg-rose-50/70 border-rose-200 hover:border-rose-400 text-rose-950'
+                          : 'bg-amber-50/70 border-amber-200 hover:border-amber-400 text-amber-950'
                       }`}
                     >
-                      <div className="flex-1">
-                        <div className="flex items-center space-x-2">
-                          <span className="font-bold text-slate-900">{p.name}</span>
+                      <div className="flex-1 min-w-0 pr-3">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span className="font-bold text-slate-900 truncate">{p.name}</span>
                           <span className={`px-1.5 py-0.5 rounded text-[10px] font-black ${
-                            p.monthlyMol < 0 ? 'bg-rose-200 text-rose-900' : 'bg-amber-200 text-amber-900'
+                            mMol < 0 ? 'bg-rose-200 text-rose-900' : 'bg-amber-200 text-amber-900'
                           }`}>
-                            MOL {formatPercent(p.molPercent)}
+                            MOL {formatPercent(mPct)}
                           </span>
                           {isPotentialProject(p) && (
                             <span className="px-1.5 py-0.5 rounded text-[9px] font-black bg-amber-200 text-amber-900 border border-amber-300">
@@ -1081,26 +1084,31 @@ const DashboardPage = () => {
                             </span>
                           )}
                         </div>
-                        <p className="text-[11px] text-slate-600 mt-0.5">{p.client} • {p.route}</p>
+                        <p className="text-[11px] text-slate-600 mt-0.5 truncate">{p.client} • {p.route}</p>
                       </div>
 
-                      <div className="text-right">
-                        <div className={`font-black ${p.monthlyMol < 0 ? 'text-rose-600' : 'text-amber-700'}`}>
-                          {formatEUR(p.monthlyMol)} / mese
+                      <div className="text-right shrink-0">
+                        <div className={`font-black ${mMol < 0 ? 'text-rose-600' : 'text-amber-700'}`}>
+                          {formatEUR(mMol)} / mese
                         </div>
                         <span className="text-[10px] text-slate-500">
-                          {p.monthlyMol < 0 ? 'In perdita' : 'Margine stretto'}
+                          {mMol < 0 ? 'In perdita • Clicca per aprire' : 'Margine < 15% • Clicca per aprire'}
                         </span>
                       </div>
                     </div>
-                  ))}
-                </div>
-              )}
-            </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
 
-            <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
-              <span>Suggerimento: rinegoziare tariffa giornaliera o abbinare un secondo viaggio pomeridiano.</span>
-            </div>
+          <div className="mt-4 pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
+            <span>Suggerimento: rinegoziare tariffa giornaliera o abbinare un secondo viaggio sullo stesso mezzo.</span>
+            {alertProjects.length > 6 && (
+              <Link to="/projects" className="text-rose-700 font-bold hover:underline">
+                +{alertProjects.length - 6} altre in Commesse &amp; Budget →
+              </Link>
+            )}
           </div>
         </div>
 
@@ -1182,7 +1190,7 @@ const DashboardPage = () => {
         </div>
 
         {/* TABELLA RAPIDA COMMESSE DELLO SCENARIO SELEZIONATO */}
-        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden p-6 space-y-4">
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden p-5 space-y-4">
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
             <div>
               <div className="flex items-center space-x-2">
@@ -1192,42 +1200,64 @@ const DashboardPage = () => {
                 </h3>
               </div>
               <p className="text-xs text-slate-500 mt-0.5">
-                Perimetro: <strong className="text-slate-800">{scopeBadge.label}</strong> • Riorganizza liberamente con Drag &amp; Drop o per Unità
+                Perimetro: <strong className="text-slate-800">{scopeBadge.label}</strong> • Clicca su una commessa per aprirla o espandi la lista completa
               </p>
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
-              {/* Filtro Unità Operativa */}
-              <select
-                value={dashboardHubFilter}
-                onChange={(e) => setDashboardHubFilter(e.target.value)}
-                className="text-xs font-semibold py-1.5 px-2.5 rounded-xl border border-slate-300 bg-white text-slate-700 focus:ring-2 focus:ring-[#164e87] outline-none cursor-pointer"
-              >
-                <option value="all">Tutti i Poli / Unità</option>
-                {OPERATING_UNITS.map(hub => (
-                  <option key={hub} value={hub}>📍 Polo {hub}</option>
-                ))}
-              </select>
+              {showProjectsTable && (
+                <>
+                  {/* Filtro Unità Operativa */}
+                  <select
+                    value={dashboardHubFilter}
+                    onChange={(e) => setDashboardHubFilter(e.target.value)}
+                    className="text-xs font-semibold py-1.5 px-2.5 rounded-xl border border-slate-300 bg-white text-slate-700 focus:ring-2 focus:ring-[#164e87] outline-none cursor-pointer"
+                  >
+                    <option value="all">Tutti i Poli / Unità</option>
+                    {OPERATING_UNITS.map(hub => (
+                      <option key={hub} value={hub}>📍 Polo {hub}</option>
+                    ))}
+                  </select>
 
-              {/* Selettore Ordinamento */}
-              <div className="flex items-center space-x-1">
-                <ArrowUpDown className="w-3.5 h-3.5 text-[#164e87]" />
-                <select
-                  value={dashboardSortBy}
-                  onChange={(e) => {
-                    setDashboardSortBy(e.target.value);
-                    localStorage.setItem('four_dashboard_sort_by', e.target.value);
-                  }}
-                  className="text-xs font-bold py-1.5 px-2.5 rounded-xl border border-blue-300 bg-blue-50/60 text-[#164e87] focus:ring-2 focus:ring-[#164e87] outline-none cursor-pointer"
-                  title="Ordinamento commesse dashboard"
-                >
-                  <option value="custom">⇅ Ordine Manuale (Drag &amp; Drop)</option>
-                  <option value="operatingUnit">📍 Raggruppa per Unità Operativa</option>
-                  <option value="client">🏢 Ordina per Cliente (A-Z)</option>
-                  <option value="molDesc">💰 M.O.L. Mensile (dal più alto)</option>
-                  <option value="revenueDesc">📈 Fatturato (dal più alto)</option>
-                </select>
-              </div>
+                  {/* Selettore Ordinamento */}
+                  <div className="flex items-center space-x-1">
+                    <ArrowUpDown className="w-3.5 h-3.5 text-[#164e87]" />
+                    <select
+                      value={dashboardSortBy}
+                      onChange={(e) => {
+                        setDashboardSortBy(e.target.value);
+                        localStorage.setItem('four_dashboard_sort_by', e.target.value);
+                      }}
+                      className="text-xs font-bold py-1.5 px-2.5 rounded-xl border border-blue-300 bg-blue-50/60 text-[#164e87] focus:ring-2 focus:ring-[#164e87] outline-none cursor-pointer"
+                      title="Ordinamento commesse dashboard"
+                    >
+                      <option value="custom">⇅ Ordine Manuale (Drag &amp; Drop)</option>
+                      <option value="operatingUnit">📍 Raggruppa per Unità Operativa</option>
+                      <option value="client">🏢 Ordina per Cliente (A-Z)</option>
+                      <option value="molDesc">💰 M.O.L. Mensile (dal più alto)</option>
+                      <option value="revenueDesc">📈 Fatturato (dal più alto)</option>
+                    </select>
+                  </div>
+                </>
+              )}
+
+              <button
+                type="button"
+                onClick={() => setShowProjectsTable(prev => !prev)}
+                className="inline-flex items-center space-x-1.5 text-xs font-bold px-3 py-1.5 rounded-xl border border-slate-300 bg-slate-50 hover:bg-slate-100 text-slate-800 transition"
+              >
+                {showProjectsTable ? (
+                  <>
+                    <ChevronUp className="w-3.5 h-3.5" />
+                    <span>Comprimi elenco</span>
+                  </>
+                ) : (
+                  <>
+                    <ChevronDown className="w-3.5 h-3.5" />
+                    <span>Mostra tutte le {displayDashboardProjects.length} commesse</span>
+                  </>
+                )}
+              </button>
 
               <Link to="/projects" className="text-xs text-emerald-700 font-bold hover:underline flex items-center ml-1">
                 <span>Gestisci tutte in Commesse</span>
@@ -1236,6 +1266,7 @@ const DashboardPage = () => {
             </div>
           </div>
 
+          {showProjectsTable && (
           <div className="overflow-x-auto">
             <table className="min-w-full divide-y divide-slate-100 text-left text-xs">
               <thead className="bg-slate-50 text-slate-700 font-bold uppercase">
@@ -1259,10 +1290,15 @@ const DashboardPage = () => {
                     </td>
                   </tr>
                 ) : (
-                  displayDashboardProjects.slice(0, 12).map((p, idx) => {
+                  displayDashboardProjects.map((p, idx) => {
                     const isPot = isPotentialProject(p);
                     const veh = fleet.find(item => item.id === p.vehicleId);
                     const hubName = getProjectOperatingUnit(p, veh);
+                    const m = metricsById[p.id];
+                    const mRev = m?.monthlyRevenue ?? p.monthlyRevenue ?? 0;
+                    const mCost = m?.monthlyCost ?? p.monthlyCost ?? 0;
+                    const mMol = m?.monthlyMol ?? p.monthlyMol ?? 0;
+                    const startYear = p.startYear ? Number(p.startYear) : 2026;
 
                     return (
                       <tr
@@ -1274,7 +1310,8 @@ const DashboardPage = () => {
                         }}
                         onDragOver={(e) => e.preventDefault()}
                         onDrop={(e) => handleDashboardDrop(e, p.id)}
-                        className="hover:bg-slate-50 transition group"
+                        onClick={() => navigate(`/projects?edit=${p.id}`)}
+                        className="hover:bg-slate-50 transition group cursor-pointer"
                       >
                         {/* Riordino Drag & Drop / Up & Down */}
                         <td className="py-2.5 px-2 text-center" onClick={(e) => e.stopPropagation()}>
@@ -1306,8 +1343,8 @@ const DashboardPage = () => {
                         </td>
 
                         <td className="py-2.5 px-3">
-                          <div className="flex items-center space-x-2">
-                            <span className="font-bold text-slate-900">{p.name}</span>
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className="font-bold text-slate-900 group-hover:text-[#164e87] transition">{p.name}</span>
                             {isPot ? (
                               <span className="px-1.5 py-0.2 rounded text-[9px] font-black bg-amber-100 text-amber-800 border border-amber-200">
                                 Trattativa
@@ -1315,6 +1352,11 @@ const DashboardPage = () => {
                             ) : (
                               <span className="px-1.5 py-0.2 rounded text-[9px] font-black bg-emerald-100 text-emerald-800 border border-emerald-200">
                                 Attiva
+                              </span>
+                            )}
+                            {startYear > selectedYear && (
+                              <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-slate-100 text-slate-600 border border-slate-200">
+                                Avvio {startYear}
                               </span>
                             )}
                           </div>
@@ -1333,11 +1375,11 @@ const DashboardPage = () => {
                             {p.managementType === 'D' ? 'Diretta (D)' : 'Terzi (T)'}
                           </span>
                         </td>
-                        <td className="py-2.5 px-3 text-right font-bold text-slate-900">{formatEUR(p.monthlyRevenue)}</td>
-                        <td className="py-2.5 px-3 text-right text-slate-600">{formatEUR(p.monthlyCost)}</td>
+                        <td className="py-2.5 px-3 text-right font-bold text-slate-900">{formatEUR(mRev)}</td>
+                        <td className="py-2.5 px-3 text-right text-slate-600">{formatEUR(mCost)}</td>
                         <td className="py-2.5 px-3 text-right font-black">
-                          <span className={p.monthlyMol < 0 ? 'text-rose-600' : 'text-emerald-600'}>
-                            {formatEUR(p.monthlyMol)}
+                          <span className={mMol < 0 ? 'text-rose-600' : 'text-emerald-600'}>
+                            {formatEUR(mMol)}
                           </span>
                         </td>
                         <td className="py-2.5 px-3 text-center text-slate-700 font-semibold">
@@ -1350,6 +1392,7 @@ const DashboardPage = () => {
               </tbody>
             </table>
           </div>
+          )}
         </div>
       </div>
     </div>

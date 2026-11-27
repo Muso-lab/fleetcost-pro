@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import storageService from '../services/storageService';
 import {
   calculateAnnualBudgetAndCashFlow,
@@ -45,8 +45,10 @@ import * as XLSX from 'xlsx';
 
 const CashFlowPage = () => {
   const [projects, setProjects] = useState([]);
+  const [fleet, setFleet] = useState([]);
   const [selectedYear, setSelectedYear] = useState(2026);
-  const [initialCash, setInitialCash] = useState(30000);
+  const [initialCash, setInitialCash] = useState(() => Number(storageService.getSettings()?.financialDefaults?.initialCashBalance ?? 50000));
+  const initialCashSaveTimerRef = useRef(null);
   const [stressTestDays, setStressTestDays] = useState(0); // 0, 15, 30, 60 gg di ritardo
   const [factoringEnabled, setFactoringEnabled] = useState(false);
   const [factoringRate, setFactoringRate] = useState(80); // 80% anticipato
@@ -58,16 +60,43 @@ const CashFlowPage = () => {
   useEffect(() => {
     loadProjects();
     const unsubscribe = storageService.subscribe((event) => {
-      if (event.type === 'data' && event.scopes?.includes('projects')) {
+      if (event.type === 'data' && (event.scopes?.includes('projects') || event.scopes?.includes('settings') || event.scopes?.includes('fleet'))) {
         loadProjects();
       }
     });
-    return () => unsubscribe();
+    return () => {
+      unsubscribe();
+      if (initialCashSaveTimerRef.current) clearTimeout(initialCashSaveTimerRef.current);
+    };
   }, []);
 
   const loadProjects = () => {
-    const prjs = storageService.getProjects();
-    setProjects(prjs);
+    setProjects(storageService.getProjects());
+    setFleet(storageService.getFleet());
+    const settings = storageService.getSettings();
+    const savedInitialCash = Number(settings?.financialDefaults?.initialCashBalance ?? 50000);
+    setInitialCash(savedInitialCash);
+  };
+
+  const persistInitialCash = (value) => {
+    const cleanVal = Number(value) || 0;
+    const curSettings = storageService.getSettings();
+    storageService.saveSettings({
+      ...curSettings,
+      financialDefaults: {
+        ...(curSettings.financialDefaults || {}),
+        initialCashBalance: cleanVal
+      }
+    });
+  };
+
+  const handleInitialCashChange = (rawValue) => {
+    const nextVal = parseFloat(rawValue) || 0;
+    setInitialCash(nextVal);
+    if (initialCashSaveTimerRef.current) clearTimeout(initialCashSaveTimerRef.current);
+    initialCashSaveTimerRef.current = setTimeout(() => {
+      persistInitialCash(nextVal);
+    }, 400);
   };
 
   const [portfolioScope, setPortfolioScope] = useState('consolidated'); // 'consolidated' | 'activeOnly' | 'potentialOnly'
@@ -100,7 +129,8 @@ const CashFlowPage = () => {
     factoringAdvanceRate: factoringRate,
     factoringFeePercent: 1.5,
     acciseRecoveryEnabled: acciseEnabled,
-    acciseRatePerLiter: acciseRate
+    acciseRatePerLiter: acciseRate,
+    fleet
   });
 
   const {
@@ -415,7 +445,6 @@ const CashFlowPage = () => {
               >
                 <option value="2027">Budget 2027 (+12m)</option>
                 <option value="2026">Budget 2026 (Corrente)</option>
-                <option value="2025">Storico 2025</option>
               </select>
 
               {activeTab === 'cashflow' && (
@@ -585,12 +614,13 @@ const CashFlowPage = () => {
                   type="number"
                   step="5000"
                   value={initialCash}
-                  onChange={(e) => setInitialCash(parseFloat(e.target.value) || 0)}
+                  onChange={(e) => handleInitialCashChange(e.target.value)}
+                  onBlur={(e) => persistInitialCash(e.target.value)}
                   className="w-full px-3 py-1.5 border border-slate-300 rounded-xl font-bold text-slate-900"
                 />
                 <span className="text-slate-500 font-bold">€</span>
               </div>
-              <p className="text-[10px] text-slate-400">Disponibilità liquida di partenza</p>
+              <p className="text-[10px] text-slate-400">Disponibilità liquida di partenza (condivisa con Dashboard)</p>
             </div>
 
             {/* Stress Test Ritardo Clienti */}

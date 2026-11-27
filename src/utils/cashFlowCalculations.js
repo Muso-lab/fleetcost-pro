@@ -111,22 +111,6 @@ export const isProjectActiveInMonth = (project, monthIndex, targetYear = 2026, o
     }
   }
 
-  // 3. Storico consuntivo anno precedente (es. 2025 quando le commesse sono allineate al budget 2026)
-  if (targetYear < startYear) {
-    // Mesi di avvio scaglionati storici nel 2025 per la flotta FOUR
-    const historicalStartMonths = {
-      'CAM-BO-02': 1, // Febbraio 2025
-      'CHR-01': 1,    // Febbraio 2025
-      'DEC-RM-01': 2, // Marzo 2025
-      'KN-03': 2,     // Marzo 2025
-      'TIG-03': 4     // Maggio 2025
-    };
-    const minMonth = historicalStartMonths[project.code] !== undefined ? historicalStartMonths[project.code] : 0;
-    if (monthIndex >= minMonth) {
-      return true;
-    }
-  }
-
   return false;
 };
 
@@ -184,6 +168,7 @@ export const calculateAnnualBudgetAndCashFlow = (projects, options = {}) => {
     acciseRecoveryEnabled = true, // Toggle Recupero Accise Carburante
     acciseRatePerLiter = 0.21418, // Rimborso accise gasolio commerciale art. 24-ter TUA (€/L)
     taxRatePercent = 25, // Stima IRES/IRAP per calcolo DSCR
+    fleet = [],
     rolloverPreviousYearBudget = options.rolloverPreviousYearBudget !== undefined ? options.rolloverPreviousYearBudget : (year > 2026)
   } = options;
 
@@ -258,9 +243,26 @@ export const calculateAnnualBudgetAndCashFlow = (projects, options = {}) => {
 
   // Calcolo trimestrale accumulo credito accise (Q1: m 0..2, Q2: m 3..5, Q3: m 6..8, Q4: m 9..11)
   const quarterlyAcciseAccrued = [0, 0, 0, 0];
+  let activeKmInYear = 0;
+  let co2SavedKg = 0;
 
   // Elaborazione progetti
   projects.forEach(project => {
+    const assignedVeh = Array.isArray(fleet) ? fleet.find(v => v.id === project.vehicleId) : null;
+    let co2FactorPerKm = 0;
+    if (!(project.managementType === 'T' && !assignedVeh)) {
+      const fuelId = assignedVeh?.fuelTypeId || project.fuelTypeId || '';
+      if (fuelId === 'elettrico') {
+        const plt = Number(assignedVeh?.capacityPlt) || 33;
+        if (plt <= 10) co2FactorPerKm = 0.38;
+        else if (assignedVeh?.category === 'motrice') co2FactorPerKm = 0.62;
+        else co2FactorPerKm = 0.85;
+      } else if (fuelId === 'biolng') {
+        co2FactorPerKm = 0.72;
+      } else if (fuelId === 'hvo') {
+        co2FactorPerKm = 0.76;
+      }
+    }
     const pTermsClient = (project.paymentTermsClient !== undefined ? Number(project.paymentTermsClient) : 60) + stressTestClientDays;
     const pTermsSuppliers = project.paymentTermsSuppliers !== undefined ? Number(project.paymentTermsSuppliers) : 30;
     const pTermsDriver = project.paymentTermsDriver !== undefined ? Number(project.paymentTermsDriver) : 16;
@@ -344,6 +346,11 @@ export const calculateAnnualBudgetAndCashFlow = (projects, options = {}) => {
     for (let m = 0; m < 12; m++) {
       if (isProjectActiveInMonth(project, m, year, { rolloverPreviousYearBudget })) {
         const workingDays = project.workingDaysMonth || 22;
+        const monthKm = (Number(project.kmDaily) || 0) * workingDays;
+        if (co2FactorPerKm > 0 && monthKm > 0) {
+          activeKmInYear += monthKm;
+          co2SavedKg += monthKm * co2FactorPerKm;
+        }
         const mRates = getProjectEffectiveRatesForMonth(project, year, m);
         const rev = mRates.monthlyRevenue;
 
@@ -735,12 +742,9 @@ export const calculateAnnualBudgetAndCashFlow = (projects, options = {}) => {
     ? Math.ceil((peakFinancingRequired * 1.15) / 5000) * 5000
     : 15000;
 
-  // CO2 Risparmiata stima (0.75 kg CO2/km con Bio-LNG ed Elettrico vs Diesel standard)
-  const totalActiveKm = projects.reduce((sum, p) => {
-    const days = (p.workingDaysMonth || 22) * (p.operatingMonths || 12);
-    return sum + ((p.kmDaily || 250) * days);
-  }, 0);
-  const co2SavedKg = Math.round(totalActiveKm * 0.75);
+  // CO2 Risparmiata nell'esercizio selezionato in base a km attivi nell'anno e alimentazione reale del mezzo
+  const roundedCo2SavedKg = Math.round(co2SavedKg);
+  const roundedActiveKmInYear = Math.round(activeKmInYear);
 
   // Template Calendario Scadenze Mensili di Cassa (Cash Schedule)
   const cashScheduleDeadlines = [
@@ -801,8 +805,9 @@ export const calculateAnnualBudgetAndCashFlow = (projects, options = {}) => {
     dscrRating,
     dscrColor,
     totalAnnualLeases,
-    co2SavedKg,
-    totalActiveKm,
+    co2SavedKg: roundedCo2SavedKg,
+    activeKmInYear: roundedActiveKmInYear,
+    totalActiveKm: roundedActiveKmInYear,
     cashScheduleDeadlines
   };
 };
