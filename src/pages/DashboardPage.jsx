@@ -309,6 +309,8 @@ const DashboardPage = () => {
       .filter(p => ((metricsById[p.id]?.molPercent ?? p.molPercent) || 0) < 15)
       .sort((a, b) => ((metricsById[a.id]?.molPercent ?? a.molPercent) || 0) - ((metricsById[b.id]?.molPercent ?? b.molPercent) || 0));
   }, [activeProjectsInYear, metricsById]);
+  const alertActiveCount = useMemo(() => alertProjects.filter(p => !isPotentialProject(p)).length, [alertProjects]);
+  const alertPotentialCount = alertProjects.length - alertActiveCount;
   const lowOrNegativeCount = alertProjects.length;
   const avgMolPerProject = activeProjectsInYear.length > 0 ? (annualMol / activeProjectsInYear.length) : 0;
 
@@ -1102,12 +1104,26 @@ const DashboardPage = () => {
         {/* SEZIONE ALERT COMMESSE DA MONITORARE (FULL-WIDTH, CLICKABLE) */}
         <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm flex flex-col justify-between">
           <div>
-            <div className="flex items-center justify-between mb-3">
-              <div className="flex items-center space-x-2">
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+              <div className="flex flex-wrap items-center gap-2">
                 <ShieldAlert className="w-5 h-5 text-rose-600" />
                 <h3 className="text-sm font-bold text-slate-900">
                   Commesse da Monitorare ({alertProjects.length} Linee sotto target &lt; 15% MOL in {selectedYear})
                 </h3>
+                {alertProjects.length > 0 && (
+                  <div className="flex items-center gap-1.5">
+                    {alertActiveCount > 0 && (
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-800 border border-emerald-300">
+                        {alertActiveCount} {alertActiveCount === 1 ? 'Attiva' : 'Attive'}
+                      </span>
+                    )}
+                    {alertPotentialCount > 0 && (
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-indigo-100 text-indigo-800 border border-indigo-300">
+                        {alertPotentialCount} {alertPotentialCount === 1 ? 'Potenziale' : 'Potenziali'}
+                      </span>
+                    )}
+                  </div>
+                )}
               </div>
               <Link to="/projects" className="text-xs text-emerald-700 font-semibold hover:underline flex items-center gap-1">
                 <span>Vedi tutte le commesse</span>
@@ -1124,6 +1140,7 @@ const DashboardPage = () => {
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
                 {alertProjects.slice(0, 6).map(p => {
+                  const isPot = isPotentialProject(p);
                   const m = metricsById[p.id];
                   const mMol = m?.monthlyMol ?? p.monthlyMol ?? 0;
                   const mPct = m?.molPercent ?? p.molPercent ?? 0;
@@ -1131,7 +1148,9 @@ const DashboardPage = () => {
                     <div
                       key={p.id}
                       onClick={() => navigate(`/projects?edit=${p.id}`)}
-                      className={`p-3 rounded-xl border flex items-center justify-between text-xs cursor-pointer transition hover:shadow-sm ${
+                      className={`p-3 rounded-xl border border-l-4 flex items-center justify-between text-xs cursor-pointer transition hover:shadow-sm ${
+                        isPot ? 'border-l-indigo-500' : 'border-l-emerald-600'
+                      } ${
                         mMol < 0
                           ? 'bg-rose-50/70 border-rose-200 hover:border-rose-400 text-rose-950'
                           : 'bg-amber-50/70 border-amber-200 hover:border-amber-400 text-amber-950'
@@ -1139,17 +1158,28 @@ const DashboardPage = () => {
                     >
                       <div className="flex-1 min-w-0 pr-3">
                         <div className="flex flex-wrap items-center gap-1.5">
+                          {isPot ? (
+                            <span
+                              title="Commessa potenziale / trattativa in pipeline"
+                              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wide bg-indigo-600 text-white"
+                            >
+                              <Sparkles className="w-2.5 h-2.5" />
+                              <span>Potenziale</span>
+                            </span>
+                          ) : (
+                            <span
+                              title="Contratto attivo a budget"
+                              className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wide bg-emerald-600 text-white"
+                            >
+                              Attiva
+                            </span>
+                          )}
                           <span className="font-bold text-slate-900 truncate">{p.name}</span>
                           <span className={`px-1.5 py-0.5 rounded text-[10px] font-black ${
                             mMol < 0 ? 'bg-rose-200 text-rose-900' : 'bg-amber-200 text-amber-900'
                           }`}>
                             MOL {formatPercent(mPct)}
                           </span>
-                          {isPotentialProject(p) && (
-                            <span className="px-1.5 py-0.5 rounded text-[9px] font-black bg-amber-200 text-amber-900 border border-amber-300">
-                              Trattativa
-                            </span>
-                          )}
                         </div>
                         <p className="text-[11px] text-slate-600 mt-0.5 truncate">{p.client} • {p.route}</p>
                       </div>
@@ -1431,8 +1461,8 @@ const DashboardPage = () => {
                           <div className="flex flex-wrap items-center gap-1.5">
                             <span className="font-bold text-slate-900 group-hover:text-[#164e87] transition">{p.name}</span>
                             {isPot ? (
-                              <span className="px-1.5 py-0.5 rounded text-[9px] font-black bg-amber-100 text-amber-800 border border-amber-200">
-                                Trattativa
+                              <span className="px-1.5 py-0.5 rounded text-[9px] font-black bg-indigo-100 text-indigo-800 border border-indigo-200">
+                                Potenziale
                               </span>
                             ) : (
                               <span className="px-1.5 py-0.5 rounded text-[9px] font-black bg-emerald-100 text-emerald-800 border border-emerald-200">
