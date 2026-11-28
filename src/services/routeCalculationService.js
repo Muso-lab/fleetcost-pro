@@ -375,8 +375,11 @@ export const calculateRouteFromStops = async (rawStops = [], options = {}) => {
     });
   }
 
-  // Se Andata & Ritorno (A/R), chiude l'anello tornando alla Tappa 1
-  const itineraryPoints = isRoundTrip
+  // Se Rientro finale alla Partenza (A/R), chiude l'anello tornando alla Tappa 1 (salvo se l'ultima tappa coincide già con la partenza)
+  const lastStop = geocodedStops[geocodedStops.length - 1];
+  const alreadyEndsAtStart = geocodedStops.length >= 2 &&
+    haversineDistanceKm(geocodedStops[0].lat, geocodedStops[0].lon, lastStop.lat, lastStop.lon) < 0.2;
+  const itineraryPoints = (isRoundTrip && !alreadyEndsAtStart)
     ? [...geocodedStops, { ...geocodedStops[0], isReturnLeg: true, order: geocodedStops.length + 1 }]
     : geocodedStops;
 
@@ -471,6 +474,7 @@ export const calculateRouteFromStops = async (rawStops = [], options = {}) => {
         from: p1.displayName || p1.address,
         to: p2.displayName || p2.address,
         clientTag: p2.clientTag || p1.clientTag || '',
+        isReturnLeg: Boolean(p2?.isReturnLeg),
         km: legKm,
         durationMin: Math.round((legKm / 65) * 60)
       });

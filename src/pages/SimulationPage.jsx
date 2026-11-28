@@ -231,6 +231,19 @@ const SimulationPage = () => {
     ]);
   };
 
+  const handleAddReturnToHubStop = () => {
+    const startAddr = (routeStops[0]?.address || '').trim();
+    if (!startAddr || routeStops.length >= 8) return;
+    setRouteStops(prev => [
+      ...prev,
+      {
+        id: 'stop_' + Date.now(),
+        address: startAddr,
+        label: 'Rientro in Hub / Ricarico'
+      }
+    ]);
+  };
+
   const handleRemoveRouteStop = (idx) => {
     if (routeStops.length <= 2) return;
     setRouteStops(prev => prev.filter((_, i) => i !== idx));
@@ -2281,15 +2294,27 @@ const SimulationPage = () => {
                   ))}
 
                   <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
-                    <button
-                      type="button"
-                      onClick={handleAddRouteStop}
-                      disabled={routeStops.length >= 8}
-                      className="inline-flex items-center space-x-1 text-[11px] font-bold text-[#164e87] hover:underline disabled:opacity-40"
-                    >
-                      <Plus className="w-3.5 h-3.5" />
-                      <span>+ Aggiungi Tappa Intermedia / Cliente (fino a 8)</span>
-                    </button>
+                    <div className="flex flex-wrap items-center gap-2.5">
+                      <button
+                        type="button"
+                        onClick={handleAddRouteStop}
+                        disabled={routeStops.length >= 8}
+                        className="inline-flex items-center space-x-1 text-[11px] font-bold text-[#164e87] hover:underline disabled:opacity-40"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>+ Aggiungi Tappa (fino a 8)</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleAddReturnToHubStop}
+                        disabled={routeStops.length >= 8 || !(routeStops[0]?.address || '').trim()}
+                        className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-md bg-white hover:bg-emerald-50 text-emerald-800 border border-emerald-300 text-[10px] font-bold transition disabled:opacity-40"
+                        title="Inserisce una tappa intermedia uguale alla Partenza (es. per fare un secondo viaggio dall'Hub)"
+                      >
+                        <RotateCw className="w-3 h-3" />
+                        <span>+ Rientro a Partenza</span>
+                      </button>
+                    </div>
 
                     <label className="inline-flex items-center space-x-1.5 cursor-pointer font-bold text-emerald-950 text-[11px]">
                       <input
@@ -2298,10 +2323,66 @@ const SimulationPage = () => {
                         onChange={(e) => setIsRoundTrip(e.target.checked)}
                         className="rounded text-emerald-600"
                       />
-                      <span>Andata e Ritorno (A/R • Chiudi anello su Tappa 1)</span>
+                      <span>Rientro finale alla Partenza (chiude su Tappa 1)</span>
                     </label>
                   </div>
                 </div>
+
+                {/* Anteprima sequenza reale calcolata + Linea guida rapida */}
+                {(() => {
+                  const filledStops = routeStops.map(s => (s.address || '').trim()).filter(Boolean);
+                  const firstStop = filledStops[0] || '';
+                  const lastStop = filledStops[filledStops.length - 1] || '';
+                  const needsClosingReturn = Boolean(
+                    isRoundTrip &&
+                    filledStops.length >= 2 &&
+                    lastStop.toLowerCase() !== firstStop.toLowerCase()
+                  );
+                  const totalSequenceCount = filledStops.length + (needsClosingReturn ? 1 : 0);
+                  const totalLegsCount = Math.max(0, totalSequenceCount - 1);
+                  const shortName = (addr) => addr.split(',')[0].trim();
+
+                  return (
+                    <div className="space-y-2">
+                      {filledStops.length >= 2 && (
+                        <div className="p-2 bg-white/90 border border-emerald-200 rounded-lg text-[10px] space-y-1">
+                          <div className="flex flex-wrap items-center justify-between gap-1 text-slate-500 font-bold uppercase">
+                            <span>Sequenza reale calcolata ({totalLegsCount} {totalLegsCount === 1 ? 'tratta' : 'tratte'}{tripsPerDay > 1 ? ` × ${tripsPerDay} viaggi/gg` : ''})</span>
+                            {isRoundTrip && !needsClosingReturn && (
+                              <span className="text-emerald-700 font-extrabold normal-case">Chiude già su Tappa 1</span>
+                            )}
+                          </div>
+                          <div className="flex flex-wrap items-center gap-1 font-bold text-slate-800">
+                            {filledStops.map((addr, sIdx) => (
+                              <span key={`${addr}-${sIdx}`} className="inline-flex items-center gap-1">
+                                <span className="px-1.5 py-0.5 rounded bg-slate-100 border border-slate-200">
+                                  {sIdx + 1}. {shortName(addr)}
+                                </span>
+                                {(sIdx < filledStops.length - 1 || needsClosingReturn) && (
+                                  <ArrowRight className="w-3 h-3 text-emerald-600" />
+                                )}
+                              </span>
+                            ))}
+                            {needsClosingReturn && (
+                              <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-900 border border-emerald-300">
+                                {shortName(firstStop)} (rientro finale)
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="bg-white/80 border border-emerald-200 rounded-lg p-2.5 text-[11px] text-slate-700 space-y-1 leading-snug">
+                        <div>
+                          <strong className="text-emerald-900">Guida rapida tappe:</strong> inserisci le tappe in <strong>ordine cronologico</strong> (<code className="text-[10px] bg-slate-100 px-1 rounded">1 → 2 → 3 → …</code>). La spunta <em>&quot;Rientro finale alla Partenza&quot;</em> aggiunge <strong>solo l&apos;ultimo rientro</strong> verso la Tappa 1 (non raddoppia ogni singola tappa).
+                        </div>
+                        <div className="text-[10px] text-slate-600">
+                          <strong>Esempio 2 viaggi dallo stesso Hub</strong> (Basiano ↔ Corsico + Basiano ↔ Rozzano): inserisci <span className="font-semibold text-slate-800">1. Basiano → 2. Corsico → 3. Basiano</span> (usa <em>+ Rientro a Partenza</em>) <span className="font-semibold text-slate-800">→ 4. Rozzano</span> e mantieni la spunta per includere il rientro da Rozzano a Basiano (oppure toglila se il 2° viaggio è solo andata).
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 {/* Pulsante Calcola Percorso, Autostrada e Profilo Orografico */}
                 <button
@@ -2372,9 +2453,16 @@ const SimulationPage = () => {
                       <div className="pt-1 border-t border-slate-100 space-y-0.5 text-[10px] text-slate-600">
                         <span className="font-bold text-slate-700 block">Dettaglio Tappe calcolate:</span>
                         {routeAnalysis.legSummaries.map(leg => (
-                          <div key={leg.legIndex} className="flex justify-between">
-                            <span>Tappa {leg.legIndex}: {leg.from.split(',')[0]} → {leg.to.split(',')[0]}</span>
-                            <strong className="text-slate-800">{leg.km} km (~{leg.durationMin} min)</strong>
+                          <div key={leg.legIndex} className="flex justify-between gap-2">
+                            <span>
+                              Tratta {leg.legIndex}: {leg.from.split(',')[0]} → {leg.to.split(',')[0]}
+                              {leg.isReturnLeg && (
+                                <span className="ml-1.5 px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 font-bold text-[9px]">
+                                  Rientro finale
+                                </span>
+                              )}
+                            </span>
+                            <strong className="text-slate-800 whitespace-nowrap">{leg.km} km (~{leg.durationMin} min)</strong>
                           </div>
                         ))}
                       </div>

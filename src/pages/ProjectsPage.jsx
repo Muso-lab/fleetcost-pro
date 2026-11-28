@@ -3068,7 +3068,7 @@ const ProjectsPage = () => {
                   </div>
 
                   <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
-                    <div className="flex items-center space-x-3">
+                    <div className="flex flex-wrap items-center gap-2.5">
                       <button
                         type="button"
                         onClick={() => {
@@ -3082,6 +3082,22 @@ const ProjectsPage = () => {
                       >
                         + Aggiungi Tappa
                       </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const cur = Array.isArray(formData.routeStops) && formData.routeStops.length >= 2
+                            ? formData.routeStops
+                            : [{ id: 's1', address: 'Bologna Interporto (Bentivoglio)' }, { id: 's2', address: '' }];
+                          const startAddr = (cur[0]?.address || '').trim();
+                          if (cur.length >= 8 || !startAddr) return;
+                          setFormData({ ...formData, routeStops: [...cur, { id: 's_' + Date.now(), address: startAddr }] });
+                        }}
+                        disabled={(Array.isArray(formData.routeStops) ? formData.routeStops.length : 2) >= 8 || !((formData.routeStops?.[0]?.address) || '').trim()}
+                        className="px-2 py-0.5 rounded-md bg-white hover:bg-emerald-50 text-emerald-800 border border-emerald-300 text-[10px] font-bold transition disabled:opacity-40"
+                        title="Inserisce una tappa intermedia uguale alla Partenza (es. per secondo viaggio dall'Hub)"
+                      >
+                        + Rientro a Partenza
+                      </button>
                       <label className="inline-flex items-center space-x-1.5 text-[11px] font-bold text-emerald-950 cursor-pointer">
                         <input
                           type="checkbox"
@@ -3089,7 +3105,7 @@ const ProjectsPage = () => {
                           onChange={(e) => setFormData({ ...formData, isRoundTrip: e.target.checked })}
                           className="rounded text-emerald-600"
                         />
-                        <span>Andata e Ritorno (A/R)</span>
+                        <span>Rientro finale alla Partenza (Tappa 1)</span>
                       </label>
                     </div>
 
@@ -3103,6 +3119,42 @@ const ProjectsPage = () => {
                       <span>{modalRouteCalculating ? 'Calcolo API in corso...' : 'Calcola Km, Pedaggi & Consumi Orografici'}</span>
                     </button>
                   </div>
+
+                  {(() => {
+                    const curStops = Array.isArray(formData.routeStops) && formData.routeStops.length >= 2
+                      ? formData.routeStops
+                      : [{ id: 's1', address: 'Bologna Interporto (Bentivoglio)' }, { id: 's2', address: '' }];
+                    const filledStops = curStops.map(s => (s.address || '').trim()).filter(Boolean);
+                    const firstStop = filledStops[0] || '';
+                    const lastStop = filledStops[filledStops.length - 1] || '';
+                    const isRT = formData.isRoundTrip !== false;
+                    const needsClosingReturn = Boolean(isRT && filledStops.length >= 2 && lastStop.toLowerCase() !== firstStop.toLowerCase());
+                    const shortName = (addr) => addr.split(',')[0].trim();
+
+                    return (
+                      <div className="bg-white/80 border border-emerald-200 rounded-lg p-2 text-[10px] text-slate-600 space-y-1">
+                        {filledStops.length >= 2 && (
+                          <div className="flex flex-wrap items-center gap-1 font-bold text-slate-800">
+                            <span className="text-slate-500 uppercase mr-1">Percorso calcolato:</span>
+                            {filledStops.map((addr, i) => (
+                              <span key={`${addr}-${i}`} className="inline-flex items-center gap-1">
+                                <span className="px-1.5 py-0.5 rounded bg-slate-100 border border-slate-200">{i + 1}. {shortName(addr)}</span>
+                                {(i < filledStops.length - 1 || needsClosingReturn) && <span className="text-emerald-600">→</span>}
+                              </span>
+                            ))}
+                            {needsClosingReturn && (
+                              <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-900 border border-emerald-300">
+                                {shortName(firstStop)} (rientro finale)
+                              </span>
+                            )}
+                          </div>
+                        )}
+                        <div>
+                          Inserisci le tappe in <strong>ordine sequenziale</strong> (es. <code className="bg-slate-100 px-1 rounded">Basiano → Corsico → Basiano → Rozzano</code>). La spunta aggiunge <strong>solo il rientro finale</strong> verso la Tappa 1, senza raddoppiare ogni tappa.
+                        </div>
+                      </div>
+                    );
+                  })()}
 
                   {modalRouteError && (
                     <div className="text-[11px] text-rose-700 font-semibold bg-rose-50 px-2.5 py-1 rounded border border-rose-200">
